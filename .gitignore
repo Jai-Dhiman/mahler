@@ -70,6 +70,7 @@ tmp/
 /docs/_build/
 
 .claude/
+CLAUDE.md
 
 .venv/
 
