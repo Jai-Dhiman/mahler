@@ -3,8 +3,8 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from src.core.analysis.greeks import days_to_expiry
-from src.core.types import CreditSpread, Recommendation, RecommendationStatus
+from core.analysis.greeks import days_to_expiry
+from core.types import CreditSpread, Recommendation, RecommendationStatus
 
 
 @dataclass

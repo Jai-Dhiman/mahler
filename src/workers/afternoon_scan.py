@@ -6,16 +6,16 @@ probability setups with excellent IV conditions.
 
 from datetime import datetime, timedelta
 
-from src.core.ai.claude import ClaudeClient
-from src.core.analysis.iv_rank import calculate_iv_metrics
-from src.core.analysis.screener import OptionsScreener, ScreenerConfig
-from src.core.broker.alpaca import AlpacaClient
-from src.core.db.d1 import D1Client
-from src.core.db.kv import KVClient
-from src.core.notifications.discord import DiscordClient
-from src.core.risk.circuit_breaker import CircuitBreaker
-from src.core.risk.position_sizer import PositionSizer
-from src.core.types import Confidence
+from core.ai.claude import ClaudeClient
+from core.analysis.iv_rank import calculate_iv_metrics
+from core.analysis.screener import OptionsScreener, ScreenerConfig
+from core.broker.alpaca import AlpacaClient
+from core.db.d1 import D1Client
+from core.db.kv import KVClient
+from core.notifications.discord import DiscordClient
+from core.risk.circuit_breaker import CircuitBreaker
+from core.risk.position_sizer import PositionSizer
+from core.types import Confidence
 
 
 UNDERLYINGS = ["SPY", "QQQ", "IWM"]
@@ -26,8 +26,8 @@ async def handle_afternoon_scan(env):
     print("Starting afternoon scan...")
 
     # Initialize clients
-    db = D1Client(env.DB)
-    kv = KVClient(env.STATE)
+    db = D1Client(env.MAHLER_DB)
+    kv = KVClient(env.MAHLER_KV)
     circuit_breaker = CircuitBreaker(kv)
 
     if not await circuit_breaker.is_trading_allowed():

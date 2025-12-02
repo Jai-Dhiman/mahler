@@ -3,8 +3,8 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from src.core.db.kv import KVClient
-from src.core.types import CircuitBreakerStatus
+from core.db.kv import KVClient
+from core.types import CircuitBreakerStatus
 
 
 @dataclass

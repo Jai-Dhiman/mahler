@@ -1,6 +1,7 @@
 """Health check endpoint."""
 
 from datetime import datetime
+from workers import Response
 
 
 async def handle_health(request, env):
@@ -17,7 +18,7 @@ async def handle_health(request, env):
 
     # Check D1 connectivity
     try:
-        result = await env.DB.prepare("SELECT 1 as test").first()
+        result = await env.MAHLER_DB.prepare("SELECT 1 as test").first()
         status["checks"]["d1"] = "ok" if result else "error"
     except Exception as e:
         status["checks"]["d1"] = f"error: {str(e)}"
@@ -25,7 +26,7 @@ async def handle_health(request, env):
 
     # Check KV connectivity
     try:
-        await env.STATE.get("health_check_test")
+        await env.MAHLER_KV.get("health_check_test")
         status["checks"]["kv"] = "ok"
     except Exception as e:
         status["checks"]["kv"] = f"error: {str(e)}"

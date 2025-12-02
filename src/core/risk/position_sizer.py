@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from src.core.types import CreditSpread, Position
+from core.types import CreditSpread, Position
 
 
 @dataclass

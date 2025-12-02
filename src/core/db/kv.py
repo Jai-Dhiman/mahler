@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Any
 
-from src.core.types import CircuitBreakerStatus
+from core.types import CircuitBreakerStatus
 
 
 class KVClient:

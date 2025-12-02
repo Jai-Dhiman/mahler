@@ -1,15 +1,16 @@
 """Discord webhook handler for interactive buttons."""
 
 import json
+from workers import Response
 
-from src.core.broker.alpaca import AlpacaClient
-from src.core.broker.types import SpreadOrder
-from src.core.db.d1 import D1Client
-from src.core.db.kv import KVClient
-from src.core.notifications.discord import DiscordClient
-from src.core.risk.circuit_breaker import CircuitBreaker
-from src.core.risk.validators import TradeValidator
-from src.core.types import RecommendationStatus, SpreadType
+from core.broker.alpaca import AlpacaClient
+from core.broker.types import SpreadOrder
+from core.db.d1 import D1Client
+from core.db.kv import KVClient
+from core.notifications.discord import DiscordClient
+from core.risk.circuit_breaker import CircuitBreaker
+from core.risk.validators import TradeValidator
+from core.types import RecommendationStatus, SpreadType
 
 
 async def handle_discord_webhook(request, env):
@@ -63,8 +64,8 @@ async def handle_discord_webhook(request, env):
     action, entity_id = custom_id.split(":", 1)
 
     # Initialize clients
-    db = D1Client(env.DB)
-    kv = KVClient(env.STATE)
+    db = D1Client(env.MAHLER_DB)
+    kv = KVClient(env.MAHLER_KV)
 
     # Handle different actions
     if action == "approve_trade":

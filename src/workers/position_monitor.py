@@ -8,12 +8,12 @@ Monitors open positions for exit conditions:
 
 from datetime import datetime
 
-from src.core.broker.alpaca import AlpacaClient
-from src.core.db.d1 import D1Client
-from src.core.db.kv import KVClient
-from src.core.notifications.discord import DiscordClient
-from src.core.risk.circuit_breaker import CircuitBreaker
-from src.core.risk.validators import ExitValidator
+from core.broker.alpaca import AlpacaClient
+from core.db.d1 import D1Client
+from core.db.kv import KVClient
+from core.notifications.discord import DiscordClient
+from core.risk.circuit_breaker import CircuitBreaker
+from core.risk.validators import ExitValidator
 
 
 async def handle_position_monitor(env):
@@ -21,8 +21,8 @@ async def handle_position_monitor(env):
     print("Starting position monitor...")
 
     # Initialize clients
-    db = D1Client(env.DB)
-    kv = KVClient(env.STATE)
+    db = D1Client(env.MAHLER_DB)
+    kv = KVClient(env.MAHLER_KV)
     circuit_breaker = CircuitBreaker(kv)
 
     # Check circuit breaker

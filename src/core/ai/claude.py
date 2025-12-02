@@ -4,7 +4,7 @@ from typing import Any
 
 import httpx
 
-from src.core.ai.prompts import (
+from core.ai.prompts import (
     MARKET_CONTEXT_SYSTEM,
     MARKET_CONTEXT_USER,
     PLAYBOOK_UPDATE_SYSTEM,
@@ -14,7 +14,7 @@ from src.core.ai.prompts import (
     TRADE_ANALYSIS_SYSTEM,
     TRADE_ANALYSIS_USER,
 )
-from src.core.types import Confidence, CreditSpread, PlaybookRule, Trade
+from core.types import Confidence, CreditSpread, PlaybookRule, Trade
 
 
 class ClaudeError(Exception):

@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from src.core.types import (
+from core.types import (
     Confidence,
     DailyPerformance,
     PlaybookRule,

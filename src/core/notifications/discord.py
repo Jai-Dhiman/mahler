@@ -4,7 +4,7 @@ from typing import Any
 
 import httpx
 
-from src.core.types import DailyPerformance, Recommendation, Trade
+from core.types import DailyPerformance, Recommendation, Trade
 
 
 class DiscordError(Exception):

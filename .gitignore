@@ -17,9 +17,12 @@
 .DS_Store
 Thumbs.db
 
+.wrangler/
 # Logs
 *.log
 logs/
+
+node_modules/
 
 # Python (for ML components)
 __pycache__/

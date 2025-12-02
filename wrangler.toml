@@ -1,5 +1,5 @@
 name = "mahler"
-main = "src/workers/router.py"
+main = "src/entry.py"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["python_workers"]
 
@@ -19,14 +19,14 @@ crons = [
 
 # D1 SQLite database for persistent storage
 [[d1_databases]]
-binding = "DB"
+binding = "MAHLER_DB"
 database_name = "mahler-db"
-database_id = "e5d7abaf-7e53-42ab-9b15-15e0cd3b41c1"
+database_id = "b6cb2eac-2903-46bd-baea-b4ff2dc904d0"
 
 # KV namespace for fast state (circuit breakers, rate limits)
 [[kv_namespaces]]
-binding = "mahler-kv"
-id = "7d216d16fd474347b4f978b322f9c062"
+binding = "MAHLER_KV"
+id = "4e63db1305a1424ead3565522a47b5f4"
 
 # Environment variables (non-secret)
 [vars]

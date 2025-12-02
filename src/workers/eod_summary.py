@@ -9,13 +9,13 @@ Generates daily summary with:
 
 from datetime import datetime
 
-from src.core.ai.claude import ClaudeClient
-from src.core.broker.alpaca import AlpacaClient
-from src.core.db.d1 import D1Client
-from src.core.db.kv import KVClient
-from src.core.db.r2 import R2Client
-from src.core.notifications.discord import DiscordClient
-from src.core.types import TradeStatus
+from core.ai.claude import ClaudeClient
+from core.broker.alpaca import AlpacaClient
+from core.db.d1 import D1Client
+from core.db.kv import KVClient
+from core.db.r2 import R2Client
+from core.notifications.discord import DiscordClient
+from core.types import TradeStatus
 
 
 async def handle_eod_summary(env):
@@ -25,8 +25,8 @@ async def handle_eod_summary(env):
     today = datetime.now().strftime("%Y-%m-%d")
 
     # Initialize clients
-    db = D1Client(env.DB)
-    kv = KVClient(env.STATE)
+    db = D1Client(env.MAHLER_DB)
+    kv = KVClient(env.MAHLER_KV)
     r2 = R2Client(env.ARCHIVE)
 
     alpaca = AlpacaClient(

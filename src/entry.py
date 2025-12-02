@@ -1,18 +1,11 @@
 """Main entry point for Cloudflare Workers.
 
 Routes incoming requests (HTTP and cron) to appropriate handlers.
+Uses lazy imports due to Cloudflare Python Workers module loading quirks.
 """
 
 from datetime import datetime
 from workers import Response
-
-from workers.health import handle_health
-from workers.morning_scan import handle_morning_scan
-from workers.midday_check import handle_midday_check
-from workers.afternoon_scan import handle_afternoon_scan
-from workers.eod_summary import handle_eod_summary
-from workers.position_monitor import handle_position_monitor
-from workers.discord_webhook import handle_discord_webhook
 
 
 async def on_fetch(request, env):
@@ -23,10 +16,12 @@ async def on_fetch(request, env):
     try:
         # Health check
         if "/health" in url:
+            from workers.health import handle_health
             return await handle_health(request, env)
 
         # Discord webhook
         if "/discord" in url and method == "POST":
+            from workers.discord_webhook import handle_discord_webhook
             return await handle_discord_webhook(request, env)
 
         # Default response
@@ -45,15 +40,7 @@ async def on_fetch(request, env):
 
 
 async def on_scheduled(event, env, ctx):
-    """Handle cron triggers.
-
-    Cron schedule (from wrangler.toml):
-    - "35 14 * * 1-5"     -> morning_scan (9:35 AM ET)
-    - "0 17 * * 1-5"      -> midday_check (12:00 PM ET)
-    - "30 20 * * 1-5"     -> afternoon_scan (3:30 PM ET)
-    - "15 21 * * 1-5"     -> eod_summary (4:15 PM ET)
-    - "*/5 14-21 * * 1-5" -> position_monitor (every 5 min)
-    """
+    """Handle cron triggers."""
     cron = event.cron
 
     try:
@@ -61,21 +48,25 @@ async def on_scheduled(event, env, ctx):
 
         # Route based on cron pattern
         if cron == "35 14 * * 1-5":
+            from workers.morning_scan import handle_morning_scan
             await handle_morning_scan(env)
         elif cron == "0 17 * * 1-5":
+            from workers.midday_check import handle_midday_check
             await handle_midday_check(env)
         elif cron == "30 20 * * 1-5":
+            from workers.afternoon_scan import handle_afternoon_scan
             await handle_afternoon_scan(env)
         elif cron == "15 21 * * 1-5":
+            from workers.eod_summary import handle_eod_summary
             await handle_eod_summary(env)
         elif "*/5" in cron:
+            from workers.position_monitor import handle_position_monitor
             await handle_position_monitor(env)
         else:
             print(f"Unknown cron pattern: {cron}")
 
     except Exception as e:
         print(f"Error in scheduled handler: {e}")
-        # Re-raise to ensure error is logged
         raise
 
 
