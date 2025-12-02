@@ -1,0 +1,366 @@
+"""Discord client for notifications with interactive buttons."""
+
+from typing import Any
+
+import httpx
+
+from src.core.types import DailyPerformance, Recommendation, Trade
+
+
+class DiscordError(Exception):
+    """Discord API error."""
+    pass
+
+
+class DiscordClient:
+    """Client for Discord notifications with interactive components."""
+
+    BASE_URL = "https://discord.com/api/v10"
+
+    def __init__(self, bot_token: str, public_key: str, channel_id: str):
+        self.bot_token = bot_token
+        self.public_key = public_key
+        self.channel_id = channel_id
+
+        self._headers = {
+            "Authorization": f"Bot {bot_token}",
+            "Content-Type": "application/json",
+        }
+
+    async def _request(self, method: str, endpoint: str, data: dict | None = None) -> dict:
+        """Make a request to Discord API."""
+        async with httpx.AsyncClient() as client:
+            response = await client.request(
+                method,
+                f"{self.BASE_URL}{endpoint}",
+                headers=self._headers,
+                json=data,
+                timeout=30.0,
+            )
+
+            if response.status_code >= 400:
+                raise DiscordError(f"Discord API error: {response.text}")
+
+            if response.status_code == 204:
+                return {}
+
+            return response.json()
+
+    def verify_signature(self, body: str, timestamp: str, signature: str) -> bool:
+        """Verify Discord interaction signature using Ed25519."""
+        try:
+            from nacl.signing import VerifyKey
+            from nacl.exceptions import BadSignature
+
+            verify_key = VerifyKey(bytes.fromhex(self.public_key))
+            verify_key.verify(f"{timestamp}{body}".encode(), bytes.fromhex(signature))
+            return True
+        except (BadSignature, Exception):
+            return False
+
+    # Message sending
+
+    async def send_message(
+        self,
+        content: str,
+        embeds: list[dict] | None = None,
+        components: list[dict] | None = None,
+    ) -> str:
+        """Send a message to the channel. Returns message ID."""
+        data = {"content": content}
+        if embeds:
+            data["embeds"] = embeds
+        if components:
+            data["components"] = components
+
+        result = await self._request(
+            "POST",
+            f"/channels/{self.channel_id}/messages",
+            data,
+        )
+        return result["id"]
+
+    async def update_message(
+        self,
+        message_id: str,
+        content: str,
+        embeds: list[dict] | None = None,
+        components: list[dict] | None = None,
+    ) -> None:
+        """Update an existing message."""
+        data = {"content": content}
+        if embeds:
+            data["embeds"] = embeds
+        if components:
+            data["components"] = components
+
+        await self._request(
+            "PATCH",
+            f"/channels/{self.channel_id}/messages/{message_id}",
+            data,
+        )
+
+    async def respond_to_interaction(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        content: str,
+        embeds: list[dict] | None = None,
+        components: list[dict] | None = None,
+        update_message: bool = True,
+    ) -> None:
+        """Respond to a Discord interaction (button click)."""
+        data = {
+            "type": 7 if update_message else 4,  # 7 = UPDATE_MESSAGE, 4 = CHANNEL_MESSAGE_WITH_SOURCE
+            "data": {"content": content},
+        }
+        if embeds:
+            data["data"]["embeds"] = embeds
+        if components:
+            data["data"]["components"] = components
+
+        # Interaction responses use a different endpoint
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{self.BASE_URL}/interactions/{interaction_id}/{interaction_token}/callback",
+                headers={"Content-Type": "application/json"},
+                json=data,
+                timeout=30.0,
+            )
+            if response.status_code >= 400:
+                raise DiscordError(f"Discord interaction error: {response.text}")
+
+    # Trade recommendation
+
+    async def send_recommendation(self, rec: Recommendation) -> str:
+        """Send a trade recommendation with approve/reject buttons."""
+        spread_name = "Bull Put Spread" if rec.spread_type.value == "bull_put" else "Bear Call Spread"
+        direction = "Bullish" if rec.spread_type.value == "bull_put" else "Bearish"
+
+        confidence_color = {
+            "low": 0xFEE75C,     # Yellow
+            "medium": 0xF97316,  # Orange
+            "high": 0x57F287,   # Green
+        }
+        color = confidence_color.get(rec.confidence.value if rec.confidence else "low", 0x5865F2)
+
+        embed = {
+            "title": f"Trade Recommendation: {rec.underlying}",
+            "description": rec.thesis if rec.thesis else "No analysis provided",
+            "color": color,
+            "fields": [
+                {"name": "Strategy", "value": spread_name, "inline": True},
+                {"name": "Direction", "value": direction, "inline": True},
+                {"name": "Expiration", "value": rec.expiration, "inline": True},
+                {"name": "Short Strike", "value": f"${rec.short_strike:.2f}", "inline": True},
+                {"name": "Long Strike", "value": f"${rec.long_strike:.2f}", "inline": True},
+                {"name": "Credit", "value": f"${rec.credit:.2f}", "inline": True},
+                {"name": "Max Loss", "value": f"${rec.max_loss:.2f}", "inline": True},
+                {"name": "Contracts", "value": str(rec.suggested_contracts or 1), "inline": True},
+                {"name": "Confidence", "value": (rec.confidence.value.upper() if rec.confidence else "N/A"), "inline": True},
+            ],
+            "footer": {
+                "text": f"Expires: {rec.expires_at.strftime('%H:%M:%S')} | ID: {rec.id[:8]}",
+            },
+        }
+
+        if rec.iv_rank:
+            embed["fields"].insert(6, {"name": "IV Rank", "value": f"{rec.iv_rank:.1f}%", "inline": True})
+        if rec.delta:
+            embed["fields"].insert(7, {"name": "Delta", "value": f"{rec.delta:.3f}", "inline": True})
+
+        components = [
+            {
+                "type": 1,  # Action Row
+                "components": [
+                    {
+                        "type": 2,  # Button
+                        "style": 3,  # Success (green)
+                        "label": "Approve",
+                        "custom_id": f"approve_trade:{rec.id}",
+                    },
+                    {
+                        "type": 2,  # Button
+                        "style": 4,  # Danger (red)
+                        "label": "Reject",
+                        "custom_id": f"reject_trade:{rec.id}",
+                    },
+                ],
+            }
+        ]
+
+        return await self.send_message(
+            content=f"**New Trade Recommendation: {rec.underlying}**",
+            embeds=[embed],
+            components=components,
+        )
+
+    async def update_recommendation_approved(
+        self,
+        message_id: str,
+        rec: Recommendation,
+        order_id: str,
+    ) -> None:
+        """Update recommendation message to show approved status."""
+        spread_name = rec.spread_type.value.replace("_", " ").title()
+
+        embed = {
+            "title": f"Trade Approved: {rec.underlying}",
+            "color": 0x57F287,  # Green
+            "fields": [
+                {"name": "Strategy", "value": spread_name, "inline": True},
+                {"name": "Expiration", "value": rec.expiration, "inline": True},
+                {"name": "Strikes", "value": f"${rec.short_strike:.2f}/${rec.long_strike:.2f}", "inline": True},
+                {"name": "Credit", "value": f"${rec.credit:.2f}", "inline": True},
+                {"name": "Contracts", "value": str(rec.suggested_contracts or 1), "inline": True},
+                {"name": "Order ID", "value": order_id, "inline": True},
+            ],
+        }
+
+        await self.update_message(
+            message_id,
+            content=f"**Trade Approved: {rec.underlying}**",
+            embeds=[embed],
+            components=[],  # Remove buttons
+        )
+
+    async def update_recommendation_rejected(
+        self,
+        message_id: str,
+        rec: Recommendation,
+    ) -> None:
+        """Update recommendation message to show rejected status."""
+        embed = {
+            "title": f"Trade Rejected: {rec.underlying}",
+            "color": 0xED4245,  # Red
+            "description": f"{rec.spread_type.value.replace('_', ' ').title()} | ${rec.short_strike:.2f}/${rec.long_strike:.2f} | {rec.expiration}",
+        }
+
+        await self.update_message(
+            message_id,
+            content=f"**Trade Rejected: {rec.underlying}**",
+            embeds=[embed],
+            components=[],
+        )
+
+    # Exit alerts
+
+    async def send_exit_alert(
+        self,
+        trade: Trade,
+        reason: str,
+        current_value: float,
+        unrealized_pnl: float,
+    ) -> str:
+        """Send an exit alert for a position."""
+        pnl_color = 0x57F287 if unrealized_pnl > 0 else 0xED4245  # Green or Red
+
+        embed = {
+            "title": f"Exit Alert: {trade.underlying}",
+            "color": pnl_color,
+            "fields": [
+                {"name": "Reason", "value": reason, "inline": False},
+                {"name": "Entry Credit", "value": f"${trade.entry_credit:.2f}", "inline": True},
+                {"name": "Current Value", "value": f"${current_value:.2f}", "inline": True},
+                {"name": "Unrealized P/L", "value": f"${unrealized_pnl:.2f}", "inline": True},
+                {"name": "Contracts", "value": str(trade.contracts), "inline": True},
+            ],
+        }
+
+        components = [
+            {
+                "type": 1,
+                "components": [
+                    {
+                        "type": 2,
+                        "style": 3,  # Success
+                        "label": "Close Position",
+                        "custom_id": f"close_position:{trade.id}",
+                    },
+                    {
+                        "type": 2,
+                        "style": 2,  # Secondary (gray)
+                        "label": "Hold",
+                        "custom_id": f"hold_position:{trade.id}",
+                    },
+                ],
+            }
+        ]
+
+        return await self.send_message(
+            content=f"**Exit Alert: {trade.underlying}** - {reason}",
+            embeds=[embed],
+            components=components,
+        )
+
+    # Daily summary
+
+    async def send_daily_summary(
+        self,
+        performance: DailyPerformance,
+        open_positions: int,
+        trade_stats: dict,
+    ) -> str:
+        """Send end-of-day summary."""
+        pnl_color = 0x57F287 if performance.realized_pnl >= 0 else 0xED4245
+
+        embed = {
+            "title": f"Daily Summary - {performance.date}",
+            "color": pnl_color,
+            "fields": [
+                {"name": "Starting Balance", "value": f"${performance.starting_balance:,.2f}", "inline": True},
+                {"name": "Ending Balance", "value": f"${performance.ending_balance:,.2f}", "inline": True},
+                {"name": "Realized P/L", "value": f"${performance.realized_pnl:,.2f}", "inline": True},
+                {"name": "Open Positions", "value": str(open_positions), "inline": True},
+                {"name": "Trades Opened", "value": str(performance.trades_opened), "inline": True},
+                {"name": "Trades Closed", "value": str(performance.trades_closed), "inline": True},
+                {"name": "Wins", "value": str(performance.win_count), "inline": True},
+                {"name": "Losses", "value": str(performance.loss_count), "inline": True},
+                {"name": "\u200b", "value": "\u200b", "inline": True},  # Empty field for alignment
+            ],
+            "footer": {
+                "text": f"Win Rate: {trade_stats['win_rate']:.1%} | Profit Factor: {trade_stats['profit_factor']:.2f} | Net P/L: ${trade_stats['net_pnl']:,.2f}",
+            },
+        }
+
+        return await self.send_message(
+            content=f"**Daily Summary: {performance.date}**",
+            embeds=[embed],
+        )
+
+    # Circuit breaker
+
+    async def send_circuit_breaker_alert(self, reason: str) -> str:
+        """Send circuit breaker activation alert."""
+        embed = {
+            "title": "Circuit Breaker Activated",
+            "color": 0xED4245,  # Red
+            "description": f"**Reason:** {reason}\n\nTrading has been halted. Manual intervention required to resume.",
+        }
+
+        return await self.send_message(
+            content="**CIRCUIT BREAKER ACTIVATED**",
+            embeds=[embed],
+        )
+
+    # Order updates
+
+    async def send_order_filled(self, trade: Trade, filled_price: float) -> str:
+        """Send order fill confirmation."""
+        embed = {
+            "title": f"Order Filled: {trade.underlying}",
+            "color": 0x57F287,  # Green
+            "fields": [
+                {"name": "Strategy", "value": trade.spread_type.value.replace("_", " ").title(), "inline": True},
+                {"name": "Expiration", "value": trade.expiration, "inline": True},
+                {"name": "Strikes", "value": f"${trade.short_strike:.2f}/${trade.long_strike:.2f}", "inline": True},
+                {"name": "Credit", "value": f"${filled_price:.2f}", "inline": True},
+                {"name": "Contracts", "value": str(trade.contracts), "inline": True},
+                {"name": "Total Credit", "value": f"${filled_price * trade.contracts * 100:.2f}", "inline": True},
+            ],
+        }
+
+        return await self.send_message(
+            content=f"**Order Filled: {trade.underlying}**",
+            embeds=[embed],
+        )

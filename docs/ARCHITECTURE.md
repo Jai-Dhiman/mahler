@@ -1,723 +1,439 @@
-# Trader Jim Architecture
+# Mahler Architecture
 
-A human-in-the-loop options trading system built in Rust, using Claude for market analysis and trade recommendations with explicit approval gates before execution.
+A serverless, human-in-the-loop options trading system built on Cloudflare Workers with Python.
+
+---
 
 ## System Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           TRADER JIM SYSTEM                                 │
+│                          Mahler                                         │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌───────────┐  │
-│  │   Scheduler  │───▶│   Analysis   │───▶│  Recommender │───▶│  Notifier │  │
-│  │   (systemd)  │    │   Engine     │    │   (Claude)   │    │  (Slack)  │  │
-│  └──────────────┘    └──────────────┘    └──────────────┘    └─────┬─────┘  │
-│                                                                      │      │
-│                                                                      ▼      │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌───────────┐  │
-│  │    Memory    │◀───│  Reflection  │◀───│   Executor   │◀───│  Approval │  │
-│  │    Store     │    │    System    │    │              │    │   Gate    │  │
-│  └──────────────┘    └──────────────┘    └──────────────┘    └───────────┘  │
-│         │                                        │                          │
-│         │            ┌──────────────┐            │                          │
-│         └───────────▶│     Risk     │◀───────────┘                          │
-│                      │   Manager    │                                       │
-│                      └──────────────┘                                       │
-│                             │                                               │
-│                             ▼                                               │
-│                      ┌──────────────┐                                       │
-│                      │   Broker API │                                       │
-│                      │ (Alpaca/TT)  │                                       │
-│                      └──────────────┘                                       │
+│  SCHEDULED WORKERS (Cron Triggers)                                          │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
+│  │  Morning     │  │   Midday     │  │  Afternoon   │  │   EOD        │     │ 
+│  │  Scan        │  │   Check      │  │  Scan        │  │   Summary    │     │
+│  │  9:35 AM ET  │  │  12:00 PM ET │  │  3:30 PM ET  │  │  4:15 PM ET  │     │
+│  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘     │
+│                                                                             │
+│  ┌──────────────┐                                                           │
+│  │  Position    │  every 5 min during market hours                          │
+│  │  Monitor     │                                                           │
+│  └──────────────┘                                                           │
+│         │                                                                   │
+│         └─────────────────────────┬──────────────────────────────────────── │
+│                                   │                                         │
+│  HTTP WORKERS                     │                                         │
+│  ┌──────────────┐  ┌──────────────┤                                         │
+│  │   Discord    │  │   Health     │                                         │
+│  │   Webhook    │  │   Check      │                                         │
+│  └──────────────┘  └──────────────┘                                         │
+│         │                         │                                         │
+│         ▼                         ▼                                         │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                      CLOUDFLARE BINDINGS                            │    │
+│  │                                                                     │    │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                  │    │
+│  │  │     D1      │  │     KV      │  │     R2      │                  │    │
+│  │  │  (SQLite)   │  │  (State)    │  │  (Archive)  │                  │    │
+│  │  │             │  │             │  │             │                  │    │
+│  │  │ trades      │  │ circuit     │  │ daily       │                  │    │
+│  │  │ recs        │  │ breaker     │  │ snapshots   │                  │    │
+│  │  │ positions   │  │ daily       │  │ options     │                  │    │
+│  │  │ playbook    │  │ limits      │  │ chains      │                  │    │
+│  │  │ performance │  │ rate limits │  │ backups     │                  │    │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘                  │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
-```
-
-## Core Components
-
-### 1. Scheduler
-
-**Purpose**: Orchestrates the daily trading workflow on a fixed schedule.
-
-**Implementation**: systemd timer on Hetzner VPS (not cron—systemd provides better logging, dependency management, and failure handling).
-
-**Schedule**:
-
-| Time (ET) | Task |
-|-----------|------|
-| 9:00 AM | Pre-market analysis: fetch overnight data, calculate IV Rank |
-| 9:35 AM | Opening scan: identify opportunities after first 5 minutes |
-| 12:00 PM | Midday check: monitor open positions, scan for new setups |
-| 3:30 PM | Closing scan: final opportunity check, position reviews |
-| 4:15 PM | End-of-day: close audit, generate daily summary |
-
-**Key Design Decisions**:
-
-- Single-threaded async Tokio runtime (no need for multi-core for this workload)
-- Each scheduled task is idempotent—safe to retry on failure
-- All times converted to ET internally regardless of server timezone
-
----
-
-### 2. Analysis Engine
-
-**Purpose**: Fetch market data, calculate Greeks, screen for opportunities.
-
-**Data Sources**:
-
-- **Options chains**: Broker API (Alpaca for paper, Tastytrade for live)
-- **IV Rank**: Calculated from 52-week IV history (stored locally in SQLite)
-- **Greeks**: Computed via Black-Scholes using `optionstratlib` crate
-
-**Screening Pipeline**:
-
-```
-Fetch Options Chain
-        │
-        ▼
-Filter by DTE (30-45 days)
-        │
-        ▼
-Filter by Liquidity (bid-ask spread < 10% of mid)
-        │
-        ▼
-Calculate IV Rank (require ≥ 50)
-        │
-        ▼
-Identify Valid Spreads:
-  - Short strike delta: 0.20-0.30
-  - Long strike delta: 0.10-0.15
-  - Width: $1-$5 depending on underlying
-        │
-        ▼
-Rank by Expected Value:
-  EV = (POP × MaxProfit) - ((1-POP) × MaxLoss)
-        │
-        ▼
-Top 3-5 Candidates → Recommender
-```
-
-**Data Structures**:
-
-```rust
-struct SpreadCandidate {
-    underlying: Symbol,
-    spread_type: SpreadType,  // BullPut or BearCall
-    short_strike: Strike,
-    long_strike: Strike,
-    expiration: NaiveDate,
-    bid: Decimal,
-    ask: Decimal,
-    mid: Decimal,
-    greeks: SpreadGreeks,
-    iv_rank: Decimal,
-    pop: Decimal,             // Probability of profit
-    expected_value: Decimal,
-}
-
-struct SpreadGreeks {
-    delta: Decimal,
-    gamma: Decimal,
-    theta: Decimal,
-    vega: Decimal,
-}
+                                    │
+                    ┌───────────────┼───────────────┐
+                    ▼               ▼               ▼
+             ┌───────────┐  ┌───────────┐  ┌───────────┐
+             │  Alpaca   │  │  Claude   │  │  Discord  │
+             │  (Broker) │  │  (AI)     │  │  (Notify) │
+             └───────────┘  └───────────┘  └───────────┘
 ```
 
 ---
 
-### 3. Recommender (Claude Integration)
+## Components
 
-**Purpose**: Generate natural language trade thesis, assess macro context, provide confidence scoring.
+### Scheduled Workers
 
-**Integration Pattern**: Synchronous API call per analysis cycle (not streaming—we need complete analysis before notification).
+Cron-triggered workers handle the analysis and monitoring workload.
 
-**Prompt Structure**:
+| Worker | Cron (UTC) | ET Time | Purpose |
+|--------|------------|---------|---------|
+| morning_scan | `35 13 * * 1-5` | 9:35 AM | Post-open opportunity scan |
+| midday_check | `0 16 * * 1-5` | 12:00 PM | Position monitoring, new setups |
+| afternoon_scan | `30 19 * * 1-5` | 3:30 PM | Final scan before close |
+| eod_summary | `15 20 * * 1-5` | 4:15 PM | Daily P/L, reflection generation |
+| position_monitor | `*/5 13-20 * * 1-5` | Every 5 min | Exit condition monitoring |
 
-```
-<system>
-You are a trading analyst assistant. Analyze options trade opportunities
-and provide clear, actionable recommendations. Be direct about risks.
-Never recommend trades—only analyze candidates the system has identified.
-</system>
+### HTTP Workers
 
-<context>
-Current market conditions: {vix_level}, {spy_trend}, {upcoming_events}
-Portfolio state: {open_positions}, {daily_pnl}, {available_capital}
-Historical performance: {win_rate}, {avg_winner}, {avg_loser}
-Relevant past trades: {retrieved_memories}
-</context>
+| Worker | Route | Purpose |
+|--------|-------|---------|
+| discord_webhook | `POST /discord/interactions` | Handle approve/reject button clicks |
+| health | `GET /health` | Health check endpoint |
 
-<candidates>
-{spread_candidates_json}
-</candidates>
+### Storage Bindings
 
-<task>
-For each candidate, provide:
-1. Trade thesis (2-3 sentences)
-2. Key risks
-3. Confidence level (low/medium/high) with reasoning
-4. Suggested position size (as % of available capital, respecting 2% max risk)
-</task>
-```
+**D1 (SQLite)** - Primary relational storage
 
-**Response Parsing**: Structured JSON output with fallback to regex extraction if JSON fails.
+- Trade history and audit log
+- Recommendations and their status
+- Position snapshots
+- Playbook rules and reflections
+- Performance metrics
 
-**Rate Limiting**: Maximum 10 API calls per hour to control costs (~$0.50/day at current Claude pricing).
+**KV** - Fast key-value state
 
----
+- Circuit breaker status
+- Daily trading limits
+- Rate limiting counters
+- Session state
 
-### 4. Notifier (Slack Integration)
+**R2** - Object storage
 
-**Purpose**: Deliver trade recommendations and receive approval/rejection.
-
-**Message Format**:
-
-```
-🎯 *Trade Recommendation: SPY Bull Put Spread*
-
-*Setup*
-• Short: 580 Put @ $2.45
-• Long: 575 Put @ $1.20
-• Net Credit: $1.25 ($125 per contract)
-• Max Loss: $3.75 ($375 per contract)
-• DTE: 38 days
-• IV Rank: 72%
-
-*Analysis*
-SPY holding above 20-day MA with VIX elevated. High IV rank 
-creates favorable premium environment. Risk defined at $375 
-with 33% return potential in 38 days.
-
-*Greeks*
-Delta: -0.24 | Theta: +$3.42/day | Vega: -$8.21
-
-*Confidence*: HIGH
-*Suggested Size*: 2 contracts ($750 risk = 1.5% of account)
-
-*Risk Flags*: None
-
-[✅ Approve]  [❌ Reject]  [⏸️ Skip]
-```
-
-**Approval Flow**:
-
-1. User clicks button → Slack sends webhook to Trader Jim
-2. Trader Jim validates: Is recommendation still valid? Has market moved significantly?
-3. If valid → forward to Executor
-4. If stale (>15 min) or market moved (>1% underlying move) → notify user, require fresh analysis
-
-**Expiration**: Recommendations expire after 15 minutes during market hours.
-
----
-
-### 5. Approval Gate
-
-**Purpose**: Enforce human-in-the-loop requirement before any order execution.
-
-**Implementation**: HTTP endpoint receiving Slack interactive message payloads.
-
-**Validation Checks**:
-
-- Recommendation not expired
-- Underlying price within 1% of analysis price
-- IV Rank still above threshold
-- No circuit breakers triggered
-- Daily/weekly loss limits not exceeded
-
-**State Machine**:
-
-```
-PENDING → APPROVED → EXECUTING → FILLED
-    │         │           │
-    │         │           └──→ PARTIALLY_FILLED → FILLED
-    │         │                      │
-    │         └──→ VALIDATION_FAILED └──→ CANCELLED
-    │
-    └──→ REJECTED
-    │
-    └──→ EXPIRED
-```
-
----
-
-### 6. Executor
-
-**Purpose**: Place orders with the broker, handle fills, manage order lifecycle.
-
-**Order Placement Strategy**:
-
-1. Calculate limit price: mid-price - $0.02 (slightly below mid for better fill)
-2. Submit order with 60-second timeout
-3. If not filled, adjust price by $0.01 toward natural (up to 3 adjustments)
-4. If still not filled, notify user with option to market order or cancel
-
-**Broker Abstraction**:
-
-```rust
-#[async_trait]
-trait BrokerClient {
-    async fn get_account(&self) -> Result<Account>;
-    async fn get_options_chain(&self, symbol: &str, expiration: NaiveDate) -> Result<OptionsChain>;
-    async fn place_spread_order(&self, order: SpreadOrder) -> Result<OrderId>;
-    async fn get_order_status(&self, order_id: OrderId) -> Result<OrderStatus>;
-    async fn cancel_order(&self, order_id: OrderId) -> Result<()>;
-    async fn get_positions(&self) -> Result<Vec<Position>>;
-}
-
-struct AlpacaClient { /* paper trading */ }
-struct TastytradeClient { /* live trading */ }
-```
-
-**Paper Trading Adjustments**:
-
-- Add random 1-5% slippage to fills
-- Simulate 80% fill rate on limit orders
-- Add realistic latency (100-500ms)
-
----
-
-### 7. Risk Manager
-
-**Purpose**: Enforce position sizing rules and circuit breakers. This component has veto power over all trades.
-
-**Pre-Trade Checks**:
-
-```rust
-struct RiskCheck {
-    fn check_position_size(&self, trade: &Trade) -> Result<()>;      // Max 2% risk per trade
-    fn check_portfolio_heat(&self, trade: &Trade) -> Result<()>;     // Max 10% total open risk
-    fn check_correlation(&self, trade: &Trade) -> Result<()>;        // Max 15% correlated exposure
-    fn check_daily_loss(&self) -> Result<()>;                        // 2% daily limit
-    fn check_weekly_loss(&self) -> Result<()>;                       // 5% weekly limit
-    fn check_max_drawdown(&self) -> Result<()>;                      // 15% max drawdown
-}
-```
-
-**Circuit Breakers** (trigger immediate halt):
-
-| Condition | Action |
-|-----------|--------|
-| 1% loss in < 5 minutes | Halt trading, alert user |
-| 3 consecutive losses | 15-minute pause |
-| No quote update > 10 seconds | Halt, alert: stale data |
-| 5+ API errors in 1 minute | Halt, alert: system issue |
-| VIX > 40 | Reduce position sizes 75% |
-| VIX > 50 | Halt new trades |
-
-**Kill Switch**: Manual override via Slack command `/traderjim kill` closes all positions and disables trading until manual re-enable.
-
----
-
-### 8. Reflection System
-
-**Purpose**: Learn from trade outcomes to improve future recommendations.
-
-**Trigger**: After each position closes (profit, loss, or time exit).
-
-**Reflection Prompt**:
-
-```
-<context>
-Trade: {trade_details}
-Entry thesis: {original_thesis}
-Outcome: {profit_loss}, {holding_period}
-Market during trade: {price_action}, {vix_movement}
-</context>
-
-<task>
-Analyze this completed trade:
-1. Was the original thesis correct? Why or why not?
-2. What market signals did we miss or correctly identify?
-3. Would different entry/exit timing have improved outcome?
-4. What should we do differently for similar setups?
-
-Provide a concise lesson (1-2 sentences) to remember.
-</task>
-```
-
-**Memory Storage**:
-
-```rust
-struct TradeReflection {
-    trade_id: Uuid,
-    entry_date: DateTime<Utc>,
-    exit_date: DateTime<Utc>,
-    underlying: Symbol,
-    strategy: Strategy,
-    outcome: Outcome,
-    profit_loss: Decimal,
-    original_thesis: String,
-    reflection: String,
-    lesson: String,
-    tags: Vec<String>,  // e.g., ["high_iv", "earnings_play", "vix_spike"]
-}
-```
-
----
-
-### 9. Memory Store
-
-**Purpose**: Persist trade history, reflections, and evolving playbook for retrieval during analysis.
-
-**Storage**: SQLite with full-text search (using FTS5).
-
-**Schema**:
-
-```sql
--- Core trade log
-CREATE TABLE trades (
-    id TEXT PRIMARY KEY,
-    created_at TIMESTAMP,
-    underlying TEXT,
-    strategy TEXT,
-    entry_price DECIMAL,
-    exit_price DECIMAL,
-    quantity INTEGER,
-    profit_loss DECIMAL,
-    outcome TEXT,  -- 'win', 'loss', 'scratch'
-    thesis TEXT,
-    reflection TEXT,
-    lesson TEXT
-);
-
--- Full-text search for lessons
-CREATE VIRTUAL TABLE lessons_fts USING fts5(
-    trade_id,
-    lesson,
-    tags
-);
-
--- Playbook rules (evolving)
-CREATE TABLE playbook (
-    id TEXT PRIMARY KEY,
-    rule TEXT,
-    source TEXT,  -- 'initial', 'learned'
-    confidence DECIMAL,
-    supporting_trades TEXT,  -- JSON array of trade_ids
-    created_at TIMESTAMP,
-    updated_at TIMESTAMP
-);
-
--- Daily/weekly aggregates for performance tracking
-CREATE TABLE performance (
-    period TEXT,  -- '2024-01-15' or '2024-W03'
-    period_type TEXT,  -- 'daily', 'weekly', 'monthly'
-    trades INTEGER,
-    wins INTEGER,
-    losses INTEGER,
-    total_pnl DECIMAL,
-    max_drawdown DECIMAL,
-    sharpe_ratio DECIMAL
-);
-```
-
-**Retrieval for Analysis**:
-
-```rust
-// Before generating recommendations, retrieve relevant context
-async fn get_relevant_memories(&self, candidate: &SpreadCandidate) -> Vec<TradeReflection> {
-    // 1. Similar setups (same underlying, similar IV rank, similar delta)
-    // 2. Recent lessons (last 30 days)
-    // 3. Playbook rules tagged with relevant conditions
-    
-    let query = format!(
-        "underlying:{} AND iv_rank:{}-{} AND outcome:*",
-        candidate.underlying,
-        candidate.iv_rank - 10,
-        candidate.iv_rank + 10
-    );
-    
-    self.db.search_reflections(&query, 5).await
-}
-```
+- Historical options chain data
+- Daily market snapshots
+- Database backups
+- Large analysis artifacts
 
 ---
 
 ## Data Flow
 
-### Trade Lifecycle
+### Trade Recommendation Flow
 
 ```
-1. SCAN
-   Scheduler triggers → Analysis Engine fetches data → Candidates identified
+Morning Scan Worker
+       │
+       ├──► Fetch options chains (Alpaca API)
+       ├──► Screen candidates (IV rank, delta, DTE)
+       ├──► Retrieve relevant memories (D1)
+       ├──► Analyze with Claude API
+       ├──► Save recommendation (D1)
+       └──► Send to Discord with buttons
+```
 
-2. ANALYZE  
-   Candidates + Context → Claude API → Recommendations with thesis
+### Trade Approval Flow
 
-3. NOTIFY
-   Recommendations → Slack message with approve/reject buttons
+```
+User clicks [Approve] in Discord
+       │
+       ▼
+Discord Webhook Worker
+       │
+       ├──► Verify Discord signature
+       ├──► Load recommendation (D1)
+       ├──► Check not expired
+       ├──► Validate price hasn't moved >1%
+       ├──► Check circuit breakers (KV)
+       ├──► Place order (Alpaca API)
+       ├──► Update recommendation status (D1)
+       ├──► Create trade record (D1)
+       └──► Update Discord message with confirmation
+```
 
-4. APPROVE
-   User clicks Approve → Validation checks → Risk Manager approval
+### Position Monitoring Flow
 
-5. EXECUTE
-   Order placed → Monitor for fill → Confirm via Slack
+```
+Position Monitor Worker (every 5 min)
+       │
+       ├──► Get open positions (Alpaca API)
+       ├──► For each position:
+       │    ├──► Calculate current P/L
+       │    ├──► Check profit target (50%)
+       │    ├──► Check stop loss (200%)
+       │    └──► Check time exit (21 DTE)
+       ├──► Update positions table (D1)
+       └──► Send exit alerts to Discord if triggered
+```
 
-6. MONITOR
-   Track P/L → Check exit conditions → Generate exit recommendation when triggered
+---
 
-7. EXIT
-   Exit recommendation → Approval flow → Close position
+## Project Structure
 
-8. REFLECT
-   Closed trade → Reflection prompt → Store lesson → Update playbook
+```
+mahler/
+├── src/
+│   ├── workers/
+│   │   ├── router.py            # Main entry point
+│   │   ├── morning_scan.py
+│   │   ├── midday_check.py
+│   │   ├── afternoon_scan.py
+│   │   ├── eod_summary.py
+│   │   ├── position_monitor.py
+│   │   ├── discord_webhook.py
+│   │   └── health.py
+│   │
+│   ├── core/
+│   │   ├── broker/
+│   │   │   ├── alpaca.py
+│   │   │   └── types.py
+│   │   ├── analysis/
+│   │   │   ├── screener.py
+│   │   │   ├── greeks.py
+│   │   │   └── iv_rank.py
+│   │   ├── ai/
+│   │   │   ├── claude.py
+│   │   │   └── prompts.py
+│   │   ├── notifications/
+│   │   │   └── discord.py
+│   │   ├── risk/
+│   │   │   ├── position_sizer.py
+│   │   │   ├── circuit_breaker.py
+│   │   │   └── validators.py
+│   │   ├── db/
+│   │   │   ├── d1.py
+│   │   │   ├── kv.py
+│   │   │   └── r2.py
+│   │   └── types.py
+│   │
+│   └── migrations/
+│       └── 0001_initial.sql
+│
+├── tests/
+├── wrangler.toml
+├── pyproject.toml
+└── requirements.txt
+```
+
+---
+
+## Database Schema
+
+### D1 Tables
+
+```sql
+-- Recommendations awaiting approval
+CREATE TABLE recommendations (
+    id TEXT PRIMARY KEY,
+    created_at TEXT DEFAULT (datetime('now')),
+    expires_at TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',  -- pending, approved, rejected, expired, executed
+
+    underlying TEXT NOT NULL,
+    spread_type TEXT NOT NULL,      -- bull_put, bear_call
+    short_strike REAL NOT NULL,
+    long_strike REAL NOT NULL,
+    expiration TEXT NOT NULL,
+
+    credit REAL NOT NULL,
+    max_loss REAL NOT NULL,
+
+    iv_rank REAL,
+    delta REAL,
+    theta REAL,
+
+    thesis TEXT,
+    confidence TEXT,                -- low, medium, high
+    suggested_contracts INTEGER,
+
+    analysis_price REAL,
+    discord_message_id TEXT
+);
+
+-- Executed trades
+CREATE TABLE trades (
+    id TEXT PRIMARY KEY,
+    recommendation_id TEXT REFERENCES recommendations(id),
+
+    opened_at TEXT,
+    closed_at TEXT,
+    status TEXT,                    -- open, closed
+
+    entry_credit REAL,
+    exit_debit REAL,
+    profit_loss REAL,
+
+    contracts INTEGER,
+    broker_order_id TEXT,
+
+    reflection TEXT,
+    lesson TEXT
+);
+
+-- Position snapshots
+CREATE TABLE positions (
+    id TEXT PRIMARY KEY,
+    trade_id TEXT REFERENCES trades(id),
+
+    underlying TEXT,
+    short_strike REAL,
+    long_strike REAL,
+    expiration TEXT,
+    contracts INTEGER,
+
+    current_value REAL,
+    unrealized_pnl REAL,
+
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Daily performance
+CREATE TABLE daily_performance (
+    date TEXT PRIMARY KEY,
+    starting_balance REAL,
+    ending_balance REAL,
+    realized_pnl REAL,
+    trades_opened INTEGER DEFAULT 0,
+    trades_closed INTEGER DEFAULT 0,
+    win_count INTEGER DEFAULT 0,
+    loss_count INTEGER DEFAULT 0
+);
+
+-- Playbook rules
+CREATE TABLE playbook (
+    id TEXT PRIMARY KEY,
+    rule TEXT NOT NULL,
+    source TEXT,                    -- initial, learned
+    supporting_trade_ids TEXT,      -- JSON array
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Indexes
+CREATE INDEX idx_recommendations_status ON recommendations(status);
+CREATE INDEX idx_trades_status ON trades(status);
+CREATE INDEX idx_positions_underlying ON positions(underlying);
+```
+
+### KV Keys
+
+| Key Pattern | Value | TTL |
+|-------------|-------|-----|
+| `circuit_breaker` | `{halted, reason, updated_at}` | None |
+| `daily:{YYYY-MM-DD}` | `{trades, realized_pnl, losses}` | 7 days |
+| `rate_limit:claude` | Request count | 1 hour |
+
+---
+
+## Configuration
+
+### wrangler.toml
+
+```toml
+name = "mahler"
+main = "src/workers/router.py"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["python_workers"]
+
+[triggers]
+crons = [
+    "35 13 * * 1-5",      # morning scan
+    "0 16 * * 1-5",       # midday check
+    "30 19 * * 1-5",      # afternoon scan
+    "15 20 * * 1-5",      # eod summary
+    "*/5 13-20 * * 1-5"   # position monitor
+]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "mahler"
+database_id = "<your-database-id>"
+
+[[kv_namespaces]]
+binding = "STATE"
+id = "<your-kv-id>"
+
+[[r2_buckets]]
+binding = "ARCHIVE"
+bucket_name = "mahler-archive"
+
+[vars]
+ENVIRONMENT = "paper"
+```
+
+### Secrets
+
+Set via `wrangler secret put`:
+
+```
+ALPACA_API_KEY
+ALPACA_SECRET_KEY
+ANTHROPIC_API_KEY
+DISCORD_BOT_TOKEN
+DISCORD_PUBLIC_KEY
 ```
 
 ---
 
 ## Technology Stack
 
-### Core Dependencies
-
-```toml
-[dependencies]
-# Async runtime
-tokio = { version = "1", features = ["full"] }
-
-# HTTP client
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
-
-# Serialization
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-
-# Financial math - CRITICAL: never use f64 for money
-rust_decimal = { version = "1.39", features = ["serde", "maths"] }
-rust_decimal_macros = "1.39"
-
-# Dates and times
-chrono = { version = "0.4", features = ["serde"] }
-chrono-tz = "0.9"
-
-# Options pricing and Greeks
-optionstratlib = "0.10"
-
-# Database
-rusqlite = { version = "0.32", features = ["bundled", "serde_json"] }
-
-# Error handling
-thiserror = "2.0"
-anyhow = "1.0"
-
-# Logging
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
-
-# Configuration
-config = "0.14"
-dotenvy = "0.15"
-
-# UUID generation
-uuid = { version = "1", features = ["v4", "serde"] }
-```
-
-### Project Structure
-
-```
-trader-jim/
-├── Cargo.toml
-├── config/
-│   ├── default.toml        # Default configuration
-│   ├── paper.toml          # Paper trading overrides
-│   └── live.toml           # Live trading overrides
-├── src/
-│   ├── main.rs             # Entry point, scheduler setup
-│   ├── lib.rs              # Library root
-│   ├── config.rs           # Configuration loading
-│   ├── broker/
-│   │   ├── mod.rs          # Broker trait definition
-│   │   ├── alpaca.rs       # Alpaca implementation
-│   │   └── tastytrade.rs   # Tastytrade implementation
-│   ├── analysis/
-│   │   ├── mod.rs
-│   │   ├── screener.rs     # Options screening logic
-│   │   ├── greeks.rs       # Greeks calculation
-│   │   └── iv_rank.rs      # IV Rank calculation
-│   ├── ai/
-│   │   ├── mod.rs
-│   │   ├── claude.rs       # Claude API client
-│   │   ├── prompts.rs      # Prompt templates
-│   │   └── parser.rs       # Response parsing
-│   ├── risk/
-│   │   ├── mod.rs
-│   │   ├── position_sizer.rs
-│   │   ├── circuit_breaker.rs
-│   │   └── validators.rs
-│   ├── execution/
-│   │   ├── mod.rs
-│   │   ├── order_manager.rs
-│   │   └── fill_monitor.rs
-│   ├── notification/
-│   │   ├── mod.rs
-│   │   ├── slack.rs        # Slack integration
-│   │   └── approval.rs     # Approval webhook handler
-│   ├── memory/
-│   │   ├── mod.rs
-│   │   ├── store.rs        # SQLite operations
-│   │   ├── reflection.rs   # Reflection generation
-│   │   └── playbook.rs     # Playbook management
-│   └── types/
-│       ├── mod.rs
-│       ├── trade.rs        # Trade-related types
-│       ├── position.rs     # Position types
-│       └── market.rs       # Market data types
-├── migrations/
-│   └── 001_initial.sql     # Database schema
-└── tests/
-    ├── integration/
-    └── fixtures/
-```
+| Layer | Choice | Rationale |
+|-------|--------|-----------|
+| Language | Python | Works in Workers via Pyodide, familiar |
+| Runtime | Cloudflare Workers | Serverless, cron triggers, native bindings |
+| Database | D1 (SQLite) | Included with Workers, SQL support |
+| State | KV | Fast reads for circuit breakers |
+| Storage | R2 | Cheap object storage for archives |
+| Broker | Alpaca | Free paper trading, good API |
+| AI | Claude API | Strong reasoning for trade analysis |
+| Notifications | Discord | Interactive buttons, rich embeds |
 
 ---
 
-## Deployment
-
-### Infrastructure
-
-**Primary**: Hetzner Cloud CX22 (2 vCPU, 4GB RAM) — €4.85/month
-
-**Why Hetzner over alternatives**:
-
-- Full Rust support (no WASM restrictions like Cloudflare Workers)
-- Reliable cron via systemd (unlike GitHub Actions with 15-60min delays)
-- Persistent storage for SQLite
-- European servers = lower latency to NYSE/NASDAQ
-
-### Deployment Process
-
-```bash
-# Build release binary locally (cross-compile for Linux)
-cargo build --release --target x86_64-unknown-linux-gnu
-
-# Deploy to server
-scp target/x86_64-unknown-linux-gnu/release/trader-jim user@server:/opt/trader-jim/
-scp config/*.toml user@server:/opt/trader-jim/config/
-
-# On server: set up systemd service
-sudo cp trader-jim.service /etc/systemd/system/
-sudo systemctl enable trader-jim
-sudo systemctl start trader-jim
-```
-
-### Systemd Service
-
-```ini
-# /etc/systemd/system/trader-jim.service
-[Unit]
-Description=Trader Jim Trading System
-After=network.target
-
-[Service]
-Type=simple
-User=traderjim
-WorkingDirectory=/opt/trader-jim
-Environment=RUST_LOG=info
-Environment=TRADER_JIM_ENV=paper
-ExecStart=/opt/trader-jim/trader-jim
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### Secrets Management
-
-```bash
-# Store secrets in systemd drop-in
-sudo mkdir -p /etc/systemd/system/trader-jim.service.d/
-sudo cat > /etc/systemd/system/trader-jim.service.d/secrets.conf << EOF
-[Service]
-Environment=ALPACA_API_KEY=xxx
-Environment=ALPACA_SECRET_KEY=xxx
-Environment=ANTHROPIC_API_KEY=xxx
-Environment=SLACK_BOT_TOKEN=xxx
-Environment=SLACK_SIGNING_SECRET=xxx
-EOF
-sudo chmod 600 /etc/systemd/system/trader-jim.service.d/secrets.conf
-```
-
----
-
-## Monitoring & Observability
+## Monitoring
 
 ### Logging
 
-Structured JSON logs via `tracing`:
+Workers logs available via:
 
-```rust
-tracing::info!(
-    trade_id = %trade.id,
-    underlying = %trade.underlying,
-    action = "order_placed",
-    price = %order.limit_price,
-    "Placed spread order"
-);
-```
+- Cloudflare dashboard (real-time)
+- `wrangler tail` (CLI streaming)
 
 ### Health Checks
 
-**Healthchecks.io** (free tier):
-
-- Ping on each successful analysis cycle
-- Alert if no ping received within expected window
+External monitoring (e.g., Healthchecks.io) pings `/health` endpoint.
 
 ### Alerts
 
-| Event | Channel | Priority |
-|-------|---------|----------|
-| Trade filled | Slack | Normal |
-| Circuit breaker triggered | Slack + SMS | High |
-| API errors | Slack | Normal |
-| Daily P/L summary | Slack | Low |
-| System down | SMS (via Healthchecks.io) | Critical |
+| Event | Channel |
+|-------|---------|
+| Trade recommendation | Discord |
+| Trade executed | Discord |
+| Exit condition triggered | Discord |
+| Circuit breaker activated | Discord |
+| Daily summary | Discord |
+| Worker errors | Cloudflare notifications |
 
 ---
 
-## Security Considerations
+## Security
 
-1. **API Keys**: Never in code or config files—environment variables only
-2. **Slack Verification**: Validate signing secret on all incoming webhooks  
-3. **Rate Limiting**: Enforce on approval endpoint to prevent abuse
-4. **Audit Log**: Immutable record of all orders and decisions
-5. **Network**: Only outbound connections required; no inbound ports except Slack webhook
-6. **Principle of Least Privilege**: Broker API keys scoped to trading only (no withdrawal capability)
-
----
-
-## Testing Strategy
-
-### Unit Tests
-
-- Greeks calculations against known values
-- Position sizing logic
-- Circuit breaker state machine
-
-### Integration Tests
-
-- Broker API client against paper trading endpoint
-- Full analysis → recommendation → approval flow with mocked Slack
-
-### Backtesting
-
-- Historical options data from CBOE DataShop or Polygon.io
-- Replay through system with simulated fills
-- Validate against known profitable periods
-
-### Paper Trading Validation
-
-- 100+ trades minimum before live deployment
-- Must include at least one VIX > 30 event
-- Track all metrics: win rate, profit factor, max drawdown, Sharpe
+- API keys stored as Cloudflare secrets (encrypted at rest)
+- Discord interaction signature verification on all incoming requests
+- Broker API keys scoped to trading only (no withdrawal)
+- No sensitive data in logs
+- D1/KV/R2 access restricted to worker bindings
 
 ---
 
-## Future Enhancements (Post-MVP)
+## Cost Estimate
 
-1. **Iron Condors**: Add neutral strategy for range-bound markets
-2. **Earnings Plays**: Specialized analysis for earnings volatility
-3. **Position Adjustments**: Roll spreads that are being tested
-4. **Multi-Account**: Support for multiple brokerage accounts
-5. **Web Dashboard**: Read-only view of performance and open positions
-6. **Reinforcement Learning**: PPO-based position sizing optimization
+| Service | Usage | Monthly Cost |
+|---------|-------|--------------|
+| Cloudflare Workers | Existing plan | $0 incremental |
+| D1 | <1GB | $0 (included) |
+| KV | Minimal | $0 (included) |
+| R2 | <1GB | $0 (free tier) |
+| Claude API | ~10 calls/day | $15-20 |
+| Alpaca | Paper trading | $0 |
+| Discord | Free | $0 |
+| **Total** | | **~$15-20/mo** |
+
+---
+
+## Limitations
+
+| Constraint | Impact | Mitigation |
+|------------|--------|------------|
+| 30s CPU limit | Long analysis may timeout | Most time is I/O wait; split if needed |
+| Python package support | Some packages unavailable | Use httpx, avoid heavy deps |
+| Cron precision | +/- few seconds | Acceptable for swing trading |
+| D1 row limits | 10GB max | Archive old data to R2 |
