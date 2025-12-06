@@ -116,14 +116,22 @@ class ClaudeClient:
         # Format playbook rules
         rules_text = "\n".join(f"- {r.rule}" for r in playbook_rules[:5])
 
+        # Get deltas from greeks (core OptionContract uses greeks object)
+        short_delta = 0.0
+        long_delta = 0.0
+        if spread.short_contract.greeks:
+            short_delta = spread.short_contract.greeks.delta or 0
+        if spread.long_contract.greeks:
+            long_delta = spread.long_contract.greeks.delta or 0
+
         prompt = TRADE_ANALYSIS_USER.format(
             underlying=spread.underlying,
             underlying_price=underlying_price,
             spread_type=spread.spread_type.value.replace("_", " ").title(),
             short_strike=spread.short_strike,
-            short_delta=spread.short_contract.delta or 0,
+            short_delta=short_delta,
             long_strike=spread.long_strike,
-            long_delta=spread.long_contract.delta or 0,
+            long_delta=long_delta,
             expiration=spread.expiration,
             dte=dte,
             credit=spread.credit,

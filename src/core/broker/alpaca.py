@@ -171,24 +171,61 @@ class AlpacaClient:
         if expiration_end is None:
             expiration_end = (datetime.now() + timedelta(days=50)).strftime("%Y-%m-%d")
 
-        params = {
+        # Step 1: Get option contracts from trading API
+        contracts_params = {
             "underlying_symbols": symbol,
             "expiration_date_gte": expiration_start,
             "expiration_date_lte": expiration_end,
+            "status": "active",
             "limit": 1000,
         }
 
-        # Get options contracts
-        data = await self._data_request("GET", "/v1beta1/options/snapshots", params)
+        contracts_data = await self._trading_request(
+            "GET", "/v2/options/contracts", params=contracts_params
+        )
 
+        option_contracts = contracts_data.get("option_contracts", [])
+        if not option_contracts:
+            # Get underlying price even if no contracts
+            underlying_price = await self._get_underlying_price(symbol)
+            return OptionsChain(
+                underlying=symbol,
+                underlying_price=underlying_price,
+                timestamp=datetime.now(),
+                expirations=[],
+                contracts=[],
+            )
+
+        # Build a lookup of contract metadata (open_interest, etc.) from trading API
+        contract_metadata = {}
+        for c in option_contracts:
+            contract_metadata[c["symbol"]] = {
+                "open_interest": int(c.get("open_interest") or 0),
+            }
+
+        # Step 2: Get snapshots for the option symbols (batch in groups of 100)
+        all_symbols = [c["symbol"] for c in option_contracts]
         contracts = []
         expirations = set()
 
-        for occ_symbol, snapshot in data.get("snapshots", {}).items():
-            contract = self._parse_option_contract(occ_symbol, snapshot)
-            if contract:
-                contracts.append(contract)
-                expirations.add(contract.expiration)
+        # Process in batches of 100 symbols
+        batch_size = 100
+        for i in range(0, len(all_symbols), batch_size):
+            batch_symbols = all_symbols[i : i + batch_size]
+            symbols_param = ",".join(batch_symbols)
+
+            snapshot_params = {"symbols": symbols_param}
+            snapshot_data = await self._data_request(
+                "GET", "/v1beta1/options/snapshots", params=snapshot_params
+            )
+
+            for occ_symbol, snapshot in snapshot_data.get("snapshots", {}).items():
+                # Merge open_interest from contract metadata
+                metadata = contract_metadata.get(occ_symbol, {})
+                contract = self._parse_option_contract(occ_symbol, snapshot, metadata)
+                if contract:
+                    contracts.append(contract)
+                    expirations.add(contract.expiration)
 
         # Get underlying price
         underlying_price = await self._get_underlying_price(symbol)
@@ -215,7 +252,9 @@ class AlpacaClient:
             return (bid + ask) / 2
         return float(quote.get("ap", 0) or quote.get("bp", 0))
 
-    def _parse_option_contract(self, occ_symbol: str, snapshot: dict) -> OptionContract | None:
+    def _parse_option_contract(
+        self, occ_symbol: str, snapshot: dict, metadata: dict | None = None
+    ) -> OptionContract | None:
         """Parse option contract from Alpaca snapshot."""
         try:
             # Parse OCC symbol: SPY240119C00500000
@@ -235,6 +274,10 @@ class AlpacaClient:
             quote = snapshot.get("latestQuote", {})
             trade = snapshot.get("latestTrade", {})
             greeks = snapshot.get("greeks", {})
+            metadata = metadata or {}
+
+            # Open interest from contract metadata (trading API), fallback to snapshot
+            open_interest = metadata.get("open_interest") or int(snapshot.get("openInterest", 0))
 
             return OptionContract(
                 symbol=occ_symbol,
@@ -246,7 +289,7 @@ class AlpacaClient:
                 ask=float(quote.get("ap", 0)),
                 last=float(trade.get("p", 0)),
                 volume=int(snapshot.get("dailyBar", {}).get("v", 0)),
-                open_interest=int(snapshot.get("openInterest", 0)),
+                open_interest=open_interest,
                 delta=float(greeks.get("delta")) if greeks.get("delta") else None,
                 gamma=float(greeks.get("gamma")) if greeks.get("gamma") else None,
                 theta=float(greeks.get("theta")) if greeks.get("theta") else None,
@@ -261,25 +304,31 @@ class AlpacaClient:
     # Orders
 
     async def place_spread_order(self, spread: SpreadOrder) -> Order:
-        """Place a credit spread order (sell short, buy long)."""
+        """Place a credit spread order (sell short, buy long).
+
+        For credit spreads, limit_price should be negative (credit received).
+        """
+        # Alpaca mleg orders use negative limit_price for credits
+        limit_price = -abs(spread.limit_price)
+
         order_data = {
-            "symbol": spread.underlying,
-            "qty": spread.contracts,
-            "side": "sell",  # Selling the spread for credit
+            "order_class": "mleg",
+            "qty": str(spread.contracts),
             "type": "limit",
             "time_in_force": "day",
-            "limit_price": str(spread.limit_price),
-            "order_class": "mleg",
+            "limit_price": str(limit_price),
             "legs": [
                 {
                     "symbol": spread.short_symbol,
                     "side": "sell",
-                    "qty": spread.contracts,
+                    "ratio_qty": "1",
+                    "position_intent": "sell_to_open",
                 },
                 {
                     "symbol": spread.long_symbol,
                     "side": "buy",
-                    "qty": spread.contracts,
+                    "ratio_qty": "1",
+                    "position_intent": "buy_to_open",
                 },
             ],
         }
@@ -294,24 +343,31 @@ class AlpacaClient:
         contracts: int,
         limit_price: float,
     ) -> Order:
-        """Close a credit spread (buy back short, sell long)."""
+        """Close a credit spread (buy back short, sell long).
+
+        For closing credit spreads (debit), limit_price should be positive.
+        """
+        # Closing a credit spread is a debit (positive limit_price)
+        limit_price = abs(limit_price)
+
         order_data = {
-            "qty": contracts,
-            "side": "buy",  # Buying back the spread
+            "order_class": "mleg",
+            "qty": str(contracts),
             "type": "limit",
             "time_in_force": "day",
             "limit_price": str(limit_price),
-            "order_class": "mleg",
             "legs": [
                 {
                     "symbol": short_symbol,
                     "side": "buy",
-                    "qty": contracts,
+                    "ratio_qty": "1",
+                    "position_intent": "buy_to_close",
                 },
                 {
                     "symbol": long_symbol,
                     "side": "sell",
-                    "qty": contracts,
+                    "ratio_qty": "1",
+                    "position_intent": "sell_to_close",
                 },
             ],
         }

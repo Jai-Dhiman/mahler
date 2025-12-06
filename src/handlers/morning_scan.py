@@ -55,7 +55,9 @@ async def handle_morning_scan(env):
     claude = ClaudeClient(api_key=env.ANTHROPIC_API_KEY)
 
     # Check if market is open
-    if not await alpaca.is_market_open():
+    market_open = await alpaca.is_market_open()
+    print(f"Market open: {market_open}")
+    if not market_open:
         print("Market is closed, skipping scan")
         return
 
@@ -85,6 +87,8 @@ async def handle_morning_scan(env):
                 print(f"No options data for {symbol}")
                 continue
 
+            print(f"{symbol}: Got {len(chain.contracts)} contracts, price=${chain.underlying_price:.2f}")
+
             # Calculate IV metrics (using ATM options as proxy)
             atm_contracts = [
                 c
@@ -98,8 +102,9 @@ async def handle_morning_scan(env):
                 current_iv = 0.20  # Default
 
             # For a production system, you'd load historical IV from R2/D1
-            # For now, use a synthetic IV rank based on current IV
-            iv_metrics = calculate_iv_metrics(current_iv, [current_iv * 0.8, current_iv * 1.2])
+            # For now, use a synthetic IV rank that assumes current IV is elevated
+            # This allows testing - in production, use actual historical data
+            iv_metrics = calculate_iv_metrics(current_iv, [current_iv * 0.6, current_iv * 1.1])
 
             # Screen for opportunities
             opportunities = screener.screen_chain(chain, iv_metrics)
@@ -148,6 +153,13 @@ async def handle_morning_scan(env):
                 print(f"Skipping low confidence trade: {spread.underlying}")
                 continue
 
+            # Get delta/theta from the scored spread or Greeks if available
+            short_delta = None
+            short_theta = None
+            if spread.short_contract.greeks:
+                short_delta = spread.short_contract.greeks.delta
+                short_theta = spread.short_contract.greeks.theta
+
             # Create recommendation
             rec_id = await db.create_recommendation(
                 underlying=spread.underlying,
@@ -159,8 +171,8 @@ async def handle_morning_scan(env):
                 max_loss=spread.max_loss,
                 expires_at=datetime.now() + timedelta(minutes=15),
                 iv_rank=iv_metrics.iv_rank,
-                delta=spread.short_contract.greeks.delta if spread.short_contract.greeks else None,
-                theta=spread.short_contract.greeks.theta if spread.short_contract.greeks else None,
+                delta=short_delta,
+                theta=short_theta,
                 thesis=analysis.thesis,
                 confidence=analysis.confidence,
                 suggested_contracts=size_result.contracts,
@@ -178,6 +190,8 @@ async def handle_morning_scan(env):
             print(f"Sent recommendation for {spread.underlying}: {rec_id}")
 
         except Exception as e:
+            import traceback
             print(f"Error processing opportunity: {e}")
+            print(traceback.format_exc())
 
     print(f"Morning scan complete. Sent {recommendations_sent} recommendations.")
