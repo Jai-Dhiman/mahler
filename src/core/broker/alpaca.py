@@ -309,7 +309,8 @@ class AlpacaClient:
         For credit spreads, limit_price should be negative (credit received).
         """
         # Alpaca mleg orders use negative limit_price for credits
-        limit_price = -abs(spread.limit_price)
+        # Round to 2 decimal places - Alpaca rejects prices with more precision
+        limit_price = round(-abs(spread.limit_price), 2)
 
         order_data = {
             "order_class": "mleg",
@@ -348,7 +349,8 @@ class AlpacaClient:
         For closing credit spreads (debit), limit_price should be positive.
         """
         # Closing a credit spread is a debit (positive limit_price)
-        limit_price = abs(limit_price)
+        # Round to 2 decimal places - Alpaca rejects prices with more precision
+        limit_price = round(abs(limit_price), 2)
 
         order_data = {
             "order_class": "mleg",
