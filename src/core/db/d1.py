@@ -472,3 +472,239 @@ class D1Client:
             "profit_factor": total_profit / total_loss if total_loss > 0 else 0,
             "net_pnl": row.get("net_pnl") or 0,
         }
+
+    # IV History
+
+    async def save_daily_iv(
+        self,
+        date: str,
+        underlying: str,
+        atm_iv: float,
+        underlying_price: float | None = None,
+    ) -> str:
+        """Save daily IV observation for an underlying.
+
+        Args:
+            date: Date in YYYY-MM-DD format
+            underlying: Symbol (e.g., SPY, QQQ)
+            atm_iv: At-the-money implied volatility (decimal, e.g., 0.20 for 20%)
+            underlying_price: Optional underlying price at observation time
+        """
+        iv_id = str(uuid4())
+        await self.run(
+            """
+            INSERT INTO iv_history (id, date, underlying, atm_iv, underlying_price)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(date, underlying) DO UPDATE SET
+                atm_iv = excluded.atm_iv,
+                underlying_price = excluded.underlying_price
+            """,
+            [iv_id, date, underlying, atm_iv, underlying_price],
+        )
+        return iv_id
+
+    async def get_iv_history(
+        self,
+        underlying: str,
+        lookback_days: int = 252,
+    ) -> list[float]:
+        """Get historical IV values for an underlying.
+
+        Args:
+            underlying: Symbol (e.g., SPY)
+            lookback_days: Number of trading days to look back (default 252 = 1 year)
+
+        Returns:
+            List of IV values, most recent first
+        """
+        result = await self.execute(
+            """
+            SELECT atm_iv FROM iv_history
+            WHERE underlying = ?
+            ORDER BY date DESC
+            LIMIT ?
+            """,
+            [underlying, lookback_days],
+        )
+        return [row["atm_iv"] for row in result["results"]]
+
+    async def get_iv_history_count(self, underlying: str) -> int:
+        """Get count of IV history records for an underlying."""
+        result = await self.execute(
+            "SELECT COUNT(*) as count FROM iv_history WHERE underlying = ?",
+            [underlying],
+        )
+        return result["results"][0]["count"] if result["results"] else 0
+
+    # VIX History
+
+    async def save_daily_vix(
+        self,
+        date: str,
+        vix_close: float,
+        vix3m_close: float | None = None,
+    ) -> str:
+        """Save daily VIX observation.
+
+        Args:
+            date: Date in YYYY-MM-DD format
+            vix_close: VIX closing value
+            vix3m_close: VIX3M closing value (optional, for term structure)
+        """
+        vix_id = str(uuid4())
+        term_structure_ratio = vix_close / vix3m_close if vix3m_close else None
+
+        await self.run(
+            """
+            INSERT INTO vix_history (id, date, vix_close, vix3m_close, term_structure_ratio)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(date) DO UPDATE SET
+                vix_close = excluded.vix_close,
+                vix3m_close = excluded.vix3m_close,
+                term_structure_ratio = excluded.term_structure_ratio
+            """,
+            [vix_id, date, vix_close, vix3m_close, term_structure_ratio],
+        )
+        return vix_id
+
+    async def get_latest_vix(self) -> dict | None:
+        """Get the most recent VIX observation."""
+        result = await self.execute(
+            "SELECT * FROM vix_history ORDER BY date DESC LIMIT 1"
+        )
+        if not result["results"]:
+            return None
+        row = result["results"][0]
+        return {
+            "date": row["date"],
+            "vix_close": row["vix_close"],
+            "vix3m_close": row["vix3m_close"],
+            "term_structure_ratio": row["term_structure_ratio"],
+        }
+
+    async def get_vix_history(self, lookback_days: int = 252) -> list[dict]:
+        """Get VIX history for lookback period."""
+        result = await self.execute(
+            """
+            SELECT date, vix_close, vix3m_close, term_structure_ratio
+            FROM vix_history
+            ORDER BY date DESC
+            LIMIT ?
+            """,
+            [lookback_days],
+        )
+        return [
+            {
+                "date": row["date"],
+                "vix_close": row["vix_close"],
+                "vix3m_close": row["vix3m_close"],
+                "term_structure_ratio": row["term_structure_ratio"],
+            }
+            for row in result["results"]
+        ]
+
+    # AI Confidence Calibration
+
+    async def get_confidence_calibration(self, lookback_days: int = 90) -> dict:
+        """Calculate AI confidence calibration by comparing confidence to actual outcomes.
+
+        Returns:
+            Dict with calibration metrics per confidence level
+        """
+        result = await self.execute(
+            """
+            SELECT
+                r.confidence,
+                COUNT(*) as total,
+                SUM(CASE WHEN t.profit_loss > 0 THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN t.profit_loss < 0 THEN 1 ELSE 0 END) as losses,
+                SUM(CASE WHEN t.profit_loss = 0 THEN 1 ELSE 0 END) as breakeven
+            FROM recommendations r
+            JOIN trades t ON t.recommendation_id = r.id
+            WHERE t.status = 'closed'
+                AND t.closed_at >= date('now', '-' || ? || ' days')
+                AND r.confidence IS NOT NULL
+            GROUP BY r.confidence
+            """,
+            [lookback_days],
+        )
+
+        calibration = {}
+        for row in result["results"]:
+            confidence = row["confidence"]
+            total = row["total"] or 0
+            wins = row["wins"] or 0
+            losses = row["losses"] or 0
+
+            win_rate = wins / total if total > 0 else 0
+
+            # Expected win rate based on confidence level
+            expected_win_rate = {
+                "low": 0.50,  # 50% expected
+                "medium": 0.65,  # 65% expected
+                "high": 0.80,  # 80% expected
+            }.get(confidence, 0.50)
+
+            calibration_gap = win_rate - expected_win_rate
+
+            calibration[confidence] = {
+                "total_trades": total,
+                "wins": wins,
+                "losses": losses,
+                "actual_win_rate": win_rate,
+                "expected_win_rate": expected_win_rate,
+                "calibration_gap": calibration_gap,
+                "is_calibrated": abs(calibration_gap) <= 0.10,  # Within 10%
+            }
+
+        return calibration
+
+    async def get_rolling_calibration_stats(self, lookback_days: int = 30) -> dict:
+        """Get rolling calibration stats for the last N days.
+
+        Used for detecting calibration drift.
+        """
+        result = await self.execute(
+            """
+            SELECT
+                r.confidence,
+                COUNT(*) as total,
+                SUM(CASE WHEN t.profit_loss > 0 THEN 1 ELSE 0 END) as wins
+            FROM recommendations r
+            JOIN trades t ON t.recommendation_id = r.id
+            WHERE t.status = 'closed'
+                AND t.closed_at >= date('now', '-' || ? || ' days')
+                AND r.confidence IS NOT NULL
+            GROUP BY r.confidence
+            """,
+            [lookback_days],
+        )
+
+        stats = {
+            "period_days": lookback_days,
+            "by_confidence": {},
+            "overall_win_rate": 0,
+            "total_trades": 0,
+        }
+
+        total_wins = 0
+        total_trades = 0
+
+        for row in result["results"]:
+            confidence = row["confidence"]
+            total = row["total"] or 0
+            wins = row["wins"] or 0
+
+            total_trades += total
+            total_wins += wins
+
+            stats["by_confidence"][confidence] = {
+                "total": total,
+                "wins": wins,
+                "win_rate": wins / total if total > 0 else 0,
+            }
+
+        stats["total_trades"] = total_trades
+        stats["overall_win_rate"] = total_wins / total_trades if total_trades > 0 else 0
+
+        return stats

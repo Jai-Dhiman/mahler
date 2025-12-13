@@ -426,3 +426,187 @@ class DiscordClient:
             content=f"**Order Filled: {trade.underlying}**",
             embeds=[embed],
         )
+
+    # Reconciliation alerts
+
+    async def send_reconciliation_alert(
+        self,
+        discrepancies: list[dict],
+        broker_positions: list[dict],
+        db_positions: list[dict],
+    ) -> str:
+        """Send reconciliation mismatch alert.
+
+        Args:
+            discrepancies: List of discrepancy descriptions
+            broker_positions: Positions from broker
+            db_positions: Positions from database
+        """
+        embed = {
+            "title": "Position Reconciliation Mismatch",
+            "color": 0xED4245,  # Red
+            "description": "Discrepancies detected between broker and database positions. Manual review required before next trading day.",
+            "fields": [
+                {
+                    "name": "Discrepancy Count",
+                    "value": str(len(discrepancies)),
+                    "inline": True,
+                },
+                {
+                    "name": "Broker Positions",
+                    "value": str(len(broker_positions)),
+                    "inline": True,
+                },
+                {
+                    "name": "DB Positions",
+                    "value": str(len(db_positions)),
+                    "inline": True,
+                },
+            ],
+        }
+
+        # Add discrepancy details (up to 5)
+        discrepancy_text = "\n".join(f"- {d['message']}" for d in discrepancies[:5])
+        if len(discrepancies) > 5:
+            discrepancy_text += f"\n... and {len(discrepancies) - 5} more"
+
+        embed["fields"].append({
+            "name": "Discrepancies",
+            "value": discrepancy_text or "None",
+            "inline": False,
+        })
+
+        components = [
+            {
+                "type": 1,
+                "components": [
+                    {
+                        "type": 2,
+                        "style": 3,  # Success
+                        "label": "Acknowledge",
+                        "custom_id": "acknowledge_reconciliation",
+                    },
+                ],
+            }
+        ]
+
+        return await self.send_message(
+            content="**RECONCILIATION ALERT - MANUAL REVIEW REQUIRED**",
+            embeds=[embed],
+            components=components,
+        )
+
+    async def send_reconciliation_success(self, position_count: int) -> str:
+        """Send confirmation that reconciliation passed."""
+        embed = {
+            "title": "Position Reconciliation Complete",
+            "color": 0x57F287,  # Green
+            "description": f"All {position_count} positions match between broker and database.",
+        }
+
+        return await self.send_message(
+            content="**Reconciliation: All Clear**",
+            embeds=[embed],
+        )
+
+    # Kill switch
+
+    async def send_kill_switch_activated(self, reason: str, activated_by: str) -> str:
+        """Send kill switch activation alert."""
+        embed = {
+            "title": "TRADING HALTED - Kill Switch Activated",
+            "color": 0xED4245,  # Red
+            "fields": [
+                {"name": "Reason", "value": reason, "inline": False},
+                {"name": "Activated By", "value": activated_by, "inline": True},
+            ],
+            "description": "All trading has been halted. Use /resume to restore trading.",
+        }
+
+        return await self.send_message(
+            content="**KILL SWITCH ACTIVATED**",
+            embeds=[embed],
+        )
+
+    async def send_kill_switch_deactivated(self, deactivated_by: str) -> str:
+        """Send kill switch deactivation alert."""
+        embed = {
+            "title": "Trading Resumed",
+            "color": 0x57F287,  # Green
+            "fields": [
+                {"name": "Resumed By", "value": deactivated_by, "inline": True},
+            ],
+            "description": "Kill switch has been deactivated. Trading will resume on next scan.",
+        }
+
+        return await self.send_message(
+            content="**Trading Resumed**",
+            embeds=[embed],
+        )
+
+    # AI Calibration alerts
+
+    async def send_calibration_alert(self, calibration_data: dict) -> str:
+        """Send AI confidence calibration alert when calibration gap exceeds threshold."""
+        fields = []
+        issues = []
+
+        for confidence, data in calibration_data.items():
+            if not data.get("is_calibrated", True):
+                gap = data.get("calibration_gap", 0)
+                actual = data.get("actual_win_rate", 0)
+                expected = data.get("expected_win_rate", 0)
+                issues.append(confidence)
+
+                fields.append({
+                    "name": f"{confidence.upper()} Confidence",
+                    "value": f"Expected: {expected:.0%} | Actual: {actual:.0%} | Gap: {gap:+.0%}",
+                    "inline": False,
+                })
+
+        if not issues:
+            return ""  # No alert needed
+
+        embed = {
+            "title": "AI Confidence Calibration Alert",
+            "color": 0xF97316,  # Orange
+            "description": f"Calibration gap exceeds 10% for {len(issues)} confidence level(s). Consider adjusting AI prompts or reviewing trade selection criteria.",
+            "fields": fields,
+        }
+
+        return await self.send_message(
+            content="**AI Calibration Issue Detected**",
+            embeds=[embed],
+        )
+
+    async def send_calibration_summary(self, calibration_data: dict, stats: dict) -> str:
+        """Send weekly calibration summary."""
+        fields = []
+
+        for confidence in ["high", "medium", "low"]:
+            if confidence in calibration_data:
+                data = calibration_data[confidence]
+                actual = data.get("actual_win_rate", 0)
+                expected = data.get("expected_win_rate", 0)
+                total = data.get("total_trades", 0)
+                status = "OK" if data.get("is_calibrated", True) else "MISCALIBRATED"
+
+                fields.append({
+                    "name": f"{confidence.upper()} ({total} trades)",
+                    "value": f"Win Rate: {actual:.0%} (expected {expected:.0%}) - {status}",
+                    "inline": False,
+                })
+
+        embed = {
+            "title": "AI Confidence Calibration Summary",
+            "color": 0x5865F2,  # Blurple
+            "fields": fields,
+            "footer": {
+                "text": f"Overall win rate: {stats.get('overall_win_rate', 0):.0%} | Total: {stats.get('total_trades', 0)} trades",
+            },
+        }
+
+        return await self.send_message(
+            content="**Weekly AI Calibration Report**",
+            embeds=[embed],
+        )

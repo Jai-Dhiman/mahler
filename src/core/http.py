@@ -96,3 +96,87 @@ async def put(url: str, headers: dict | None = None, json_data: dict | None = No
 async def delete(url: str, headers: dict | None = None) -> dict:
     """Make a DELETE request."""
     return await request("DELETE", url, headers=headers)
+
+
+async def ping_heartbeat(
+    base_url: str | None,
+    job_name: str,
+    success: bool = True,
+    message: str | None = None,
+) -> bool:
+    """Ping external heartbeat monitoring service.
+
+    Supports Healthchecks.io and Cronitor style endpoints.
+
+    Healthchecks.io format: https://hc-ping.com/<uuid>/<job_name>
+    - Success: GET to base URL
+    - Failure: GET to base URL + /fail
+    - Start: GET to base URL + /start
+
+    Cronitor format: https://cronitor.link/p/<api_key>/<job_name>
+    - Success: ?state=complete
+    - Failure: ?state=fail
+
+    Args:
+        base_url: Base heartbeat URL (e.g., https://hc-ping.com/<uuid>)
+        job_name: Name of the job being monitored
+        success: Whether the job succeeded
+        message: Optional status message
+
+    Returns:
+        True if ping was sent successfully, False otherwise
+    """
+    if not base_url:
+        return True  # No heartbeat configured, skip
+
+    try:
+        # Build URL based on service type and status
+        if "hc-ping.com" in base_url or "healthchecks.io" in base_url:
+            # Healthchecks.io format
+            url = f"{base_url}/{job_name}"
+            if not success:
+                url = f"{url}/fail"
+        elif "cronitor.link" in base_url or "cronitor.io" in base_url:
+            # Cronitor format
+            state = "complete" if success else "fail"
+            url = f"{base_url}/{job_name}?state={state}"
+            if message:
+                url = f"{url}&message={message}"
+        else:
+            # Generic format - append job name and status
+            url = f"{base_url}/{job_name}"
+            if not success:
+                url = f"{url}?status=fail"
+
+        # Make the ping request
+        js_headers = Headers.new()
+        js_options = to_js({"method": "GET", "headers": js_headers}, dict_converter=Object.fromEntries)
+        response = await fetch(url, js_options)
+
+        return response.ok
+
+    except Exception as e:
+        print(f"Heartbeat ping failed for {job_name}: {e}")
+        return False
+
+
+async def ping_heartbeat_start(base_url: str | None, job_name: str) -> bool:
+    """Signal start of a monitored job.
+
+    For services that support start/end tracking (like Healthchecks.io),
+    this marks the beginning of a job execution.
+    """
+    if not base_url:
+        return True
+
+    try:
+        if "hc-ping.com" in base_url or "healthchecks.io" in base_url:
+            url = f"{base_url}/{job_name}/start"
+            js_headers = Headers.new()
+            js_options = to_js({"method": "GET", "headers": js_headers}, dict_converter=Object.fromEntries)
+            response = await fetch(url, js_options)
+            return response.ok
+        return True  # Other services don't support start signal
+    except Exception as e:
+        print(f"Heartbeat start ping failed for {job_name}: {e}")
+        return False

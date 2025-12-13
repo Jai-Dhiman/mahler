@@ -5,23 +5,141 @@ Generates daily summary with:
 - Open positions
 - AI reflection on closed trades
 - Archives data to R2
+- Position reconciliation with broker
 """
 
 from datetime import datetime
 
+from core import http
 from core.ai.claude import ClaudeClient
 from core.broker.alpaca import AlpacaClient
 from core.db.d1 import D1Client
 from core.db.kv import KVClient
 from core.db.r2 import R2Client
 from core.notifications.discord import DiscordClient
-from core.types import TradeStatus
+from core.types import Position, TradeStatus
+
+
+async def reconcile_positions(
+    alpaca: AlpacaClient,
+    db_positions: list[Position],
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Reconcile broker positions with database positions.
+
+    Returns:
+        Tuple of (discrepancies, broker_positions_list, db_positions_list)
+    """
+    discrepancies = []
+
+    # Get broker option positions
+    broker_positions = await alpaca.get_option_positions()
+
+    # Build lookup of broker positions by parsed components
+    broker_lookup = {}
+    broker_positions_list = []
+    for bp in broker_positions:
+        parsed = alpaca.parse_occ_symbol(bp.symbol)
+        if parsed:
+            key = f"{parsed['underlying']}:{parsed['expiration']}:{parsed['strike']}"
+            broker_lookup[key] = {
+                "symbol": bp.symbol,
+                "qty": bp.qty,
+                "underlying": parsed["underlying"],
+                "expiration": parsed["expiration"],
+                "strike": parsed["strike"],
+                "option_type": parsed["option_type"],
+                "market_value": bp.market_value,
+            }
+            broker_positions_list.append(broker_lookup[key])
+
+    # Build lookup of DB positions
+    db_lookup = {}
+    db_positions_list = []
+    for dp in db_positions:
+        # For spreads, we have both short and long strikes
+        # Check short strike
+        short_key = f"{dp.underlying}:{dp.expiration}:{dp.short_strike}"
+        db_lookup[short_key] = {
+            "trade_id": dp.trade_id,
+            "underlying": dp.underlying,
+            "expiration": dp.expiration,
+            "strike": dp.short_strike,
+            "contracts": dp.contracts,
+            "type": "short",
+        }
+
+        # Check long strike
+        long_key = f"{dp.underlying}:{dp.expiration}:{dp.long_strike}"
+        db_lookup[long_key] = {
+            "trade_id": dp.trade_id,
+            "underlying": dp.underlying,
+            "expiration": dp.expiration,
+            "strike": dp.long_strike,
+            "contracts": dp.contracts,
+            "type": "long",
+        }
+
+        db_positions_list.append({
+            "trade_id": dp.trade_id,
+            "underlying": dp.underlying,
+            "expiration": dp.expiration,
+            "short_strike": dp.short_strike,
+            "long_strike": dp.long_strike,
+            "contracts": dp.contracts,
+        })
+
+    # Check for positions in broker but not in DB
+    for key, bp in broker_lookup.items():
+        if key not in db_lookup:
+            discrepancies.append({
+                "type": "broker_only",
+                "message": f"Position in broker not in DB: {bp['underlying']} {bp['expiration']} ${bp['strike']} ({bp['qty']} contracts)",
+                "details": bp,
+            })
+
+    # Check for positions in DB but not in broker
+    for key, dp in db_lookup.items():
+        if key not in broker_lookup:
+            discrepancies.append({
+                "type": "db_only",
+                "message": f"Position in DB not in broker: {dp['underlying']} {dp['expiration']} ${dp['strike']} ({dp['type']}, {dp['contracts']} contracts)",
+                "details": dp,
+            })
+
+    # Check for quantity mismatches
+    for key in set(broker_lookup.keys()) & set(db_lookup.keys()):
+        bp = broker_lookup[key]
+        dp = db_lookup[key]
+        # Note: broker qty is signed (negative for short), dp.contracts is always positive
+        expected_qty = dp["contracts"] if dp["type"] == "long" else -dp["contracts"]
+        if bp["qty"] != expected_qty:
+            discrepancies.append({
+                "type": "qty_mismatch",
+                "message": f"Quantity mismatch for {dp['underlying']} {dp['expiration']} ${dp['strike']}: broker={bp['qty']}, db={expected_qty}",
+                "details": {"broker": bp, "db": dp},
+            })
+
+    return discrepancies, broker_positions_list, db_positions_list
 
 
 async def handle_eod_summary(env):
     """Generate end-of-day summary."""
     print("Starting EOD summary...")
 
+    # Signal start to heartbeat monitor
+    heartbeat_url = getattr(env, "HEARTBEAT_URL", None)
+    await http.ping_heartbeat_start(heartbeat_url, "eod_summary")
+
+    job_success = False
+    try:
+        await _run_eod_summary(env)
+        job_success = True
+    finally:
+        await http.ping_heartbeat(heartbeat_url, "eod_summary", success=job_success)
+
+
+async def _run_eod_summary(env):
+    """Internal EOD summary logic."""
     today = datetime.now().strftime("%Y-%m-%d")
 
     # Initialize clients
@@ -45,6 +163,45 @@ async def handle_eod_summary(env):
 
     # Get account info
     account = await alpaca.get_account()
+
+    # Capture daily IV for each underlying (including diversification assets)
+    underlyings = ["SPY", "QQQ", "IWM", "TLT", "GLD"]
+    for symbol in underlyings:
+        try:
+            chain = await alpaca.get_options_chain(symbol)
+            if chain.contracts:
+                # Find ATM contracts (within 2% of underlying price)
+                atm_contracts = [
+                    c
+                    for c in chain.contracts
+                    if abs(c.strike - chain.underlying_price) < chain.underlying_price * 0.02
+                    and c.implied_volatility
+                ]
+                if atm_contracts:
+                    # Use average IV of ATM options
+                    atm_iv = sum(c.implied_volatility for c in atm_contracts) / len(atm_contracts)
+                    await db.save_daily_iv(
+                        date=today,
+                        underlying=symbol,
+                        atm_iv=atm_iv,
+                        underlying_price=chain.underlying_price,
+                    )
+                    print(f"Saved IV for {symbol}: {atm_iv:.2%}")
+        except Exception as e:
+            print(f"Error capturing IV for {symbol}: {e}")
+
+    # Capture VIX data
+    try:
+        vix_data = await alpaca.get_vix_snapshot()
+        if vix_data:
+            await db.save_daily_vix(
+                date=today,
+                vix_close=vix_data["vix"],
+                vix3m_close=vix_data.get("vix3m"),
+            )
+            print(f"Saved VIX: {vix_data['vix']:.2f}")
+    except Exception as e:
+        print(f"Error capturing VIX: {e}")
 
     # Get or create daily performance record
     daily_stats = await kv.get_daily_stats(today)
@@ -136,6 +293,48 @@ async def handle_eod_summary(env):
         except Exception as e:
             print(f"Error updating playbook: {e}")
 
+    # Reconcile positions with broker
+    try:
+        discrepancies, broker_positions_list, db_positions_list = await reconcile_positions(
+            alpaca, positions
+        )
+
+        if discrepancies:
+            print(f"Reconciliation found {len(discrepancies)} discrepancies")
+            for d in discrepancies:
+                print(f"  - {d['message']}")
+
+            await discord.send_reconciliation_alert(
+                discrepancies=discrepancies,
+                broker_positions=broker_positions_list,
+                db_positions=db_positions_list,
+            )
+
+            # Store reconciliation failure in KV for next day check
+            await kv.put_json(
+                f"reconciliation:{today}",
+                {
+                    "status": "failed",
+                    "discrepancy_count": len(discrepancies),
+                    "discrepancies": discrepancies,
+                    "acknowledged": False,
+                },
+                expiration_ttl=7 * 24 * 3600,
+            )
+        else:
+            print("Reconciliation successful - all positions match")
+            if positions:
+                await discord.send_reconciliation_success(len(positions))
+
+            await kv.put_json(
+                f"reconciliation:{today}",
+                {"status": "passed", "position_count": len(positions)},
+                expiration_ttl=7 * 24 * 3600,
+            )
+
+    except Exception as e:
+        print(f"Error during reconciliation: {e}")
+
     # Archive daily snapshot to R2
     try:
         positions_data = [
@@ -169,11 +368,48 @@ async def handle_eod_summary(env):
                 "cash": account.cash,
                 "buying_power": account.buying_power,
             },
+            reconciliation={
+                "status": "passed" if not discrepancies else "failed",
+                "discrepancy_count": len(discrepancies) if discrepancies else 0,
+            },
         )
         print(f"Archived daily snapshot for {today}")
 
     except Exception as e:
         print(f"Error archiving snapshot: {e}")
+
+    # Check AI confidence calibration (weekly on Fridays)
+    try:
+        weekday = datetime.now().weekday()
+        if weekday == 4:  # Friday
+            calibration = await db.get_confidence_calibration(lookback_days=90)
+            stats = await db.get_rolling_calibration_stats(lookback_days=30)
+
+            # Check for calibration issues
+            has_issues = any(
+                not data.get("is_calibrated", True)
+                for data in calibration.values()
+                if data.get("total_trades", 0) >= 5  # Only alert if enough trades
+            )
+
+            if has_issues:
+                await discord.send_calibration_alert(calibration)
+                print("Calibration issues detected - alert sent")
+
+            # Send weekly summary
+            if calibration:
+                await discord.send_calibration_summary(calibration, stats)
+                print("Weekly calibration summary sent")
+
+            # Archive calibration data
+            await kv.put_json(
+                f"calibration:{today}",
+                {"calibration": calibration, "stats": stats},
+                expiration_ttl=90 * 24 * 3600,  # Keep 90 days
+            )
+
+    except Exception as e:
+        print(f"Error checking calibration: {e}")
 
     # Send Discord summary
     await discord.send_daily_summary(

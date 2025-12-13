@@ -196,3 +196,49 @@ class AccountInfo:
     cash: float
     buying_power: float
     portfolio_value: float
+
+
+class AssetClass(str, Enum):
+    """Asset class for correlation grouping."""
+
+    EQUITY = "equity"  # SPY, QQQ, IWM - highly correlated
+    TREASURY = "treasury"  # TLT - negatively correlated with equities
+    COMMODITY = "commodity"  # GLD - low/variable correlation
+
+
+@dataclass
+class PortfolioGreeks:
+    """Aggregate portfolio Greeks (beta-weighted to SPY)."""
+
+    delta: float  # Net beta-weighted delta
+    gamma: float  # Net gamma
+    theta: float  # Net theta (daily decay)
+    vega: float  # Net vega exposure
+
+    # Risk by asset class
+    equity_risk: float = 0.0  # Total risk in equity-correlated positions
+    treasury_risk: float = 0.0  # Total risk in treasury positions
+    commodity_risk: float = 0.0  # Total risk in commodity positions
+
+    @property
+    def total_risk(self) -> float:
+        return self.equity_risk + self.treasury_risk + self.commodity_risk
+
+
+# Beta values relative to SPY (for beta-weighted calculations)
+ASSET_BETAS = {
+    "SPY": 1.0,
+    "QQQ": 1.15,  # Tech-heavy, more volatile
+    "IWM": 1.20,  # Small caps, more volatile
+    "TLT": -0.30,  # Treasuries, negative correlation
+    "GLD": 0.05,  # Gold, low correlation
+}
+
+# Asset class mapping
+ASSET_CLASSES = {
+    "SPY": AssetClass.EQUITY,
+    "QQQ": AssetClass.EQUITY,
+    "IWM": AssetClass.EQUITY,
+    "TLT": AssetClass.TREASURY,
+    "GLD": AssetClass.COMMODITY,
+}

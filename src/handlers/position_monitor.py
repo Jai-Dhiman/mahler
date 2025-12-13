@@ -2,23 +2,39 @@
 
 Monitors open positions for exit conditions:
 - 50% profit target
-- 200% stop loss
+- 200% stop loss (configurable based on win rate)
 - 21 DTE time exit
 """
 
 from datetime import datetime
 
+from core import http
 from core.broker.alpaca import AlpacaClient
 from core.db.d1 import D1Client
 from core.db.kv import KVClient
 from core.notifications.discord import DiscordClient
-from core.risk.circuit_breaker import CircuitBreaker
-from core.risk.validators import ExitValidator
+from core.risk.circuit_breaker import CircuitBreaker, RiskLevel
+from core.risk.validators import ExitConfig, ExitValidator
 
 
 async def handle_position_monitor(env):
     """Monitor positions for exit conditions."""
     print("Starting position monitor...")
+
+    # Signal start to heartbeat monitor
+    heartbeat_url = getattr(env, "HEARTBEAT_URL", None)
+    await http.ping_heartbeat_start(heartbeat_url, "position_monitor")
+
+    job_success = False
+    try:
+        await _run_position_monitor(env)
+        job_success = True
+    finally:
+        await http.ping_heartbeat(heartbeat_url, "position_monitor", success=job_success)
+
+
+async def _run_position_monitor(env):
+    """Internal position monitor logic."""
 
     # Initialize clients
     db = D1Client(env.MAHLER_DB)
@@ -63,19 +79,34 @@ async def handle_position_monitor(env):
     # Get account info for circuit breaker checks
     account = await alpaca.get_account()
 
-    # Run circuit breaker checks
+    # Run graduated circuit breaker checks
     daily_stats = await kv.get_daily_stats()
-    starting_equity = daily_stats.get("starting_equity", account.equity)
+    daily_starting_equity = daily_stats.get("starting_equity", account.equity)
 
-    ok, reason = await circuit_breaker.run_all_checks(
-        starting_daily_equity=starting_equity,
-        starting_weekly_equity=starting_equity,  # Would need weekly tracking
-        peak_equity=starting_equity,  # Would need peak tracking
+    weekly_starting_equity = await kv.get_weekly_starting_equity()
+    if weekly_starting_equity == 0:
+        weekly_starting_equity = account.equity  # Fallback if not initialized
+
+    risk_state = await circuit_breaker.evaluate_all(
+        starting_daily_equity=daily_starting_equity,
+        starting_weekly_equity=weekly_starting_equity,
+        peak_equity=max(daily_starting_equity, weekly_starting_equity),
         current_equity=account.equity,
     )
 
-    if not ok:
-        await discord.send_circuit_breaker_alert(reason)
+    # Log risk state
+    if risk_state.level != RiskLevel.NORMAL:
+        print(f"Risk level: {risk_state.level.value}, size multiplier: {risk_state.size_multiplier}")
+        if risk_state.reason:
+            print(f"Reason: {risk_state.reason}")
+
+    # Send alert if needed
+    if risk_state.should_alert and risk_state.reason:
+        await discord.send_circuit_breaker_alert(risk_state.reason)
+
+    # If halted, stop processing
+    if risk_state.level == RiskLevel.HALTED:
+        print(f"Trading halted: {risk_state.reason}")
         return
 
     # Process each open trade

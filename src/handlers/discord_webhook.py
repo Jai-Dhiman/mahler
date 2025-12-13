@@ -63,33 +63,39 @@ async def handle_discord_webhook(request, env):
 
     print(f"Received interaction: {custom_id}")
 
-    # Parse action and ID from custom_id (format: "action:id")
-    if ":" not in custom_id:
-        return Response('{"error": "Invalid custom_id format"}', status=400)
-
-    action, entity_id = custom_id.split(":", 1)
-
     # Initialize clients
     db = D1Client(env.MAHLER_DB)
     kv = KVClient(env.MAHLER_KV)
 
-    # Handle different actions
-    if action == "approve_trade":
-        return await handle_approve(
-            env, db, kv, discord, entity_id, interaction_id, interaction_token, message_id
-        )
-    elif action == "reject_trade":
-        return await handle_reject(
-            env, db, discord, entity_id, interaction_id, interaction_token, message_id
-        )
-    elif action == "close_position":
-        return await handle_close_position(
-            env, db, kv, discord, entity_id, interaction_id, interaction_token
-        )
-    elif action == "hold_position":
-        return await handle_hold_position(discord, interaction_id, interaction_token)
+    # Handle button clicks with action:id format
+    if ":" in custom_id:
+        action, entity_id = custom_id.split(":", 1)
+
+        # Handle different actions
+        if action == "approve_trade":
+            return await handle_approve(
+                env, db, kv, discord, entity_id, interaction_id, interaction_token, message_id
+            )
+        elif action == "reject_trade":
+            return await handle_reject(
+                env, db, discord, entity_id, interaction_id, interaction_token, message_id
+            )
+        elif action == "close_position":
+            return await handle_close_position(
+                env, db, kv, discord, entity_id, interaction_id, interaction_token
+            )
+        elif action == "hold_position":
+            return await handle_hold_position(discord, interaction_id, interaction_token)
+
+    # Handle kill switch buttons (no entity ID)
+    if custom_id == "halt_trading":
+        return await handle_halt_trading(kv, discord, interaction_id, interaction_token)
+    elif custom_id == "resume_trading":
+        return await handle_resume_trading(kv, discord, interaction_id, interaction_token)
+    elif custom_id == "acknowledge_reconciliation":
+        return await handle_acknowledge_reconciliation(kv, discord, interaction_id, interaction_token)
     else:
-        return Response(f'{{"error": "Unknown action: {action}"}}', status=400)
+        return Response(f'{{"error": "Unknown action: {custom_id}"}}', status=400)
 
 
 async def handle_approve(
@@ -328,3 +334,107 @@ async def send_error_response(discord, interaction_id, interaction_token, error_
         embeds=[embed],
         update_message=False,
     )
+
+
+async def handle_halt_trading(kv, discord, interaction_id, interaction_token):
+    """Handle kill switch activation."""
+    try:
+        circuit_breaker = CircuitBreaker(kv)
+        await circuit_breaker.trip("Kill switch activated via Discord")
+
+        await discord.respond_to_interaction(
+            interaction_id,
+            interaction_token,
+            content="**TRADING HALTED**\n\nKill switch has been activated. All new trades are blocked. Use the Resume button to restore trading.",
+            embeds=[{
+                "title": "Kill Switch Activated",
+                "color": 0xED4245,
+                "description": "Trading has been halted. All scheduled scans will skip trade entry until trading is resumed.",
+            }],
+            components=[
+                {
+                    "type": 1,
+                    "components": [
+                        {
+                            "type": 2,
+                            "style": 3,  # Success (green)
+                            "label": "Resume Trading",
+                            "custom_id": "resume_trading",
+                        },
+                    ],
+                }
+            ],
+        )
+
+        print("Kill switch activated via Discord")
+        return Response('{"type": 1}', headers={"Content-Type": "application/json"})
+
+    except Exception as e:
+        print(f"Error activating kill switch: {e}")
+        await send_error_response(discord, interaction_id, interaction_token, str(e))
+        return Response(json.dumps({"error": str(e)}), status=500)
+
+
+async def handle_resume_trading(kv, discord, interaction_id, interaction_token):
+    """Handle kill switch deactivation."""
+    try:
+        circuit_breaker = CircuitBreaker(kv)
+        await circuit_breaker.reset()
+
+        await discord.respond_to_interaction(
+            interaction_id,
+            interaction_token,
+            content="**TRADING RESUMED**\n\nKill switch has been deactivated. Trading will resume on the next scheduled scan.",
+            embeds=[{
+                "title": "Trading Resumed",
+                "color": 0x57F287,
+                "description": "The kill switch has been deactivated. Trading will resume with the next scheduled scan.",
+            }],
+            components=[],  # Remove buttons
+        )
+
+        print("Kill switch deactivated via Discord")
+        return Response('{"type": 1}', headers={"Content-Type": "application/json"})
+
+    except Exception as e:
+        print(f"Error deactivating kill switch: {e}")
+        await send_error_response(discord, interaction_id, interaction_token, str(e))
+        return Response(json.dumps({"error": str(e)}), status=500)
+
+
+async def handle_acknowledge_reconciliation(kv, discord, interaction_id, interaction_token):
+    """Handle reconciliation acknowledgment."""
+    try:
+        from datetime import datetime
+
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        # Mark reconciliation as acknowledged
+        recon_data = await kv.get_json(f"reconciliation:{today}")
+        if recon_data:
+            recon_data["acknowledged"] = True
+            await kv.put_json(
+                f"reconciliation:{today}",
+                recon_data,
+                expiration_ttl=7 * 24 * 3600,
+            )
+
+        await discord.respond_to_interaction(
+            interaction_id,
+            interaction_token,
+            content="**Reconciliation Acknowledged**\n\nDiscrepancies have been noted. Trading will proceed normally.",
+            embeds=[{
+                "title": "Reconciliation Acknowledged",
+                "color": 0xF97316,  # Orange
+                "description": "The reconciliation discrepancies have been acknowledged. Please review and correct any issues before the next trading day.",
+            }],
+            components=[],  # Remove buttons
+        )
+
+        print("Reconciliation acknowledged via Discord")
+        return Response('{"type": 1}', headers={"Content-Type": "application/json"})
+
+    except Exception as e:
+        print(f"Error acknowledging reconciliation: {e}")
+        await send_error_response(discord, interaction_id, interaction_token, str(e))
+        return Response(json.dumps({"error": str(e)}), status=500)

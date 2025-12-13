@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from core.analysis.greeks import calculate_greeks, days_to_expiry, years_to_expiry
-from core.analysis.iv_rank import IVMetrics, is_elevated_iv
+from core.analysis.iv_rank import IVMetrics
 from core.broker.types import OptionContract, OptionsChain
 from core.types import CreditSpread, Greeks, SpreadType
 from core.types import OptionContract as CoreOptionContract
@@ -25,7 +25,10 @@ class ScreenerConfig:
     max_delta: float = 0.30
 
     # IV requirements
-    min_iv_rank: float = 50.0
+    # Research: IV Percentile is more reliable than IV Rank because it considers
+    # all trading days over the past year, not just 52-week high/low extremes
+    min_iv_percentile: float = 50.0  # Use percentile as primary filter
+    min_iv_rank: float = 50.0  # Keep as secondary signal for AI context
 
     # Minimum credit (as percentage of width)
     min_credit_pct: float = 0.25  # 25% of spread width
@@ -74,7 +77,9 @@ class OptionsScreener:
         Returns:
             List of scored spreads, sorted by score descending
         """
-        if not is_elevated_iv(iv_metrics.iv_rank, self.config.min_iv_rank):
+        # Use IV Percentile as primary filter (more reliable than IV Rank)
+        # IV Percentile considers all 252 trading days, not just extremes
+        if iv_metrics.iv_percentile < self.config.min_iv_percentile:
             return []
 
         opportunities = []
@@ -326,7 +331,7 @@ class OptionsScreener:
         """Score a spread for ranking.
 
         Score factors:
-        - Higher IV rank = better premium
+        - Higher IV percentile = better premium environment
         - Delta closer to 0.25 (sweet spot) = better probability
         - Higher credit/width ratio = better risk/reward
         - Expected value (credit * prob_win - max_loss * prob_loss)
@@ -340,7 +345,8 @@ class OptionsScreener:
         expected_value = (credit * prob_otm) - (max_loss * (1 - prob_otm))
 
         # Score components (normalized)
-        iv_score = iv_metrics.iv_rank / 100  # 0-1
+        # Use IV percentile for scoring (more stable than IV rank)
+        iv_score = iv_metrics.iv_percentile / 100  # 0-1
         delta_score = 1 - abs(abs(short_delta) - 0.25) * 4  # Peak at 0.25
         credit_score = min(spread.credit / spread.width, 0.5) * 2  # 0-1
         ev_score = max(0, expected_value) / (spread.width * 100)  # Normalized by width
@@ -351,7 +357,7 @@ class OptionsScreener:
         return ScoredSpread(
             spread=spread,
             score=score,
-            iv_rank=iv_metrics.iv_rank,
+            iv_rank=iv_metrics.iv_rank,  # Keep IV rank for display/AI context
             expected_value=expected_value,
             probability_otm=prob_otm,
         )

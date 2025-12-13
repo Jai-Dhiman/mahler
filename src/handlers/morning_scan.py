@@ -1,11 +1,15 @@
-"""Morning scan worker - runs at 9:35 AM ET.
+"""Morning scan worker - runs at 10:00 AM ET.
 
 Scans options chains for credit spread opportunities and sends
 recommendations to Discord for approval.
+
+Timing: Moved from 9:35 AM to 10:00 AM to avoid the first 30 minutes
+when spreads are wide and quotes are stale.
 """
 
 from datetime import datetime, timedelta
 
+from core import http
 from core.ai.claude import ClaudeClient
 from core.analysis.iv_rank import calculate_iv_metrics
 from core.analysis.screener import OptionsScreener, ScreenerConfig
@@ -13,12 +17,15 @@ from core.broker.alpaca import AlpacaClient
 from core.db.d1 import D1Client
 from core.db.kv import KVClient
 from core.notifications.discord import DiscordClient
-from core.risk.circuit_breaker import CircuitBreaker
+from core.risk.circuit_breaker import CircuitBreaker, RiskLevel
 from core.risk.position_sizer import PositionSizer
 from core.types import Confidence
 
 # Underlyings to scan
-UNDERLYINGS = ["SPY", "QQQ", "IWM"]
+# SPY/QQQ/IWM are equity ETFs (86-92% correlated)
+# TLT is treasury ETF (negatively correlated with equities)
+# GLD is gold ETF (low/variable correlation)
+UNDERLYINGS = ["SPY", "QQQ", "IWM", "TLT", "GLD"]
 
 # Maximum recommendations per scan
 MAX_RECOMMENDATIONS = 3
@@ -28,15 +35,31 @@ async def handle_morning_scan(env):
     """Run the morning options scan."""
     print("Starting morning scan...")
 
+    # Signal start to heartbeat monitor
+    heartbeat_url = getattr(env, "HEARTBEAT_URL", None)
+    await http.ping_heartbeat_start(heartbeat_url, "morning_scan")
+
+    job_success = False
+    try:
+        await _run_morning_scan(env)
+        job_success = True
+    finally:
+        # Ping heartbeat with success/failure
+        await http.ping_heartbeat(heartbeat_url, "morning_scan", success=job_success)
+
+
+async def _run_morning_scan(env):
+    """Internal morning scan logic."""
+
     # Initialize clients
     db = D1Client(env.MAHLER_DB)
     kv = KVClient(env.MAHLER_KV)
     circuit_breaker = CircuitBreaker(kv)
 
-    # Check circuit breaker first
-    if not await circuit_breaker.is_trading_allowed():
-        status = await circuit_breaker.check_status()
-        print(f"Trading halted: {status.reason}")
+    # Quick check if manually halted (full evaluation happens after account info loaded)
+    status = await circuit_breaker.get_status()
+    if status.halted:
+        print(f"Trading manually halted: {status.reason}")
         return
 
     # Initialize external clients
@@ -66,12 +89,57 @@ async def handle_morning_scan(env):
     positions = await db.get_all_positions()
     open_trades = await db.get_open_trades()
 
+    # Initialize weekly stats (will only set if not already initialized this week)
+    await kv.initialize_weekly_stats(starting_equity=account.equity)
+    weekly_stats = await kv.get_weekly_stats()
+    print(f"Weekly starting equity: ${weekly_stats['starting_equity']:,.2f}")
+
+    # Get current VIX for position sizing and circuit breaker
+    current_vix = None
+    try:
+        vix_data = await alpaca.get_vix_snapshot()
+        if vix_data:
+            current_vix = vix_data.get("vix")
+            vix3m = vix_data.get("vix3m")
+            if current_vix:
+                print(f"VIX: {current_vix:.2f}")
+                # Check for backwardation (VIX > VIX3M indicates near-term fear)
+                if vix3m and current_vix / vix3m > 1.0:
+                    print(f"VIX in backwardation ({current_vix/vix3m:.2f}x), elevated caution")
+    except Exception as e:
+        print(f"Could not fetch VIX: {e}")
+
+    # Full graduated risk evaluation
+    daily_stats = await kv.get_daily_stats()
+    daily_starting_equity = daily_stats.get("starting_equity", account.equity)
+
+    risk_state = await circuit_breaker.evaluate_all(
+        starting_daily_equity=daily_starting_equity,
+        starting_weekly_equity=weekly_stats["starting_equity"] or account.equity,
+        peak_equity=max(daily_starting_equity, weekly_stats["starting_equity"] or account.equity),
+        current_equity=account.equity,
+        current_vix=current_vix,
+    )
+
+    # Log and handle risk state
+    if risk_state.level != RiskLevel.NORMAL:
+        print(f"Risk level: {risk_state.level.value}, size multiplier: {risk_state.size_multiplier}")
+        if risk_state.reason:
+            print(f"Reason: {risk_state.reason}")
+
+    if risk_state.level == RiskLevel.HALTED:
+        print(f"Trading halted: {risk_state.reason}")
+        return
+
     # Get playbook rules for AI context
     playbook_rules = await db.get_playbook_rules()
 
     # Initialize screener
     screener = OptionsScreener(ScreenerConfig())
     sizer = PositionSizer()
+
+    # Risk-adjusted size multiplier (from graduated circuit breaker)
+    risk_size_multiplier = risk_state.size_multiplier
 
     all_opportunities = []
 
@@ -101,10 +169,17 @@ async def handle_morning_scan(env):
             else:
                 current_iv = 0.20  # Default
 
-            # For a production system, you'd load historical IV from R2/D1
-            # For now, use a synthetic IV rank that assumes current IV is elevated
-            # This allows testing - in production, use actual historical data
-            iv_metrics = calculate_iv_metrics(current_iv, [current_iv * 0.6, current_iv * 1.1])
+            # Load real IV history from database
+            historical_ivs = await db.get_iv_history(symbol, lookback_days=252)
+            iv_history_count = len(historical_ivs)
+
+            # Require minimum 30 days of history for reliable IV rank
+            if iv_history_count < 30:
+                print(f"{symbol}: Only {iv_history_count} days of IV history (need 30+), skipping")
+                continue
+
+            iv_metrics = calculate_iv_metrics(current_iv, historical_ivs)
+            print(f"{symbol}: IV={current_iv:.2%}, Rank={iv_metrics.iv_rank:.1f}%, Percentile={iv_metrics.iv_percentile:.1f}%")
 
             # Screen for opportunities
             opportunities = screener.screen_chain(chain, iv_metrics)
@@ -133,11 +208,17 @@ async def handle_morning_scan(env):
                 spread=spread,
                 account_equity=account.equity,
                 current_positions=positions,
+                current_vix=current_vix,
             )
 
             if size_result.contracts == 0:
                 print(f"Position size is 0 for {spread.underlying}: {size_result.reason}")
                 continue
+
+            # Apply graduated risk multiplier
+            adjusted_contracts = max(1, int(size_result.contracts * risk_size_multiplier))
+            if adjusted_contracts < size_result.contracts:
+                print(f"Risk-adjusted contracts: {size_result.contracts} -> {adjusted_contracts}")
 
             # Get AI analysis
             analysis = await claude.analyze_trade(
@@ -175,7 +256,7 @@ async def handle_morning_scan(env):
                 theta=short_theta,
                 thesis=analysis.thesis,
                 confidence=analysis.confidence,
-                suggested_contracts=size_result.contracts,
+                suggested_contracts=adjusted_contracts,
                 analysis_price=spread.credit,
             )
 

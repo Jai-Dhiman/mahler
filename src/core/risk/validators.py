@@ -150,13 +150,48 @@ class TradeValidator:
         return ValidationResult(valid=True)
 
 
-class ExitValidator:
-    """Validates exit conditions for positions."""
+@dataclass
+class ExitConfig:
+    """Configurable exit thresholds.
 
-    # Exit thresholds from PRD
-    PROFIT_TARGET_PCT = 0.50  # 50% of max profit
-    STOP_LOSS_PCT = 2.00  # 200% of credit (i.e., 2x the credit received)
-    TIME_EXIT_DTE = 21  # Close at 21 DTE
+    Research notes:
+    - 50% profit target is well-supported by research
+    - 200% stop loss requires >80% win rate to be profitable
+    - Consider 150% stop if actual win rate is lower
+    """
+
+    profit_target_pct: float = 0.50  # 50% of max profit
+    stop_loss_pct: float = 2.00  # 200% of credit (default, conservative)
+    time_exit_dte: int = 21  # Close at 21 DTE
+
+    # Win rate thresholds for adjusting stop loss
+    # If win rate drops below threshold, use tighter stop
+    win_rate_threshold: float = 0.80
+    tighter_stop_loss_pct: float = 1.50  # 150% stop when win rate < 80%
+
+
+class ExitValidator:
+    """Validates exit conditions for positions with configurable thresholds."""
+
+    def __init__(self, config: ExitConfig | None = None):
+        self.config = config or ExitConfig()
+
+    def adjust_for_win_rate(self, historical_win_rate: float | None) -> None:
+        """Adjust stop loss based on historical win rate.
+
+        Research: 200% stop requires >80% win rate to be profitable.
+        If actual win rate is lower, tighten the stop.
+        """
+        if historical_win_rate is None:
+            return
+
+        if historical_win_rate < self.config.win_rate_threshold:
+            # Use tighter stop
+            self.config.stop_loss_pct = self.config.tighter_stop_loss_pct
+            print(
+                f"Adjusted stop loss to {self.config.stop_loss_pct:.0%} "
+                f"due to win rate ({historical_win_rate:.0%} < {self.config.win_rate_threshold:.0%})"
+            )
 
     def check_profit_target(
         self,
@@ -179,7 +214,7 @@ class ExitValidator:
         profit = entry_credit - current_value
         profit_pct = profit / entry_credit
 
-        if profit_pct >= self.PROFIT_TARGET_PCT:
+        if profit_pct >= self.config.profit_target_pct:
             return ValidationResult(
                 valid=True,
                 reason=f"Profit target reached ({profit_pct:.0%} of max)",
@@ -205,8 +240,8 @@ class ExitValidator:
             return ValidationResult(valid=False, reason="Invalid entry credit")
 
         # Loss occurs when current_value > entry_credit
-        # Stop at 200% of credit = loss of 2 * credit
-        max_loss_before_stop = entry_credit * self.STOP_LOSS_PCT
+        # Stop at configured % of credit
+        max_loss_before_stop = entry_credit * self.config.stop_loss_pct
 
         current_loss = current_value - entry_credit
         if current_loss >= max_loss_before_stop:
@@ -228,10 +263,10 @@ class ExitValidator:
         """
         dte = days_to_expiry(expiration)
 
-        if dte <= self.TIME_EXIT_DTE:
+        if dte <= self.config.time_exit_dte:
             return ValidationResult(
                 valid=True,
-                reason=f"Time exit triggered ({dte} DTE <= {self.TIME_EXIT_DTE})",
+                reason=f"Time exit triggered ({dte} DTE <= {self.config.time_exit_dte})",
             )
 
         return ValidationResult(valid=False)

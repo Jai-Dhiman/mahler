@@ -13,6 +13,7 @@ class KVClient:
     # Key prefixes
     CIRCUIT_BREAKER_KEY = "circuit_breaker"
     DAILY_KEY_PREFIX = "daily:"
+    WEEKLY_KEY_PREFIX = "weekly:"
     RATE_LIMIT_PREFIX = "rate_limit:"
 
     def __init__(self, kv_binding: Any):
@@ -128,6 +129,81 @@ class KVClient:
     async def reset_daily_stats(self, date: str | None = None) -> None:
         """Reset daily stats (for new trading day)."""
         await self.delete(self._daily_key(date))
+
+    # Weekly Limits
+
+    def _get_week_key(self, date: datetime | None = None) -> str:
+        """Get the ISO week key for a date (e.g., '2024-W01')."""
+        if date is None:
+            date = datetime.now()
+        year, week, _ = date.isocalendar()
+        return f"{self.WEEKLY_KEY_PREFIX}{year}-W{week:02d}"
+
+    def _is_monday(self) -> bool:
+        """Check if today is Monday."""
+        return datetime.now().weekday() == 0
+
+    async def get_weekly_stats(self, date: datetime | None = None) -> dict:
+        """Get weekly trading stats."""
+        data = await self.get_json(self._get_week_key(date))
+        return data or {
+            "starting_equity": 0.0,
+            "trades_count": 0,
+            "realized_pnl": 0.0,
+            "initialized": False,
+        }
+
+    async def initialize_weekly_stats(
+        self,
+        starting_equity: float,
+        force: bool = False,
+    ) -> dict:
+        """Initialize weekly stats with starting equity.
+
+        Should be called on Monday morning to set the baseline.
+        If force=False, only initializes if not already set this week.
+
+        Args:
+            starting_equity: Account equity at start of week
+            force: If True, reinitialize even if already set
+
+        Returns:
+            Current weekly stats
+        """
+        stats = await self.get_weekly_stats()
+
+        if stats.get("initialized") and not force:
+            return stats
+
+        stats = {
+            "starting_equity": starting_equity,
+            "trades_count": 0,
+            "realized_pnl": 0.0,
+            "initialized": True,
+            "initialized_at": datetime.now().isoformat(),
+        }
+
+        # TTL of 14 days (covers the week plus some buffer)
+        await self.put_json(self._get_week_key(), stats, expiration_ttl=14 * 24 * 3600)
+        return stats
+
+    async def update_weekly_stats(
+        self,
+        trades_delta: int = 0,
+        pnl_delta: float = 0.0,
+    ) -> dict:
+        """Update weekly trading stats."""
+        stats = await self.get_weekly_stats()
+        stats["trades_count"] += trades_delta
+        stats["realized_pnl"] += pnl_delta
+
+        await self.put_json(self._get_week_key(), stats, expiration_ttl=14 * 24 * 3600)
+        return stats
+
+    async def get_weekly_starting_equity(self) -> float:
+        """Get the starting equity for the current week."""
+        stats = await self.get_weekly_stats()
+        return stats.get("starting_equity", 0.0)
 
     # Rate Limiting
 

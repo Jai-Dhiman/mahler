@@ -127,6 +127,66 @@ class AlpacaClient:
         data = await self._trading_request("GET", "/v2/positions")
         return [self._parse_position(p) for p in data]
 
+    async def get_option_positions(self) -> list[BrokerPosition]:
+        """Get all open option positions.
+
+        Filters positions to only include options (OCC symbols).
+        OCC format: SYMBOL + YYMMDD + C/P + Strike*1000
+        """
+        all_positions = await self.get_positions()
+        option_positions = []
+
+        for pos in all_positions:
+            # OCC symbols have letters followed by digits followed by C/P followed by more digits
+            # Example: SPY240119C00500000
+            symbol = pos.symbol
+            if len(symbol) > 10:
+                # Check if it looks like an OCC symbol
+                # Find where the date portion starts (first digit after letters)
+                i = 0
+                while i < len(symbol) and not symbol[i].isdigit():
+                    i += 1
+                if i > 0 and i < len(symbol) - 7:
+                    # Check for C or P after 6 digits
+                    if len(symbol) > i + 6 and symbol[i + 6] in ("C", "P"):
+                        option_positions.append(pos)
+
+        return option_positions
+
+    def parse_occ_symbol(self, occ_symbol: str) -> dict | None:
+        """Parse an OCC option symbol into components.
+
+        Args:
+            occ_symbol: OCC format symbol (e.g., SPY240119C00500000)
+
+        Returns:
+            Dict with underlying, expiration, option_type, strike or None if invalid
+        """
+        try:
+            underlying = ""
+            i = 0
+            while i < len(occ_symbol) and not occ_symbol[i].isdigit():
+                underlying += occ_symbol[i]
+                i += 1
+
+            if not underlying or len(occ_symbol) < i + 15:
+                return None
+
+            date_part = occ_symbol[i : i + 6]
+            option_type = "call" if occ_symbol[i + 6] == "C" else "put"
+            strike = int(occ_symbol[i + 7 :]) / 1000
+
+            expiration = f"20{date_part[:2]}-{date_part[2:4]}-{date_part[4:6]}"
+
+            return {
+                "underlying": underlying,
+                "expiration": expiration,
+                "option_type": option_type,
+                "strike": strike,
+            }
+        except (ValueError, IndexError):
+            return None
+
     async def get_position(self, symbol: str) -> BrokerPosition | None:
         """Get a specific position."""
         try:
@@ -445,3 +505,210 @@ class AlpacaClient:
             "next_open": data.get("next_open"),
             "next_close": data.get("next_close"),
         }
+
+    # VIX Data
+
+    async def get_vix_snapshot(self) -> dict | None:
+        """Get current VIX and VIX3M levels.
+
+        Uses CBOE VIX Index via Alpaca's market data API.
+        VIX is available as a tradeable asset.
+
+        Returns:
+            Dict with 'vix' and optionally 'vix3m' values, or None if unavailable.
+        """
+        result = {}
+
+        # Fetch VIX (CBOE Volatility Index)
+        try:
+            # VIX is available via the stocks endpoint as $VIX.X or similar
+            # Alpaca uses different symbols - try common variations
+            for vix_symbol in ["$VIX.X", "VIX", "VIXY"]:
+                try:
+                    data = await self._data_request(
+                        "GET",
+                        f"/v2/stocks/{vix_symbol}/quotes/latest",
+                    )
+                    quote = data.get("quote", {})
+                    bid = float(quote.get("bp", 0))
+                    ask = float(quote.get("ap", 0))
+                    if bid and ask:
+                        result["vix"] = (bid + ask) / 2
+                        break
+                    elif bid or ask:
+                        result["vix"] = bid or ask
+                        break
+                except AlpacaError:
+                    continue
+
+            # If direct VIX not available, try to get from options-based proxy
+            if "vix" not in result:
+                # Calculate VIX proxy from SPY options IV
+                try:
+                    chain = await self.get_options_chain("SPY")
+                    if chain.contracts:
+                        atm_contracts = [
+                            c
+                            for c in chain.contracts
+                            if abs(c.strike - chain.underlying_price) < chain.underlying_price * 0.02
+                            and c.implied_volatility
+                        ]
+                        if atm_contracts:
+                            avg_iv = sum(c.implied_volatility for c in atm_contracts) / len(
+                                atm_contracts
+                            )
+                            # Convert annualized IV to VIX-like value (VIX = IV * 100)
+                            result["vix"] = avg_iv * 100
+                except Exception:
+                    pass
+
+        except Exception as e:
+            print(f"Error fetching VIX: {e}")
+
+        # Try to fetch VIX3M for term structure analysis
+        try:
+            for vix3m_symbol in ["$VIX3M.X", "VIX3M"]:
+                try:
+                    data = await self._data_request(
+                        "GET",
+                        f"/v2/stocks/{vix3m_symbol}/quotes/latest",
+                    )
+                    quote = data.get("quote", {})
+                    bid = float(quote.get("bp", 0))
+                    ask = float(quote.get("ap", 0))
+                    if bid and ask:
+                        result["vix3m"] = (bid + ask) / 2
+                        break
+                    elif bid or ask:
+                        result["vix3m"] = bid or ask
+                        break
+                except AlpacaError:
+                    continue
+        except Exception:
+            pass  # VIX3M is optional
+
+        return result if result else None
+
+    # Order Execution Protocol
+
+    async def replace_order(
+        self,
+        order_id: str,
+        qty: int | None = None,
+        limit_price: float | None = None,
+    ) -> Order:
+        """Replace/modify an existing order.
+
+        Args:
+            order_id: The order to replace
+            qty: New quantity (optional)
+            limit_price: New limit price (optional)
+
+        Returns:
+            The new replacement order
+        """
+        payload = {}
+        if qty is not None:
+            payload["qty"] = str(qty)
+        if limit_price is not None:
+            payload["limit_price"] = str(round(limit_price, 2))
+
+        data = await self._trading_request(
+            "PATCH",
+            f"/v2/orders/{order_id}",
+            json=payload,
+        )
+        return self._parse_order(data)
+
+    async def monitor_order_fill(
+        self,
+        order_id: str,
+        timeout_seconds: int = 900,  # 15 minutes default
+        poll_interval_seconds: int = 30,
+        price_adjustment_schedule: list[tuple[int, float]] | None = None,
+    ) -> tuple[Order, bool]:
+        """Monitor an order for fill with optional price adjustment.
+
+        Research-backed execution protocol:
+        - Initial: Submit at mid-price
+        - At 5 min unfilled: Adjust 1-2 cents toward natural
+        - At 10 min unfilled: Adjust another 2-3 cents
+        - At 13 min unfilled: Final adjustment before timeout
+
+        Args:
+            order_id: The order to monitor
+            timeout_seconds: Maximum time to wait for fill
+            poll_interval_seconds: How often to check order status
+            price_adjustment_schedule: List of (seconds, adjustment) pairs
+                Default: [(300, 0.02), (600, 0.03), (780, 0.02)]
+
+        Returns:
+            Tuple of (final_order, was_filled)
+        """
+        import asyncio
+
+        if price_adjustment_schedule is None:
+            # Default: adjust at 5 min, 10 min, 13 min
+            price_adjustment_schedule = [
+                (300, 0.02),  # 5 min: +2 cents toward natural
+                (600, 0.03),  # 10 min: +3 more cents
+                (780, 0.02),  # 13 min: +2 more cents (final)
+            ]
+
+        start_time = datetime.now()
+        adjustments_made = 0
+        current_order = await self.get_order(order_id)
+
+        while True:
+            elapsed = (datetime.now() - start_time).total_seconds()
+
+            # Check timeout
+            if elapsed >= timeout_seconds:
+                return current_order, False
+
+            # Check if filled
+            if current_order.status == OrderStatus.FILLED:
+                return current_order, True
+
+            # Check if cancelled/rejected
+            if current_order.status in [
+                OrderStatus.CANCELED,
+                OrderStatus.EXPIRED,
+                OrderStatus.REJECTED,
+            ]:
+                return current_order, False
+
+            # Check if we should adjust price
+            if (
+                current_order.status in [OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED]
+                and current_order.limit_price
+                and adjustments_made < len(price_adjustment_schedule)
+            ):
+                threshold_time, adjustment = price_adjustment_schedule[adjustments_made]
+                if elapsed >= threshold_time:
+                    # Adjust price toward natural (worse for us = better fill chance)
+                    # For selling spreads, lower price = more likely to fill
+                    new_price = current_order.limit_price - adjustment
+                    new_price = max(0.01, round(new_price, 2))
+
+                    try:
+                        current_order = await self.replace_order(
+                            order_id=current_order.id,
+                            limit_price=new_price,
+                        )
+                        adjustments_made += 1
+                        print(f"Adjusted order price to ${new_price:.2f} (attempt {adjustments_made})")
+                    except AlpacaError as e:
+                        print(f"Failed to adjust order price: {e}")
+
+            # Wait before next poll
+            await asyncio.sleep(poll_interval_seconds)
+
+            # Refresh order status
+            try:
+                current_order = await self.get_order(order_id)
+            except AlpacaError:
+                # Order might have been filled/cancelled
+                break
+
+        return current_order, current_order.status == OrderStatus.FILLED

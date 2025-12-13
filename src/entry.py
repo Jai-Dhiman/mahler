@@ -118,6 +118,47 @@ async def on_fetch(request, env):
                 headers={"Content-Type": "application/json"},
             )
 
+        # Admin endpoints for kill switch
+        if "/admin/halt" in url and method == "POST":
+            from core.db.kv import KVClient
+            from core.risk.circuit_breaker import CircuitBreaker
+
+            kv = KVClient(env.MAHLER_KV)
+            circuit_breaker = CircuitBreaker(kv)
+            await circuit_breaker.trip("Kill switch activated via admin endpoint")
+            return Response(
+                json.dumps({"status": "halted", "message": "Trading halted via admin endpoint"}),
+                headers={"Content-Type": "application/json"},
+            )
+
+        if "/admin/resume" in url and method == "POST":
+            from core.db.kv import KVClient
+            from core.risk.circuit_breaker import CircuitBreaker
+
+            kv = KVClient(env.MAHLER_KV)
+            circuit_breaker = CircuitBreaker(kv)
+            await circuit_breaker.reset()
+            return Response(
+                json.dumps({"status": "resumed", "message": "Trading resumed via admin endpoint"}),
+                headers={"Content-Type": "application/json"},
+            )
+
+        if "/admin/status" in url:
+            from core.db.kv import KVClient
+            from core.risk.circuit_breaker import CircuitBreaker
+
+            kv = KVClient(env.MAHLER_KV)
+            circuit_breaker = CircuitBreaker(kv)
+            status = await circuit_breaker.get_status()
+            return Response(
+                json.dumps({
+                    "halted": status.halted,
+                    "reason": status.reason,
+                    "tripped_at": status.tripped_at.isoformat() if status.tripped_at else None,
+                }),
+                headers={"Content-Type": "application/json"},
+            )
+
         # Default response
         return Response(
             '{"status": "ok", "service": "mahler"}',
@@ -144,7 +185,7 @@ async def on_scheduled(event, env, ctx):
         print(f"Cron triggered: {cron} at {datetime.now().isoformat()}")
 
         # Route based on cron pattern
-        if cron == "35 14 * * MON-FRI":
+        if cron == "0 15 * * MON-FRI":  # 10:00 AM ET (moved from 9:35 AM to avoid stale quotes)
             await handle_morning_scan(env)
         elif cron == "0 17 * * MON-FRI":
             await handle_midday_check(env)
