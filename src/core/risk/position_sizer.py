@@ -190,6 +190,15 @@ class PositionSizer:
         Returns:
             PositionSizeResult with recommended contracts
         """
+        # Check for zero/negative equity early to avoid division by zero
+        if account_equity <= 0:
+            return PositionSizeResult(
+                contracts=0,
+                risk_amount=0,
+                risk_percent=0,
+                reason="Invalid account equity (zero or negative)",
+            )
+
         # Check VIX halt (extreme conditions)
         if current_vix is not None:
             if current_vix >= self.limits.extreme_vix_threshold:

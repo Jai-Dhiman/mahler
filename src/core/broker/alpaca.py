@@ -472,11 +472,20 @@ class AlpacaClient:
                 for leg in data["legs"]
             ]
 
+        # For multi-leg orders, Alpaca returns empty string for top-level side
+        # since each leg has its own side. Derive from first leg if available.
+        side_str = data.get("side", "")
+        if not side_str and legs:
+            side_str = data["legs"][0]["side"]
+        elif not side_str:
+            side_str = "buy"  # Default fallback
+        order_side = OrderSide(side_str)
+
         return Order(
             id=data["id"],
             client_order_id=data["client_order_id"],
             symbol=data.get("symbol", ""),
-            side=OrderSide(data["side"]),
+            side=order_side,
             order_type=OrderType(data["type"]),
             qty=int(data["qty"]),
             limit_price=float(data["limit_price"]) if data.get("limit_price") else None,
