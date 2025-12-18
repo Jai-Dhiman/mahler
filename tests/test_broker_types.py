@@ -216,6 +216,54 @@ class TestAlpacaOrderParsing:
         assert order.filled_avg_price is None
         assert order.legs is None
 
+    def test_parse_mleg_order_empty_leg_sides(self):
+        """Test parsing multi-leg order with empty leg side fields.
+
+        This tests the exact scenario causing production errors.
+        Alpaca can return empty strings for leg sides in some cases.
+        """
+        from core.broker.alpaca import AlpacaClient
+
+        response_with_empty_leg_sides = {
+            "id": "order-empty-legs",
+            "client_order_id": "client-empty-legs",
+            "symbol": "",
+            "side": "",
+            "type": "limit",
+            "qty": "2",
+            "limit_price": "-1.25",
+            "status": "pending_new",
+            "filled_qty": "0",
+            "filled_avg_price": None,
+            "created_at": "2024-01-15T10:00:00Z",
+            "updated_at": "2024-01-15T10:00:00Z",
+            "legs": [
+                {
+                    "symbol": "SPY240215P00470000",
+                    "side": "",  # Empty side - this was causing the bug
+                    "qty": "2",
+                    "filled_qty": "0",
+                    "filled_avg_price": None,
+                },
+                {
+                    "symbol": "SPY240215P00465000",
+                    "side": "",  # Empty side
+                    "qty": "2",
+                    "filled_qty": "0",
+                    "filled_avg_price": None,
+                },
+            ],
+        }
+
+        client = AlpacaClient("test-key", "test-secret", paper=True)
+        # This should not raise an error
+        order = client._parse_order(response_with_empty_leg_sides)
+
+        # Should handle empty leg sides with fallback to buy
+        assert len(order.legs) == 2
+        assert order.legs[0].side == OrderSide.BUY
+        assert order.legs[1].side == OrderSide.BUY
+
 
 class TestAlpacaPositionParsing:
     """Test Alpaca position response parsing."""

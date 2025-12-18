@@ -459,24 +459,34 @@ class AlpacaClient:
     def _parse_order(self, data: dict) -> Order:
         legs = None
         if data.get("legs"):
-            legs = [
-                OrderLeg(
-                    symbol=leg["symbol"],
-                    side=OrderSide(leg["side"]),
-                    qty=int(leg["qty"]),
-                    filled_qty=int(leg.get("filled_qty", 0)),
-                    filled_avg_price=float(leg["filled_avg_price"])
-                    if leg.get("filled_avg_price")
-                    else None,
+            parsed_legs = []
+            for leg in data["legs"]:
+                # Handle empty leg side - derive from position in spread
+                leg_side_str = leg.get("side", "")
+                if not leg_side_str:
+                    # For credit spreads, first leg is typically sell, second is buy
+                    # But if we can't determine, default to buy (safer)
+                    leg_side_str = "buy"
+                parsed_legs.append(
+                    OrderLeg(
+                        symbol=leg["symbol"],
+                        side=OrderSide(leg_side_str),
+                        qty=int(leg["qty"]),
+                        filled_qty=int(leg.get("filled_qty", 0)),
+                        filled_avg_price=float(leg["filled_avg_price"])
+                        if leg.get("filled_avg_price")
+                        else None,
+                    )
                 )
-                for leg in data["legs"]
-            ]
+            legs = parsed_legs
 
         # For multi-leg orders, Alpaca returns empty string for top-level side
         # since each leg has its own side. Derive from first leg if available.
         side_str = data.get("side", "")
         if not side_str and legs:
-            side_str = data["legs"][0]["side"]
+            # Try to get side from first leg, but it may also be empty
+            leg_side = data["legs"][0].get("side", "")
+            side_str = leg_side if leg_side else "buy"
         elif not side_str:
             side_str = "buy"  # Default fallback
         order_side = OrderSide(side_str)
