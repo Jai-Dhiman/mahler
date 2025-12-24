@@ -6,6 +6,7 @@ looks for new setups if capacity available.
 
 from datetime import datetime, timedelta
 
+from core import http
 from core.ai.claude import ClaudeClient
 from core.analysis.iv_rank import calculate_iv_metrics
 from core.analysis.screener import OptionsScreener, ScreenerConfig
@@ -24,6 +25,21 @@ MAX_RECOMMENDATIONS = 2  # Fewer than morning scan
 async def handle_midday_check(env):
     """Run midday position check and opportunity scan."""
     print("Starting midday check...")
+
+    # Signal start to heartbeat monitor
+    heartbeat_url = getattr(env, "HEARTBEAT_URL", None)
+    await http.ping_heartbeat_start(heartbeat_url, "midday_check")
+
+    job_success = False
+    try:
+        await _run_midday_check(env)
+        job_success = True
+    finally:
+        await http.ping_heartbeat(heartbeat_url, "midday_check", success=job_success)
+
+
+async def _run_midday_check(env):
+    """Internal midday check logic."""
 
     # Initialize clients
     db = D1Client(env.MAHLER_DB)
@@ -139,12 +155,12 @@ async def handle_midday_check(env):
                         max_loss=spread.max_loss,
                         expires_at=datetime.now() + timedelta(minutes=15),
                         iv_rank=iv_metrics.iv_rank,
-                        delta=spread.short_contract.greeks.delta
-                        if spread.short_contract.greeks
-                        else None,
-                        theta=spread.short_contract.greeks.theta
-                        if spread.short_contract.greeks
-                        else None,
+                        delta=(spread.short_contract.greeks.delta
+                              if spread.short_contract and spread.short_contract.greeks
+                              else None),
+                        theta=(spread.short_contract.greeks.theta
+                              if spread.short_contract and spread.short_contract.greeks
+                              else None),
                         thesis=analysis.thesis,
                         confidence=analysis.confidence,
                         suggested_contracts=size_result.contracts,

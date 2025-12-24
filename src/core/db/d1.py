@@ -224,6 +224,13 @@ class D1Client:
             [status.value, trade_id],
         )
 
+    async def update_trade_order_id(self, trade_id: str, new_order_id: str) -> None:
+        """Update the broker order ID for a trade (used when order is replaced)."""
+        await self.run(
+            "UPDATE trades SET broker_order_id = ? WHERE id = ?",
+            [new_order_id, trade_id],
+        )
+
     async def mark_trade_filled(self, trade_id: str) -> None:
         """Mark a pending_fill trade as open (filled)."""
         await self.run(

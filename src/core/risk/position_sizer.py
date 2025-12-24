@@ -288,7 +288,9 @@ class PositionSizer:
         # Apply VIX adjustment (this is now mostly handled by graduated circuit breaker)
         if current_vix is not None and current_vix >= self.limits.high_vix_threshold:
             original = contracts
-            contracts = max(1, int(contracts * (1 - self.limits.high_vix_reduction)))
+            # Only apply reduction if contracts > 0 to avoid forcing 1 when constraints say 0
+            if contracts > 0:
+                contracts = max(1, int(contracts * (1 - self.limits.high_vix_reduction)))
             if contracts < original:
                 reason = f"Reduced due to high VIX ({current_vix:.1f})"
 

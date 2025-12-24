@@ -137,19 +137,9 @@ class AlpacaClient:
         option_positions = []
 
         for pos in all_positions:
-            # OCC symbols have letters followed by digits followed by C/P followed by more digits
-            # Example: SPY240119C00500000
-            symbol = pos.symbol
-            if len(symbol) > 10:
-                # Check if it looks like an OCC symbol
-                # Find where the date portion starts (first digit after letters)
-                i = 0
-                while i < len(symbol) and not symbol[i].isdigit():
-                    i += 1
-                if i > 0 and i < len(symbol) - 7:
-                    # Check for C or P after 6 digits
-                    if len(symbol) > i + 6 and symbol[i + 6] in ("C", "P"):
-                        option_positions.append(pos)
+            # Use centralized OCC symbol parser to identify options
+            if self.parse_occ_symbol(pos.symbol) is not None:
+                option_positions.append(pos)
 
         return option_positions
 
@@ -317,19 +307,10 @@ class AlpacaClient:
     ) -> OptionContract | None:
         """Parse option contract from Alpaca snapshot."""
         try:
-            # Parse OCC symbol: SPY240119C00500000
-            # Format: SYMBOL + YYMMDD + C/P + Strike*1000 (8 digits)
-            underlying = ""
-            i = 0
-            while i < len(occ_symbol) and not occ_symbol[i].isdigit():
-                underlying += occ_symbol[i]
-                i += 1
-
-            date_part = occ_symbol[i : i + 6]
-            option_type = "call" if occ_symbol[i + 6] == "C" else "put"
-            strike = int(occ_symbol[i + 7 :]) / 1000
-
-            expiration = f"20{date_part[:2]}-{date_part[2:4]}-{date_part[4:6]}"
+            # Use centralized OCC symbol parser
+            parsed = self.parse_occ_symbol(occ_symbol)
+            if not parsed:
+                return None
 
             quote = snapshot.get("latestQuote", {})
             trade = snapshot.get("latestTrade", {})
@@ -341,10 +322,10 @@ class AlpacaClient:
 
             return OptionContract(
                 symbol=occ_symbol,
-                underlying=underlying,
-                expiration=expiration,
-                strike=strike,
-                option_type=option_type,
+                underlying=parsed["underlying"],
+                expiration=parsed["expiration"],
+                strike=parsed["strike"],
+                option_type=parsed["option_type"],
                 bid=float(quote.get("bp", 0)),
                 ask=float(quote.get("ap", 0)),
                 last=float(trade.get("p", 0)),
@@ -457,12 +438,6 @@ class AlpacaClient:
         return [self._parse_order(o) for o in data]
 
     def _parse_order(self, data: dict) -> Order:
-        # Debug: log raw order data for troubleshooting OrderSide issues
-        print(f"DEBUG _parse_order: side={data.get('side')!r}, legs={bool(data.get('legs'))}")
-        if data.get("legs"):
-            for i, leg in enumerate(data["legs"]):
-                print(f"DEBUG _parse_order: leg[{i}] side={leg.get('side')!r}")
-
         legs = None
         if data.get("legs"):
             parsed_legs = []
@@ -478,7 +453,6 @@ class AlpacaClient:
                 if leg_side_str not in ("buy", "sell"):
                     # For credit spreads: first leg is sell (short), second is buy (long)
                     leg_side_str = "sell" if i == 0 else "buy"
-                    print(f"DEBUG: Defaulted leg[{i}] side to {leg_side_str}")
 
                 parsed_legs.append(
                     OrderLeg(
@@ -507,7 +481,6 @@ class AlpacaClient:
                 side_str = legs[0].side.value
             else:
                 side_str = "buy"  # Default fallback
-            print(f"DEBUG: Defaulted order side to {side_str}")
 
         order_side = OrderSide(side_str)
 
@@ -655,99 +628,6 @@ class AlpacaClient:
         data = await self._trading_request(
             "PATCH",
             f"/v2/orders/{order_id}",
-            json=payload,
+            json_data=payload,
         )
         return self._parse_order(data)
-
-    async def monitor_order_fill(
-        self,
-        order_id: str,
-        timeout_seconds: int = 900,  # 15 minutes default
-        poll_interval_seconds: int = 30,
-        price_adjustment_schedule: list[tuple[int, float]] | None = None,
-    ) -> tuple[Order, bool]:
-        """Monitor an order for fill with optional price adjustment.
-
-        Research-backed execution protocol:
-        - Initial: Submit at mid-price
-        - At 5 min unfilled: Adjust 1-2 cents toward natural
-        - At 10 min unfilled: Adjust another 2-3 cents
-        - At 13 min unfilled: Final adjustment before timeout
-
-        Args:
-            order_id: The order to monitor
-            timeout_seconds: Maximum time to wait for fill
-            poll_interval_seconds: How often to check order status
-            price_adjustment_schedule: List of (seconds, adjustment) pairs
-                Default: [(300, 0.02), (600, 0.03), (780, 0.02)]
-
-        Returns:
-            Tuple of (final_order, was_filled)
-        """
-        import asyncio
-
-        if price_adjustment_schedule is None:
-            # Default: adjust at 5 min, 10 min, 13 min
-            price_adjustment_schedule = [
-                (300, 0.02),  # 5 min: +2 cents toward natural
-                (600, 0.03),  # 10 min: +3 more cents
-                (780, 0.02),  # 13 min: +2 more cents (final)
-            ]
-
-        start_time = datetime.now()
-        adjustments_made = 0
-        current_order = await self.get_order(order_id)
-
-        while True:
-            elapsed = (datetime.now() - start_time).total_seconds()
-
-            # Check timeout
-            if elapsed >= timeout_seconds:
-                return current_order, False
-
-            # Check if filled
-            if current_order.status == OrderStatus.FILLED:
-                return current_order, True
-
-            # Check if cancelled/rejected
-            if current_order.status in [
-                OrderStatus.CANCELED,
-                OrderStatus.EXPIRED,
-                OrderStatus.REJECTED,
-            ]:
-                return current_order, False
-
-            # Check if we should adjust price
-            if (
-                current_order.status in [OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED]
-                and current_order.limit_price
-                and adjustments_made < len(price_adjustment_schedule)
-            ):
-                threshold_time, adjustment = price_adjustment_schedule[adjustments_made]
-                if elapsed >= threshold_time:
-                    # Adjust price toward natural (worse for us = better fill chance)
-                    # For selling spreads, lower price = more likely to fill
-                    new_price = current_order.limit_price - adjustment
-                    new_price = max(0.01, round(new_price, 2))
-
-                    try:
-                        current_order = await self.replace_order(
-                            order_id=current_order.id,
-                            limit_price=new_price,
-                        )
-                        adjustments_made += 1
-                        print(f"Adjusted order price to ${new_price:.2f} (attempt {adjustments_made})")
-                    except AlpacaError as e:
-                        print(f"Failed to adjust order price: {e}")
-
-            # Wait before next poll
-            await asyncio.sleep(poll_interval_seconds)
-
-            # Refresh order status
-            try:
-                current_order = await self.get_order(order_id)
-            except AlpacaError:
-                # Order might have been filled/cancelled
-                break
-
-        return current_order, current_order.status == OrderStatus.FILLED

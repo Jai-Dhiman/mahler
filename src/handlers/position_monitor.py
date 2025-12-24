@@ -204,6 +204,8 @@ async def _reconcile_pending_orders(db, alpaca, discord, kv):
 
     This ensures we only track trades that actually filled, and properly
     handle orders that expired or were cancelled.
+
+    Also implements price adjustment for unfilled orders to improve fill rates.
     """
     pending_trades = await db.get_pending_fill_trades()
 
@@ -225,6 +227,9 @@ async def _reconcile_pending_orders(db, alpaca, discord, kv):
                 # Order filled - mark trade as open
                 print(f"Order {order.id} FILLED - activating trade {trade.id}")
                 await db.mark_trade_filled(trade.id)
+
+                # Clean up adjustment tracking (keyed by trade.id)
+                await kv.delete(f"order_adjustment:{trade.id}")
 
                 # Update daily stats now that we have a confirmed fill
                 await kv.update_daily_stats(trades_delta=1)
@@ -250,6 +255,9 @@ async def _reconcile_pending_orders(db, alpaca, discord, kv):
                 print(f"Order {order.id} {order.status.value} - expiring trade {trade.id}")
                 await db.update_trade_status(trade.id, TradeStatus.EXPIRED)
 
+                # Clean up adjustment tracking (keyed by trade.id)
+                await kv.delete(f"order_adjustment:{trade.id}")
+
                 # Delete any position snapshot for this trade
                 await db.delete_position(trade.id)
 
@@ -268,12 +276,152 @@ async def _reconcile_pending_orders(db, alpaca, discord, kv):
                     }],
                 )
 
+            elif order.status in [OrderStatus.NEW, OrderStatus.ACCEPTED, OrderStatus.PARTIALLY_FILLED]:
+                # Order still pending - check if we should adjust price
+                await _maybe_adjust_order_price(
+                    trade=trade,
+                    order=order,
+                    alpaca=alpaca,
+                    db=db,
+                    discord=discord,
+                    kv=kv,
+                )
+
             else:
-                # Order still pending (new, accepted, partially_filled)
-                print(f"Order {order.id} still pending ({order.status.value})")
+                print(f"Order {order.id} in unexpected status: {order.status.value}")
 
         except Exception as e:
             print(f"Error reconciling order for trade {trade.id}: {e}")
+
+
+# Price adjustment schedule for unfilled orders
+# Each tuple is (minutes_elapsed, adjustment_cents)
+# For credit spreads, we adjust by accepting less credit (worse for us, better fill chance)
+PRICE_ADJUSTMENT_SCHEDULE = [
+    (5, 0.02),   # After 5 min: adjust 2 cents
+    (10, 0.03),  # After 10 min: adjust 3 more cents (total 5 cents)
+    (15, 0.03),  # After 15 min: adjust 3 more cents (total 8 cents)
+    (20, 0.02),  # After 20 min: adjust 2 more cents (total 10 cents)
+]
+
+# Maximum total adjustment (don't give away more than 15 cents from original price)
+MAX_TOTAL_ADJUSTMENT = 0.15
+
+# Minimum credit to accept (never go below 5 cents)
+MIN_CREDIT = 0.05
+
+
+async def _maybe_adjust_order_price(trade, order, alpaca, db, discord, kv):
+    """Check if a pending order should have its price adjusted to improve fill rate.
+
+    Uses a time-based schedule to gradually improve the price (accept less credit)
+    if the order hasn't filled. This balances getting filled vs. getting the best price.
+
+    Price adjustments are tracked in KV to avoid duplicate adjustments.
+    When an order is replaced, Alpaca creates a new order with a new ID - we update
+    the trade record and migrate tracking to the new order ID.
+    """
+    from datetime import datetime, timezone
+
+    # Get order age in minutes
+    order_age_minutes = (datetime.now(timezone.utc) - order.created_at).total_seconds() / 60
+    print(f"Order {order.id[:8]}... age: {order_age_minutes:.1f} min, status: {order.status.value}")
+
+    # Get current adjustment state from KV
+    # Use trade.id as the key base since order IDs change on replacement
+    adjustment_key = f"order_adjustment:{trade.id}"
+    adjustment_data = await kv.get_json(adjustment_key)
+
+    if adjustment_data is None:
+        adjustment_data = {
+            "adjustments_made": 0,
+            "original_price": trade.entry_credit,
+            "current_price": trade.entry_credit,
+            "original_order_id": order.id,
+        }
+
+    adjustments_made = adjustment_data.get("adjustments_made", 0)
+    original_price = adjustment_data.get("original_price", trade.entry_credit)
+    current_price = adjustment_data.get("current_price", trade.entry_credit)
+
+    # Determine if we should make another adjustment based on time elapsed
+    target_adjustments = 0
+    for minutes_threshold, _ in PRICE_ADJUSTMENT_SCHEDULE:
+        if order_age_minutes >= minutes_threshold:
+            target_adjustments += 1
+
+    if target_adjustments <= adjustments_made:
+        # No new adjustment needed yet
+        print(f"Order {order.id[:8]}... no adjustment needed (made {adjustments_made}, target {target_adjustments})")
+        return
+
+    # Calculate the new price
+    total_adjustment = 0.0
+    for i in range(target_adjustments):
+        total_adjustment += PRICE_ADJUSTMENT_SCHEDULE[i][1]
+
+    # Cap total adjustment
+    total_adjustment = min(total_adjustment, MAX_TOTAL_ADJUSTMENT)
+
+    # For credit spreads, reducing the credit means worse for us but better fill chance
+    # The limit_price is negative (credit), so we make it less negative (smaller credit)
+    new_credit = original_price - total_adjustment
+    new_credit = max(new_credit, MIN_CREDIT)  # Don't go below minimum
+    new_credit = round(new_credit, 2)
+
+    if new_credit >= current_price:
+        # Price would be same or worse, skip
+        print(f"Order {order.id[:8]}... calculated price ${new_credit:.2f} not better than current ${current_price:.2f}")
+        return
+
+    # Adjust the order price
+    try:
+        # For Alpaca multi-leg orders, limit_price is negative for credits
+        new_limit_price = -abs(new_credit)
+
+        print(f"Adjusting order {order.id[:8]}... from ${current_price:.2f} to ${new_credit:.2f} credit")
+
+        new_order = await alpaca.replace_order(
+            order_id=order.id,
+            limit_price=new_limit_price,
+        )
+
+        # When Alpaca replaces an order, it creates a new order with a new ID
+        # Update the trade record with the new order ID
+        if new_order.id != order.id:
+            print(f"Order replaced: {order.id[:8]}... -> {new_order.id[:8]}...")
+            await db.update_trade_order_id(trade.id, new_order.id)
+
+        # Update adjustment tracking (keyed by trade.id so it persists across order replacements)
+        adjustment_data["adjustments_made"] = target_adjustments
+        adjustment_data["current_price"] = new_credit
+        adjustment_data["current_order_id"] = new_order.id
+        adjustment_data["last_adjustment"] = datetime.now(timezone.utc).isoformat()
+        await kv.put_json(adjustment_key, adjustment_data, expiration_ttl=24 * 3600)
+
+        # Send Discord notification about the adjustment
+        await discord.send_message(
+            content=f"**Order Price Adjusted: {trade.underlying}**",
+            embeds=[{
+                "title": f"Price Adjusted: {trade.underlying}",
+                "description": f"Order unfilled after {int(order_age_minutes)} min - adjusted price to improve fill chance.",
+                "color": 0xF59E0B,  # Amber/warning color
+                "fields": [
+                    {"name": "Strategy", "value": trade.spread_type.value.replace("_", " ").title(), "inline": True},
+                    {"name": "Strikes", "value": f"${trade.short_strike:.2f}/${trade.long_strike:.2f}", "inline": True},
+                    {"name": "Original Credit", "value": f"${original_price:.2f}", "inline": True},
+                    {"name": "New Credit", "value": f"${new_credit:.2f}", "inline": True},
+                    {"name": "Adjustment", "value": f"-${original_price - new_credit:.2f}", "inline": True},
+                    {"name": "Adjustment #", "value": str(target_adjustments), "inline": True},
+                ],
+            }],
+        )
+
+        print(f"Order {order.id[:8]}... price adjusted successfully. New order: {new_order.id[:8]}...")
+
+    except Exception as e:
+        print(f"Error adjusting order {order.id}: {e}")
+        # Don't fail the whole reconciliation if one adjustment fails
 
 
 async def _auto_execute_exit(

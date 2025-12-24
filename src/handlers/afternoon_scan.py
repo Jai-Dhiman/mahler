@@ -6,6 +6,7 @@ probability setups with excellent IV conditions.
 
 from datetime import datetime, timedelta
 
+from core import http
 from core.ai.claude import ClaudeClient
 from core.analysis.iv_rank import calculate_iv_metrics
 from core.analysis.screener import OptionsScreener, ScreenerConfig
@@ -23,6 +24,21 @@ UNDERLYINGS = ["SPY", "QQQ", "IWM"]
 async def handle_afternoon_scan(env):
     """Run afternoon scan with stricter criteria."""
     print("Starting afternoon scan...")
+
+    # Signal start to heartbeat monitor
+    heartbeat_url = getattr(env, "HEARTBEAT_URL", None)
+    await http.ping_heartbeat_start(heartbeat_url, "afternoon_scan")
+
+    job_success = False
+    try:
+        await _run_afternoon_scan(env)
+        job_success = True
+    finally:
+        await http.ping_heartbeat(heartbeat_url, "afternoon_scan", success=job_success)
+
+
+async def _run_afternoon_scan(env):
+    """Internal afternoon scan logic."""
 
     # Initialize clients
     db = D1Client(env.MAHLER_DB)
@@ -137,12 +153,12 @@ async def handle_afternoon_scan(env):
                         max_loss=spread.max_loss,
                         expires_at=datetime.now() + timedelta(minutes=10),  # Shorter expiry
                         iv_rank=iv_metrics.iv_rank,
-                        delta=spread.short_contract.greeks.delta
-                        if spread.short_contract.greeks
-                        else None,
-                        theta=spread.short_contract.greeks.theta
-                        if spread.short_contract.greeks
-                        else None,
+                        delta=(spread.short_contract.greeks.delta
+                              if spread.short_contract and spread.short_contract.greeks
+                              else None),
+                        theta=(spread.short_contract.greeks.theta
+                              if spread.short_contract and spread.short_contract.greeks
+                              else None),
                         thesis=analysis.thesis,
                         confidence=analysis.confidence,
                         suggested_contracts=size_result.contracts,

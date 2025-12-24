@@ -257,3 +257,215 @@ def past_date() -> str:
 def near_expiry_date() -> str:
     """Return a date 15 days in the future (below 21 DTE threshold)."""
     return (datetime.now() + timedelta(days=15)).strftime("%Y-%m-%d")
+
+
+# Additional mock fixtures for comprehensive testing
+
+@pytest.fixture
+def mock_alpaca_client():
+    """Mock AlpacaClient that doesn't make real API calls."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    client = MagicMock()
+    client.get_order = AsyncMock()
+    client.place_spread_order = AsyncMock()
+    client.place_close_spread_order = AsyncMock()
+    client.replace_order = AsyncMock()
+    client.cancel_order = AsyncMock()
+    client.get_orders = AsyncMock(return_value=[])
+    client.get_positions = AsyncMock(return_value=[])
+    client.get_option_positions = AsyncMock(return_value=[])
+    client.get_account = AsyncMock()
+    client.is_market_open = AsyncMock(return_value=True)
+    client.get_options_chain = AsyncMock()
+    client.parse_occ_symbol = MagicMock()
+
+    return client
+
+
+@pytest.fixture
+def mock_d1_client():
+    """Mock D1Client that records SQL queries."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    client = MagicMock()
+    client.execute = AsyncMock(return_value={"results": []})
+    client.run = AsyncMock()
+
+    # Trade CRUD operations
+    client.create_trade = AsyncMock(return_value="trade-123")
+    client.get_trade = AsyncMock()
+    client.get_open_trades = AsyncMock(return_value=[])
+    client.get_pending_fill_trades = AsyncMock(return_value=[])
+    client.update_trade_status = AsyncMock()
+    client.update_trade_order_id = AsyncMock()
+    client.mark_trade_filled = AsyncMock()
+    client.close_trade = AsyncMock()
+
+    # Recommendation operations
+    client.create_recommendation = AsyncMock(return_value="rec-123")
+    client.get_recommendation = AsyncMock()
+    client.get_pending_recommendations = AsyncMock(return_value=[])
+    client.update_recommendation_status = AsyncMock()
+
+    # Position operations
+    client.get_all_positions = AsyncMock(return_value=[])
+    client.upsert_position = AsyncMock()
+    client.delete_position = AsyncMock()
+
+    return client
+
+
+@pytest.fixture
+def mock_kv_store():
+    """Mock KV binding using in-memory dict."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    storage = {}
+
+    kv = MagicMock()
+
+    async def mock_get(key):
+        return storage.get(key)
+
+    async def mock_put(key, value, **kwargs):
+        storage[key] = value
+
+    async def mock_delete(key):
+        storage.pop(key, None)
+
+    kv.get = AsyncMock(side_effect=mock_get)
+    kv.put = AsyncMock(side_effect=mock_put)
+    kv.delete = AsyncMock(side_effect=mock_delete)
+    kv._storage = storage  # Expose storage for test assertions
+
+    return kv
+
+
+@pytest.fixture
+def mock_kv_client():
+    """Mock KVClient with all methods mocked."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    client = MagicMock()
+    client.get = AsyncMock(return_value=None)
+    client.put = AsyncMock()
+    client.delete = AsyncMock()
+    client.get_json = AsyncMock(return_value=None)
+    client.put_json = AsyncMock()
+    client.get_daily_stats = AsyncMock(return_value={"starting_equity": 100000})
+    client.update_daily_stats = AsyncMock()
+    client.get_weekly_stats = AsyncMock(return_value={"starting_equity": 100000})
+    client.get_weekly_starting_equity = AsyncMock(return_value=100000)
+    client.initialize_weekly_stats = AsyncMock()
+
+    return client
+
+
+@pytest.fixture
+def mock_discord_client():
+    """Mock DiscordClient for testing notifications."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    client = MagicMock()
+    client.send_message = AsyncMock(return_value="msg-123")
+    client.send_recommendation = AsyncMock(return_value="msg-123")
+    client.send_exit_alert = AsyncMock()
+    client.send_circuit_breaker_alert = AsyncMock()
+    client.update_message = AsyncMock()
+
+    return client
+
+
+@pytest.fixture
+def sample_pending_fill_trade() -> dict:
+    """Sample trade with pending_fill status."""
+    return {
+        "id": "trade-pending-123",
+        "recommendation_id": "rec-123",
+        "opened_at": "2024-01-15T10:00:00",
+        "closed_at": None,
+        "status": "pending_fill",
+        "underlying": "SPY",
+        "spread_type": "bull_put",
+        "short_strike": 470.0,
+        "long_strike": 465.0,
+        "expiration": "2024-02-15",
+        "entry_credit": 1.25,
+        "exit_debit": None,
+        "profit_loss": None,
+        "contracts": 2,
+        "broker_order_id": "order-pending-123",
+        "reflection": None,
+        "lesson": None,
+    }
+
+
+@pytest.fixture
+def sample_filled_order_response() -> dict:
+    """Sample Alpaca order that has been filled."""
+    return {
+        "id": "order-filled-123",
+        "client_order_id": "client-order-123",
+        "symbol": "",
+        "side": "",
+        "type": "limit",
+        "qty": "2",
+        "limit_price": "-1.25",
+        "status": "filled",
+        "filled_qty": "2",
+        "filled_avg_price": "-1.24",
+        "created_at": "2024-01-15T10:00:00Z",
+        "updated_at": "2024-01-15T10:00:30Z",
+        "legs": [
+            {
+                "symbol": "SPY240215P00470000",
+                "side": "sell",
+                "qty": "2",
+                "filled_qty": "2",
+                "filled_avg_price": "3.50",
+            },
+            {
+                "symbol": "SPY240215P00465000",
+                "side": "buy",
+                "qty": "2",
+                "filled_qty": "2",
+                "filled_avg_price": "2.26",
+            },
+        ],
+    }
+
+
+@pytest.fixture
+def sample_expired_order_response() -> dict:
+    """Sample Alpaca order that has expired."""
+    return {
+        "id": "order-expired-123",
+        "client_order_id": "client-order-123",
+        "symbol": "",
+        "side": "",
+        "type": "limit",
+        "qty": "2",
+        "limit_price": "-1.25",
+        "status": "expired",
+        "filled_qty": "0",
+        "filled_avg_price": None,
+        "created_at": "2024-01-15T10:00:00Z",
+        "updated_at": "2024-01-15T16:00:00Z",
+        "legs": [
+            {
+                "symbol": "SPY240215P00470000",
+                "side": "sell",
+                "qty": "2",
+                "filled_qty": "0",
+                "filled_avg_price": None,
+            },
+            {
+                "symbol": "SPY240215P00465000",
+                "side": "buy",
+                "qty": "2",
+                "filled_qty": "0",
+                "filled_avg_price": None,
+            },
+        ],
+    }
