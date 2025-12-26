@@ -255,11 +255,27 @@ async def _reconcile_pending_orders(db, alpaca, discord, kv):
                 print(f"Order {order.id} {order.status.value} - expiring trade {trade.id}")
                 await db.update_trade_status(trade.id, TradeStatus.EXPIRED)
 
+                # Get adjustment data before cleaning up (to show final price)
+                adjustment_data = await kv.get_json(f"order_adjustment:{trade.id}")
+                final_price = adjustment_data.get("current_price", trade.entry_credit) if adjustment_data else trade.entry_credit
+                original_price = adjustment_data.get("original_price", trade.entry_credit) if adjustment_data else trade.entry_credit
+                adjustments_made = adjustment_data.get("adjustments_made", 0) if adjustment_data else 0
+
                 # Clean up adjustment tracking (keyed by trade.id)
                 await kv.delete(f"order_adjustment:{trade.id}")
 
                 # Delete any position snapshot for this trade
                 await db.delete_position(trade.id)
+
+                # Build fields for Discord notification
+                fields = [
+                    {"name": "Strategy", "value": trade.spread_type.value.replace("_", " ").title(), "inline": True},
+                    {"name": "Strikes", "value": f"${trade.short_strike:.2f}/${trade.long_strike:.2f}", "inline": True},
+                    {"name": "Final Price", "value": f"${final_price:.2f}", "inline": True},
+                ]
+                if adjustments_made > 0:
+                    fields.append({"name": "Original Price", "value": f"${original_price:.2f}", "inline": True})
+                    fields.append({"name": "Adjustments", "value": str(adjustments_made), "inline": True})
 
                 # Send Discord notification
                 await discord.send_message(
@@ -268,11 +284,7 @@ async def _reconcile_pending_orders(db, alpaca, discord, kv):
                         "title": f"Order {order.status.value.title()}: {trade.underlying}",
                         "description": "The limit order did not fill before expiration.",
                         "color": 0xED4245,  # Red
-                        "fields": [
-                            {"name": "Strategy", "value": trade.spread_type.value.replace("_", " ").title(), "inline": True},
-                            {"name": "Strikes", "value": f"${trade.short_strike:.2f}/${trade.long_strike:.2f}", "inline": True},
-                            {"name": "Limit Price", "value": f"${trade.entry_credit:.2f}", "inline": True},
-                        ],
+                        "fields": fields,
                     }],
                 )
 
@@ -297,15 +309,18 @@ async def _reconcile_pending_orders(db, alpaca, discord, kv):
 # Price adjustment schedule for unfilled orders
 # Each tuple is (minutes_elapsed, adjustment_cents)
 # For credit spreads, we adjust by accepting less credit (worse for us, better fill chance)
+# More aggressive schedule to improve fill rates - position_monitor runs every 5 min
 PRICE_ADJUSTMENT_SCHEDULE = [
-    (5, 0.02),   # After 5 min: adjust 2 cents
-    (10, 0.03),  # After 10 min: adjust 3 more cents (total 5 cents)
-    (15, 0.03),  # After 15 min: adjust 3 more cents (total 8 cents)
-    (20, 0.02),  # After 20 min: adjust 2 more cents (total 10 cents)
+    (5, 0.03),   # After 5 min: adjust 3 cents (total 3 cents)
+    (10, 0.04),  # After 10 min: adjust 4 more cents (total 7 cents)
+    (15, 0.05),  # After 15 min: adjust 5 more cents (total 12 cents)
+    (20, 0.05),  # After 20 min: adjust 5 more cents (total 17 cents)
+    (30, 0.05),  # After 30 min: adjust 5 more cents (total 22 cents)
+    (45, 0.05),  # After 45 min: adjust 5 more cents (total 27 cents)
 ]
 
-# Maximum total adjustment (don't give away more than 15 cents from original price)
-MAX_TOTAL_ADJUSTMENT = 0.15
+# Maximum total adjustment - up to 30% of original credit or 30 cents, whichever is higher
+MAX_TOTAL_ADJUSTMENT = 0.30
 
 # Minimum credit to accept (never go below 5 cents)
 MIN_CREDIT = 0.05

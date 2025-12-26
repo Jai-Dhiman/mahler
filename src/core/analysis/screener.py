@@ -34,13 +34,15 @@ class ScreenerConfig:
     min_credit_pct: float = 0.25  # 25% of spread width
 
     # Spread width range
-    min_width: float = 1.0
+    # Note: $2+ wide spreads have significantly better liquidity and fill rates
+    # $1 wide spreads often have wide bid-ask spreads and poor fills
+    min_width: float = 2.0  # Increased from 1.0 for better liquidity
     max_width: float = 10.0
 
     # Liquidity filters
     min_open_interest: int = 100
     min_volume: int = 10
-    max_bid_ask_spread_pct: float = 0.10  # 10% of mid price
+    max_bid_ask_spread_pct: float = 0.08  # 8% of mid price (tightened from 10%)
 
 
 @dataclass

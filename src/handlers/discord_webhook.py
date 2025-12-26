@@ -11,7 +11,7 @@ from core.db.kv import KVClient
 from core.notifications.discord import DiscordClient
 from core.risk.circuit_breaker import CircuitBreaker
 from core.risk.validators import TradeValidator
-from core.types import RecommendationStatus, SpreadType
+from core.types import RecommendationStatus, SpreadType, TradeStatus
 
 
 async def handle_discord_webhook(request, env):
@@ -156,7 +156,8 @@ async def handle_approve(
         # Update recommendation status
         await db.update_recommendation_status(rec_id, RecommendationStatus.APPROVED)
 
-        # Create trade record
+        # Create trade record with pending_fill status
+        # The position monitor will verify the order filled and update to 'open'
         trade_id = await db.create_trade(
             recommendation_id=rec_id,
             underlying=rec.underlying,
@@ -167,13 +168,15 @@ async def handle_approve(
             entry_credit=rec.credit,
             contracts=rec.suggested_contracts or 1,
             broker_order_id=order.id,
+            status=TradeStatus.PENDING_FILL,
         )
 
-        # Respond to interaction with updated message
+        # Respond to interaction with pending fill message (yellow)
         spread_name = rec.spread_type.value.replace("_", " ").title()
         embed = {
-            "title": f"Trade Approved: {rec.underlying}",
-            "color": 0x57F287,
+            "title": f"Order Placed: {rec.underlying}",
+            "description": "Order submitted - awaiting fill confirmation",
+            "color": 0xFEE75C,  # Yellow for pending
             "fields": [
                 {"name": "Strategy", "value": spread_name, "inline": True},
                 {"name": "Expiration", "value": rec.expiration, "inline": True},
@@ -191,13 +194,12 @@ async def handle_approve(
         await discord.respond_to_interaction(
             interaction_id,
             interaction_token,
-            content=f"**Trade Approved: {rec.underlying}**",
+            content=f"**Order Placed: {rec.underlying}** (awaiting fill)",
             embeds=[embed],
             components=[],  # Remove buttons
         )
 
-        # Update daily stats
-        await kv.update_daily_stats(trades_delta=1)
+        # Don't update daily stats yet - wait for fill confirmation in position_monitor
 
         print(f"Trade approved: {trade_id}, Order: {order.id}")
 
