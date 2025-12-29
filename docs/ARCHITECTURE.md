@@ -429,11 +429,46 @@ External monitoring (e.g., Healthchecks.io) pings `/health` endpoint.
 
 ---
 
+## Runtime Capabilities (Pro Plan)
+
+Mahler runs on **Cloudflare Workers Pro Plan** with Python via Pyodide, which provides significant computational resources.
+
+### CPU Time Limits
+
+| Trigger Type | Interval | CPU Time Limit |
+|--------------|----------|----------------|
+| Cron (>=1hr intervals) | morning_scan, midday_check, afternoon_scan, eod_summary | **15 minutes** |
+| Cron (<1hr intervals) | position_monitor (every 5 min) | **30 seconds** |
+| HTTP requests | discord_webhook, health | **30 seconds** |
+
+CPU time is configurable via `cpu_ms` in wrangler.toml (default 30s, max 15min for hourly+ crons).
+
+### Scientific Python Stack
+
+Pyodide supports the **full scientific Python ecosystem** via pyproject.toml dependencies. Cloudflare uses memory snapshots at deploy time for fast cold starts.
+
+**Available packages:**
+- **NumPy** - Array operations, linear algebra, correlation matrices
+- **Pandas** - Time series analysis, DataFrames, rolling windows
+- **SciPy** - Optimization (scipy.optimize), statistics (scipy.stats), signal processing
+- **scikit-learn** - GaussianMixture for regime detection, clustering, ML models
+- **statsmodels** - Statistical tests, time series models (ARIMA, etc.)
+- **matplotlib** - Charting (if needed for reports)
+
+### Memory
+
+| Resource | Limit |
+|----------|-------|
+| Worker memory | 128MB |
+| D1 database | 10GB |
+
+---
+
 ## Limitations
 
 | Constraint | Impact | Mitigation |
 |------------|--------|------------|
-| 30s CPU limit | Long analysis may timeout | Most time is I/O wait; split if needed |
-| Python package support | Some packages unavailable | Use httpx, avoid heavy deps |
+| 128MB memory | Large datasets must be chunked | Process in batches; use generators |
 | Cron precision | +/- few seconds | Acceptable for swing trading |
 | D1 row limits | 10GB max | Archive old data to R2 |
+| position_monitor CPU | 30s limit (5-min interval) | Keep monitoring logic lightweight |
