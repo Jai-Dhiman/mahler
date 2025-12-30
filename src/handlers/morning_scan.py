@@ -19,7 +19,7 @@ from core.analysis.iv_rank import (
     TermStructureRegime,
     calculate_iv_metrics,
 )
-from core.analysis.regime import InsufficientDataError, MarketRegimeDetector
+from core.analysis.regime import InsufficientDataError, create_regime_detector
 from core.analysis.screener import (
     MarketRegime,
     OptionsScreener,
@@ -213,8 +213,8 @@ async def _run_morning_scan(env):
                     if atm_contracts else 0.20
                 )
 
-                # Detect regime
-                detector = MarketRegimeDetector()
+                # Detect regime (uses pre-computed model in production, sklearn in dev)
+                detector = await create_regime_detector(env, kv)
                 regime_result_obj = detector.detect_regime(bars, spy_iv, current_vix)
                 regime_multiplier = regime_result_obj.position_multiplier
                 regime_result = regime_result_obj.to_dict()

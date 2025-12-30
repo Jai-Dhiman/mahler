@@ -35,6 +35,12 @@ id = "4e63db1305a1424ead3565522a47b5f4"
 binding = "ARCHIVE"
 bucket_name = "mahler-archive"
 
+# R2 bucket for pre-computed ML models
+# Create with: wrangler r2 bucket create mahler-models
+[[r2_buckets]]
+binding = "MODELS_BUCKET"
+bucket_name = "mahler-models"
+
 # Environment variables (non-secret)
 # CPU time limit (paid plan allows up to 300000ms / 5 minutes)
 [limits]

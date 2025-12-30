@@ -8,9 +8,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from scipy.optimize import differential_evolution
+
+if TYPE_CHECKING:
+    from core.db.kv import KVClient
+    from core.inference.exit_inference import PrecomputedExitProvider
 
 
 @dataclass
@@ -180,6 +184,9 @@ class ExitParameterOptimizer:
             self.TIME_EXIT_BOUNDS,
         ]
 
+        # Lazy import scipy (only used in dev mode, not in production workers)
+        from scipy.optimize import differential_evolution
+
         # Run optimization
         result = differential_evolution(
             self._objective,
@@ -207,7 +214,7 @@ class ExitParameterOptimizer:
         )
 
     @staticmethod
-    def from_db_trades(closed_trades: list) -> "ExitParameterOptimizer":
+    def from_db_trades(closed_trades: list) -> ExitParameterOptimizer:
         """Create optimizer from database Trade objects.
 
         Args:
@@ -251,3 +258,38 @@ class ExitParameterOptimizer:
             )
 
         return ExitParameterOptimizer(outcomes)
+
+
+async def create_exit_provider(
+    env: Any,
+    kv: KVClient | None = None,
+) -> PrecomputedExitProvider:
+    """Factory to create exit provider from pre-computed parameters.
+
+    In production (MODELS_BUCKET binding exists): Loads optimized exit params from R2
+    In development: Returns provider with None params (uses defaults)
+
+    Args:
+        env: Cloudflare environment with bindings
+        kv: Optional KV client for caching
+
+    Returns:
+        PrecomputedExitProvider instance
+    """
+    from core.inference.exit_inference import PrecomputedExitProvider
+
+    # Check if we have the models bucket binding (production mode)
+    models_bucket = getattr(env, "MODELS_BUCKET", None)
+
+    if models_bucket is None:
+        # Development mode: return provider with defaults
+        return PrecomputedExitProvider(None)
+
+    # Production mode: load from R2
+    from core.inference.model_loader import ModelLoader
+
+    loader = ModelLoader(models_bucket, kv)
+    params = await loader.get_exit_params()
+
+    # params may be None if no model was trained yet
+    return PrecomputedExitProvider(params)

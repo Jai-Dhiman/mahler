@@ -8,15 +8,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from scipy.optimize import differential_evolution
 
-from core.analysis.screener import MarketRegime, ScoringWeights
+from core.analysis.screener import ScoringWeights
 
 if TYPE_CHECKING:
     from core.db.d1 import D1Client
+    from core.db.kv import KVClient
+    from core.inference.weight_inference import PrecomputedWeightProvider
 
 
 @dataclass
@@ -162,8 +163,8 @@ class WeightOptimizer:
         def constraint_func(w):
             return sum(w) - 1.0
 
-        # Use NonlinearConstraint for differential_evolution
-        from scipy.optimize import NonlinearConstraint
+        # Lazy import scipy (only used in dev mode, not in production workers)
+        from scipy.optimize import NonlinearConstraint, differential_evolution
 
         constraint = NonlinearConstraint(lambda w: sum(w), 1.0, 1.0)
 
@@ -264,7 +265,6 @@ class WeightOptimizer:
             iv_rank = row.get("iv_rank") or 50
             short_delta = abs(row.get("short_delta") or 0.25)
             credit = row.get("credit") or 0
-            entry_credit = row.get("entry_credit") or 0
 
             trade_dict = {
                 "profit_loss": row.get("profit_loss") or 0,
@@ -277,3 +277,38 @@ class WeightOptimizer:
             trades_by_regime[regime].append(trade_dict)
 
         return WeightOptimizer(trades_by_regime)
+
+
+async def create_weight_provider(
+    env: Any,
+    kv: KVClient | None = None,
+) -> PrecomputedWeightProvider:
+    """Factory to create weight provider from pre-computed parameters.
+
+    In production (MODELS_BUCKET binding exists): Loads optimized weights from R2
+    In development: Returns provider with None params (uses defaults)
+
+    Args:
+        env: Cloudflare environment with bindings
+        kv: Optional KV client for caching
+
+    Returns:
+        PrecomputedWeightProvider instance
+    """
+    from core.inference.weight_inference import PrecomputedWeightProvider
+
+    # Check if we have the models bucket binding (production mode)
+    models_bucket = getattr(env, "MODELS_BUCKET", None)
+
+    if models_bucket is None:
+        # Development mode: return provider with defaults
+        return PrecomputedWeightProvider(None)
+
+    # Production mode: load from R2
+    from core.inference.model_loader import ModelLoader
+
+    loader = ModelLoader(models_bucket, kv)
+    params = await loader.get_weight_params()
+
+    # params may be None if no model was trained yet
+    return PrecomputedWeightProvider(params)

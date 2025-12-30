@@ -21,10 +21,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from sklearn.mixture import GaussianMixture
-from sklearn.preprocessing import StandardScaler
+
+if TYPE_CHECKING:
+    from core.db.kv import KVClient
+    from core.inference.regime_inference import PrecomputedRegimeDetector
 
 
 class MarketRegime(str, Enum):
@@ -117,6 +120,10 @@ class MarketRegimeDetector:
             lookback_days: Minimum days of data required
             n_regimes: Number of regimes to detect (default 4)
         """
+        # Lazy import sklearn (only used in dev mode, not in production workers)
+        from sklearn.mixture import GaussianMixture
+        from sklearn.preprocessing import StandardScaler
+
         self.lookback_days = lookback_days
         self.n_regimes = n_regimes
         self.scaler = StandardScaler()
@@ -391,3 +398,41 @@ class MarketRegimeDetector:
             features=feature_dict,
             detected_at=datetime.now().isoformat(),
         )
+
+
+async def create_regime_detector(
+    env: Any,
+    kv: KVClient | None = None,
+) -> MarketRegimeDetector | PrecomputedRegimeDetector:
+    """Factory to create appropriate regime detector.
+
+    In production (MODELS_BUCKET binding exists): Uses pre-computed parameters
+    In development: Uses full sklearn implementation
+
+    Args:
+        env: Cloudflare environment with bindings
+        kv: Optional KV client for caching
+
+    Returns:
+        Regime detector instance (MarketRegimeDetector or PrecomputedRegimeDetector)
+    """
+    # Check if we have the models bucket binding (production mode)
+    models_bucket = getattr(env, "MODELS_BUCKET", None)
+
+    if models_bucket is None:
+        # Development mode: use full sklearn implementation
+        return MarketRegimeDetector()
+
+    # Production mode: use pre-computed parameters
+    from core.inference.model_loader import ModelLoader
+    from core.inference.regime_inference import PrecomputedRegimeDetector
+
+    loader = ModelLoader(models_bucket, kv)
+    params = await loader.get_regime_params()
+
+    if params is None:
+        # Fallback to sklearn if no model available
+        print("Warning: No pre-computed regime model found, using sklearn")
+        return MarketRegimeDetector()
+
+    return PrecomputedRegimeDetector(params)

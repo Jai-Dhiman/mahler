@@ -1,0 +1,168 @@
+"""Data fetcher for model training.
+
+Fetches training data from Alpaca (historical bars) and Cloudflare D1 (trades).
+"""
+
+from __future__ import annotations
+
+import os
+from datetime import datetime, timedelta
+
+import httpx
+
+
+async def fetch_spy_bars(days: int = 90) -> list[dict]:
+    """Fetch SPY historical bars from Alpaca API.
+
+    Args:
+        days: Number of days of historical data to fetch
+
+    Returns:
+        List of bar dictionaries with keys: timestamp, open, high, low, close, volume
+    """
+    api_key = os.environ["ALPACA_API_KEY"]
+    secret_key = os.environ["ALPACA_SECRET_KEY"]
+
+    # Use data API endpoint
+    base_url = "https://data.alpaca.markets/v2"
+
+    # Calculate date range
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=days)
+
+    headers = {
+        "APCA-API-KEY-ID": api_key,
+        "APCA-API-SECRET-KEY": secret_key,
+    }
+
+    params = {
+        "start": start_date.strftime("%Y-%m-%d"),
+        "end": end_date.strftime("%Y-%m-%d"),
+        "timeframe": "1Day",
+        "adjustment": "split",
+    }
+
+    bars = []
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{base_url}/stocks/SPY/bars",
+            headers=headers,
+            params=params,
+            timeout=30.0,
+        )
+        response.raise_for_status()
+
+        data = response.json()
+        for bar in data.get("bars", []):
+            bars.append({
+                "timestamp": bar["t"],
+                "open": bar["o"],
+                "high": bar["h"],
+                "low": bar["l"],
+                "close": bar["c"],
+                "volume": bar["v"],
+            })
+
+    print(f"Fetched {len(bars)} SPY bars from Alpaca")
+    return bars
+
+
+async def fetch_trades_from_d1() -> list[dict]:
+    """Fetch closed trades from Cloudflare D1.
+
+    Uses Cloudflare API to query the D1 database directly.
+
+    Returns:
+        List of trade dictionaries
+    """
+    api_token = os.environ.get("CLOUDFLARE_API_TOKEN")
+    account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+    database_id = os.environ.get("D1_DATABASE_ID")
+
+    if not all([api_token, account_id, database_id]):
+        print("Missing Cloudflare credentials, skipping D1 trade fetch")
+        return []
+
+    url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database/{database_id}/query"
+
+    headers = {
+        "Authorization": f"Bearer {api_token}",
+        "Content-Type": "application/json",
+    }
+
+    # Query for closed trades with regime and recommendation data
+    query = """
+        SELECT
+            t.id,
+            t.profit_loss,
+            t.entry_credit,
+            t.exit_debit,
+            t.opened_at,
+            t.closed_at,
+            t.dte_at_exit,
+            r.iv_rank,
+            r.delta as short_delta,
+            r.credit,
+            r.expiration,
+            mr.regime
+        FROM trades t
+        JOIN recommendations r ON t.recommendation_id = r.id
+        LEFT JOIN market_regimes mr ON
+            mr.symbol = r.underlying AND
+            DATE(mr.detected_at) = DATE(t.opened_at)
+        WHERE t.status = 'closed'
+        ORDER BY t.closed_at DESC
+        LIMIT 500
+    """
+
+    payload = {"sql": query}
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=30.0,
+        )
+        response.raise_for_status()
+
+        data = response.json()
+        if not data.get("success"):
+            print(f"D1 query failed: {data.get('errors')}")
+            return []
+
+        results = data.get("result", [{}])[0].get("results", [])
+        print(f"Fetched {len(results)} closed trades from D1")
+        return results
+
+
+async def fetch_training_data() -> dict:
+    """Fetch all training data.
+
+    Returns:
+        Dictionary with 'bars' and 'trades' keys
+    """
+    bars = await fetch_spy_bars(days=90)
+    trades = await fetch_trades_from_d1()
+
+    return {
+        "bars": bars,
+        "trades": trades,
+    }
+
+
+if __name__ == "__main__":
+    import asyncio
+    import json
+
+    async def main():
+        data = await fetch_training_data()
+        print(f"Bars: {len(data['bars'])}")
+        print(f"Trades: {len(data['trades'])}")
+
+        # Optionally save to file
+        with open("/tmp/training_data.json", "w") as f:
+            json.dump(data, f, indent=2, default=str)
+        print("Saved to /tmp/training_data.json")
+
+    asyncio.run(main())
