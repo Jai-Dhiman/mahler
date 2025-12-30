@@ -612,3 +612,90 @@ class DiscordClient:
             content="**Weekly AI Calibration Report**",
             embeds=[embed],
         )
+
+    # Rule Validation
+
+    async def send_rule_validation_report(
+        self,
+        results: list,
+        summary: dict,
+    ) -> str:
+        """Send weekly rule validation report.
+
+        Args:
+            results: List of RuleValidationResult objects
+            summary: Validation summary dict
+        """
+        fields = []
+
+        # Summary statistics
+        fields.append({
+            "name": "Rules Tested",
+            "value": str(summary.get("total_rules_tested", 0)),
+            "inline": True,
+        })
+        fields.append({
+            "name": "Validated (Positive)",
+            "value": str(summary.get("significant_positive", 0)),
+            "inline": True,
+        })
+        fields.append({
+            "name": "Rejected (Negative)",
+            "value": str(summary.get("significant_negative", 0)),
+            "inline": True,
+        })
+
+        # Significant positive rules (validated)
+        positive_rules = [r for r in results if r.is_significant and r.effect_direction == "positive"]
+        if positive_rules:
+            positive_text = "\n".join(
+                f"- {r.rule_text[:50]}... (p={r.p_value_adjusted:.3f})"
+                if len(r.rule_text) > 50 else f"- {r.rule_text} (p={r.p_value_adjusted:.3f})"
+                for r in positive_rules[:3]
+            )
+            if len(positive_rules) > 3:
+                positive_text += f"\n... and {len(positive_rules) - 3} more"
+            fields.append({
+                "name": "Validated Rules",
+                "value": positive_text,
+                "inline": False,
+            })
+
+        # Significant negative rules (should consider removing)
+        negative_rules = [r for r in results if r.is_significant and r.effect_direction == "negative"]
+        if negative_rules:
+            negative_text = "\n".join(
+                f"- {r.rule_text[:50]}... (p={r.p_value_adjusted:.3f})"
+                if len(r.rule_text) > 50 else f"- {r.rule_text} (p={r.p_value_adjusted:.3f})"
+                for r in negative_rules[:3]
+            )
+            if len(negative_rules) > 3:
+                negative_text += f"\n... and {len(negative_rules) - 3} more"
+            fields.append({
+                "name": "Consider Removing",
+                "value": negative_text,
+                "inline": False,
+            })
+
+        # Color based on findings
+        if negative_rules:
+            color = 0xF97316  # Orange - some rules need attention
+        elif positive_rules:
+            color = 0x57F287  # Green - rules validated
+        else:
+            color = 0x5865F2  # Blurple - no significant findings
+
+        embed = {
+            "title": "Weekly Rule Validation Report",
+            "color": color,
+            "description": "Statistical validation of playbook rules using Mann-Whitney U test with FDR correction.",
+            "fields": fields,
+            "footer": {
+                "text": f"Insufficient data: {summary.get('rules_with_insufficient_data', 0)} rules | Non-significant: {summary.get('non_significant', 0)} rules",
+            },
+        }
+
+        return await self.send_message(
+            content="**Weekly Playbook Rule Validation**",
+            embeds=[embed],
+        )

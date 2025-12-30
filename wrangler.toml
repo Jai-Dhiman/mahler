@@ -36,6 +36,10 @@ binding = "ARCHIVE"
 bucket_name = "mahler-archive"
 
 # Environment variables (non-secret)
+# CPU time limit (paid plan allows up to 300000ms / 5 minutes)
+[limits]
+cpu_ms = 120_000
+
 [vars]
 ENVIRONMENT = "paper"
 LOG_LEVEL = "INFO"

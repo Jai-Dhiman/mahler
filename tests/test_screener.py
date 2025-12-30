@@ -54,15 +54,15 @@ class TestScreenerFiltering:
                 implied_volatility=0.22,
             ),
             # Long strike for bull put spread
-            # Bid-ask spread must be <= 10% of mid: 0.05/0.75 = 6.7% (OK)
+            # Bid-ask spread must be < 8% of mid
             OptionContract(
                 symbol="SPY240215P00565000",
                 underlying="SPY",
                 expiration=valid_expiration,
                 strike=565.0,
                 option_type="put",
-                bid=0.72,  # Mid = 0.75, spread = 0.06/0.75 = 8% (OK)
-                ask=0.78,
+                bid=0.73,  # Mid = 0.76, spread = 0.06/0.76 = 7.9% (OK)
+                ask=0.79,
                 last=0.75,
                 volume=400,
                 open_interest=1500,
@@ -483,8 +483,10 @@ class TestScreenerScoring:
             long_contract=long_contract,
         )
 
+        from core.analysis.screener import ScoringWeights
         screener = OptionsScreener()
-        scored = screener._score_spread(spread, iv_metrics, 0.25)  # Delta 0.25
+        weights = ScoringWeights()  # Default weights
+        scored = screener._score_spread(spread, iv_metrics, 0.25, weights)  # Delta 0.25
 
         # Verify score is a valid number between 0 and 1
         assert 0 <= scored.score <= 1
@@ -540,8 +542,10 @@ class TestScreenerScoring:
             long_contract=long_contract,
         )
 
+        from core.analysis.screener import ScoringWeights
         screener = OptionsScreener()
+        weights = ScoringWeights()  # Default weights
         # Should not raise even with edge case values
-        scored = screener._score_spread(spread, iv_metrics, 0.50)
+        scored = screener._score_spread(spread, iv_metrics, 0.50, weights)
 
         assert scored.score >= 0

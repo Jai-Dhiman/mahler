@@ -266,16 +266,17 @@ class TestExitValidator:
         validator = ExitValidator()
 
         # No exit condition met
-        should_exit, reason = validator.check_all_exit_conditions(
+        should_exit, reason, iv_rank = validator.check_all_exit_conditions(
             entry_credit=1.00,
             current_value=0.80,  # 20% profit
             expiration=future_date,  # >21 DTE
         )
         assert should_exit is False
         assert reason is None
+        assert iv_rank is None  # No IV data provided
 
         # Profit target met
-        should_exit, reason = validator.check_all_exit_conditions(
+        should_exit, reason, iv_rank = validator.check_all_exit_conditions(
             entry_credit=1.00,
             current_value=0.40,  # 60% profit
             expiration=future_date,

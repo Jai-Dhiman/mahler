@@ -23,6 +23,7 @@ Thumbs.db
 logs/
 
 node_modules/
+python_modules/
 
 # Python (for ML components)
 __pycache__/

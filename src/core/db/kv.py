@@ -15,6 +15,7 @@ class KVClient:
     DAILY_KEY_PREFIX = "daily:"
     WEEKLY_KEY_PREFIX = "weekly:"
     RATE_LIMIT_PREFIX = "rate_limit:"
+    REGIME_KEY_PREFIX = "regime:"
 
     def __init__(self, kv_binding: Any):
         self.kv = kv_binding
@@ -268,3 +269,130 @@ class KVClient:
         remaining_ttl = window_seconds - int((now - window_start).total_seconds())
         await self.put_json(key, data, expiration_ttl=max(remaining_ttl, 1))
         return data["count"]
+
+    # Market Regime Caching
+
+    def _regime_key(self, symbol: str, date: str, hour: int) -> str:
+        """Get cache key for regime detection.
+
+        Args:
+            symbol: Underlying symbol (e.g., "SPY")
+            date: Date string (YYYY-MM-DD)
+            hour: Hour of day (0-23)
+
+        Returns:
+            Cache key (e.g., "regime:SPY:2024-12-29:10")
+        """
+        return f"{self.REGIME_KEY_PREFIX}{symbol}:{date}:{hour:02d}"
+
+    async def get_cached_regime(
+        self,
+        symbol: str,
+        date: str,
+        hour: int,
+    ) -> dict | None:
+        """Get cached regime detection result.
+
+        Args:
+            symbol: Underlying symbol
+            date: Date string (YYYY-MM-DD)
+            hour: Hour of day
+
+        Returns:
+            Cached regime data or None if not found/expired
+        """
+        key = self._regime_key(symbol, date, hour)
+        return await self.get_json(key)
+
+    async def cache_regime(
+        self,
+        symbol: str,
+        date: str,
+        hour: int,
+        result: dict,
+        ttl_seconds: int = 3600,
+    ) -> None:
+        """Cache regime detection result.
+
+        Args:
+            symbol: Underlying symbol
+            date: Date string (YYYY-MM-DD)
+            hour: Hour of day
+            result: Regime result dict (from RegimeResult.to_dict())
+            ttl_seconds: Cache TTL in seconds (default 1 hour)
+        """
+        key = self._regime_key(symbol, date, hour)
+        await self.put_json(key, result, expiration_ttl=ttl_seconds)
+
+    # Dynamic Beta Caching
+
+    BETA_KEY_PREFIX = "beta:"
+
+    def _beta_key(self, symbol: str, date: str) -> str:
+        """Get cache key for dynamic beta.
+
+        Args:
+            symbol: Underlying symbol (e.g., "QQQ")
+            date: Date string (YYYY-MM-DD)
+
+        Returns:
+            Cache key (e.g., "beta:QQQ:2024-12-29")
+        """
+        return f"{self.BETA_KEY_PREFIX}{symbol}:{date}"
+
+    async def get_cached_beta(self, symbol: str, date: str | None = None) -> dict | None:
+        """Get cached dynamic beta for a symbol.
+
+        Args:
+            symbol: Underlying symbol
+            date: Date string (default: today)
+
+        Returns:
+            Cached beta data or None if not found/expired
+        """
+        if date is None:
+            date = datetime.now().strftime("%Y-%m-%d")
+        key = self._beta_key(symbol, date)
+        return await self.get_json(key)
+
+    async def cache_beta(
+        self,
+        symbol: str,
+        beta_result: dict,
+        ttl_seconds: int = 24 * 3600,
+    ) -> None:
+        """Cache dynamic beta result.
+
+        Args:
+            symbol: Underlying symbol
+            beta_result: Beta result dict (from DynamicBetaResult.to_dict())
+            ttl_seconds: Cache TTL in seconds (default 24 hours)
+        """
+        date = datetime.now().strftime("%Y-%m-%d")
+        key = self._beta_key(symbol, date)
+        await self.put_json(key, beta_result, expiration_ttl=ttl_seconds)
+
+    # Optimized Weights Caching
+
+    WEIGHTS_KEY = "optimized_weights"
+
+    async def get_cached_weights(self) -> dict | None:
+        """Get cached optimized weights for all regimes.
+
+        Returns:
+            Dict of regime -> weights or None if not found
+        """
+        return await self.get_json(self.WEIGHTS_KEY)
+
+    async def cache_weights(
+        self,
+        weights: dict,
+        ttl_seconds: int = 7 * 24 * 3600,
+    ) -> None:
+        """Cache optimized weights.
+
+        Args:
+            weights: Dict of regime -> weight values
+            ttl_seconds: Cache TTL in seconds (default 7 days)
+        """
+        await self.put_json(self.WEIGHTS_KEY, weights, expiration_ttl=ttl_seconds)

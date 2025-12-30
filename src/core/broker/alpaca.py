@@ -601,6 +601,80 @@ class AlpacaClient:
 
         return result if result else None
 
+    # Historical Bars
+
+    async def get_historical_bars(
+        self,
+        symbol: str,
+        timeframe: str = "1Day",
+        start: str | None = None,
+        end: str | None = None,
+        limit: int = 60,
+    ) -> list[dict]:
+        """Get historical OHLCV bars for a symbol.
+
+        Args:
+            symbol: Stock symbol (e.g., "SPY")
+            timeframe: Bar timeframe - "1Day" or "1Hour"
+            start: Start date (YYYY-MM-DD), defaults to `limit` trading days ago
+            end: End date (YYYY-MM-DD), defaults to today
+            limit: Maximum bars to return (default 60)
+
+        Returns:
+            List of dicts with keys: timestamp, open, high, low, close, volume
+            Ordered chronologically (oldest first)
+
+        Raises:
+            AlpacaError: If API request fails
+        """
+        # Default date range: last `limit` trading days
+        if end is None:
+            end = datetime.now().strftime("%Y-%m-%d")
+        if start is None:
+            # Request extra days to account for weekends/holidays
+            lookback_days = int(limit * 1.5) + 10
+            start = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+
+        params = {
+            "timeframe": timeframe,
+            "start": start,
+            "end": end,
+            "limit": limit,
+            "adjustment": "split",  # Adjust for splits
+            "feed": "sip",  # Use SIP feed for accuracy
+        }
+
+        all_bars = []
+        next_page_token = None
+
+        while True:
+            if next_page_token:
+                params["page_token"] = next_page_token
+
+            data = await self._data_request(
+                "GET",
+                f"/v2/stocks/{symbol}/bars",
+                params=params,
+            )
+
+            bars = data.get("bars", [])
+            for bar in bars:
+                all_bars.append({
+                    "timestamp": bar["t"],
+                    "open": float(bar["o"]),
+                    "high": float(bar["h"]),
+                    "low": float(bar["l"]),
+                    "close": float(bar["c"]),
+                    "volume": int(bar["v"]),
+                })
+
+            next_page_token = data.get("next_page_token")
+            if not next_page_token or len(all_bars) >= limit:
+                break
+
+        # Return oldest first, limited to requested count
+        return all_bars[:limit]
+
     # Order Execution Protocol
 
     async def replace_order(

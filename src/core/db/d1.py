@@ -251,8 +251,11 @@ class D1Client:
         exit_debit: float,
         reflection: str | None = None,
         lesson: str | None = None,
+        exit_reason: str | None = None,
+        iv_rank_at_exit: float | None = None,
+        dte_at_exit: int | None = None,
     ) -> None:
-        """Close a trade with exit details."""
+        """Close a trade with exit details and analytics."""
         trade = await self.get_trade(trade_id)
         if not trade:
             raise ValueError(f"Trade {trade_id} not found")
@@ -262,7 +265,8 @@ class D1Client:
             """
             UPDATE trades
             SET status = 'closed', closed_at = ?, exit_debit = ?, profit_loss = ?,
-                reflection = ?, lesson = ?
+                reflection = ?, lesson = ?,
+                exit_reason = ?, iv_rank_at_exit = ?, dte_at_exit = ?
             WHERE id = ?
             """,
             [
@@ -271,6 +275,9 @@ class D1Client:
                 profit_loss,
                 reflection,
                 lesson,
+                exit_reason,
+                iv_rank_at_exit,
+                dte_at_exit,
                 trade_id,
             ],
         )
@@ -638,6 +645,118 @@ class D1Client:
             for row in result["results"]
         ]
 
+    # Market Regimes
+
+    async def save_market_regime(
+        self,
+        symbol: str,
+        regime: str,
+        probability: float,
+        position_multiplier: float,
+        features: dict,
+        detected_at: str,
+    ) -> str:
+        """Save market regime detection result.
+
+        Args:
+            symbol: Underlying symbol (e.g., SPY)
+            regime: Regime name (bull_low_vol, bull_high_vol, bear_low_vol, bear_high_vol)
+            probability: Confidence in regime (0-1)
+            position_multiplier: Position sizing multiplier
+            features: Dict of feature values used
+            detected_at: ISO timestamp
+
+        Returns:
+            Generated regime ID
+        """
+        import json
+
+        regime_id = str(uuid4())
+        await self.run(
+            """
+            INSERT INTO market_regimes (
+                id, symbol, regime, probability, position_multiplier, features, detected_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                regime_id,
+                symbol,
+                regime,
+                probability,
+                position_multiplier,
+                json.dumps(features),
+                detected_at,
+            ],
+        )
+        return regime_id
+
+    async def get_regime_history(
+        self,
+        symbol: str,
+        lookback_days: int = 30,
+    ) -> list[dict]:
+        """Get regime detection history for analysis.
+
+        Args:
+            symbol: Underlying symbol
+            lookback_days: Number of days to look back
+
+        Returns:
+            List of regime records, most recent first
+        """
+        import json
+
+        result = await self.execute(
+            """
+            SELECT * FROM market_regimes
+            WHERE symbol = ?
+              AND detected_at >= date('now', '-' || ? || ' days')
+            ORDER BY detected_at DESC
+            """,
+            [symbol, lookback_days],
+        )
+
+        return [
+            {
+                "id": row["id"],
+                "symbol": row["symbol"],
+                "regime": row["regime"],
+                "probability": row["probability"],
+                "position_multiplier": row["position_multiplier"],
+                "features": json.loads(row["features"]) if row["features"] else {},
+                "detected_at": row["detected_at"],
+            }
+            for row in result["results"]
+        ]
+
+    async def get_latest_regime(self, symbol: str) -> dict | None:
+        """Get the most recent regime detection for a symbol."""
+        import json
+
+        result = await self.execute(
+            """
+            SELECT * FROM market_regimes
+            WHERE symbol = ?
+            ORDER BY detected_at DESC
+            LIMIT 1
+            """,
+            [symbol],
+        )
+
+        if not result["results"]:
+            return None
+
+        row = result["results"][0]
+        return {
+            "id": row["id"],
+            "symbol": row["symbol"],
+            "regime": row["regime"],
+            "probability": row["probability"],
+            "position_multiplier": row["position_multiplier"],
+            "features": json.loads(row["features"]) if row["features"] else {},
+            "detected_at": row["detected_at"],
+        }
+
     # AI Confidence Calibration
 
     async def get_confidence_calibration(self, lookback_days: int = 90) -> dict:
@@ -743,3 +862,428 @@ class D1Client:
         stats["overall_win_rate"] = total_wins / total_trades if total_trades > 0 else 0
 
         return stats
+
+    # Dynamic Betas
+
+    async def save_dynamic_beta(
+        self,
+        symbol: str,
+        beta_ewma: float,
+        beta_rolling_20: float | None,
+        beta_rolling_60: float | None,
+        beta_blended: float,
+        correlation_spy: float | None,
+        data_days: int,
+    ) -> str:
+        """Save dynamic beta calculation result.
+
+        Args:
+            symbol: Underlying symbol
+            beta_ewma: EWMA beta
+            beta_rolling_20: 20-day rolling beta
+            beta_rolling_60: 60-day rolling beta
+            beta_blended: Blended beta value
+            correlation_spy: Correlation with SPY
+            data_days: Number of days of data used
+
+        Returns:
+            ID of the saved record
+        """
+        from uuid import uuid4
+
+        beta_id = str(uuid4())
+        await self.run(
+            """
+            INSERT INTO dynamic_betas
+            (id, symbol, beta_ewma, beta_rolling_20, beta_rolling_60,
+             beta_blended, correlation_spy, data_days, calculated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            """,
+            [
+                beta_id,
+                symbol,
+                beta_ewma,
+                beta_rolling_20,
+                beta_rolling_60,
+                beta_blended,
+                correlation_spy,
+                data_days,
+            ],
+        )
+        return beta_id
+
+    async def get_latest_dynamic_beta(self, symbol: str) -> dict | None:
+        """Get most recent dynamic beta for a symbol.
+
+        Args:
+            symbol: Underlying symbol
+
+        Returns:
+            Beta record or None if not found
+        """
+        result = await self.execute(
+            """
+            SELECT * FROM dynamic_betas
+            WHERE symbol = ?
+            ORDER BY calculated_at DESC
+            LIMIT 1
+            """,
+            [symbol],
+        )
+
+        if not result.get("results"):
+            return None
+
+        row = result["results"][0]
+        return {
+            "id": row["id"],
+            "symbol": row["symbol"],
+            "beta_ewma": row["beta_ewma"],
+            "beta_rolling_20": row["beta_rolling_20"],
+            "beta_rolling_60": row["beta_rolling_60"],
+            "beta_blended": row["beta_blended"],
+            "correlation_spy": row["correlation_spy"],
+            "data_days": row["data_days"],
+            "calculated_at": row["calculated_at"],
+        }
+
+    async def get_all_dynamic_betas(self) -> dict[str, dict]:
+        """Get most recent dynamic beta for each symbol.
+
+        Returns:
+            Dict of symbol -> beta record
+        """
+        result = await self.execute(
+            """
+            SELECT DISTINCT symbol,
+                FIRST_VALUE(id) OVER w AS id,
+                FIRST_VALUE(beta_ewma) OVER w AS beta_ewma,
+                FIRST_VALUE(beta_rolling_20) OVER w AS beta_rolling_20,
+                FIRST_VALUE(beta_rolling_60) OVER w AS beta_rolling_60,
+                FIRST_VALUE(beta_blended) OVER w AS beta_blended,
+                FIRST_VALUE(correlation_spy) OVER w AS correlation_spy,
+                FIRST_VALUE(data_days) OVER w AS data_days,
+                FIRST_VALUE(calculated_at) OVER w AS calculated_at
+            FROM dynamic_betas
+            WINDOW w AS (PARTITION BY symbol ORDER BY calculated_at DESC)
+            """
+        )
+
+        return {
+            row["symbol"]: {
+                "id": row["id"],
+                "symbol": row["symbol"],
+                "beta_ewma": row["beta_ewma"],
+                "beta_rolling_20": row["beta_rolling_20"],
+                "beta_rolling_60": row["beta_rolling_60"],
+                "beta_blended": row["beta_blended"],
+                "correlation_spy": row["correlation_spy"],
+                "data_days": row["data_days"],
+                "calculated_at": row["calculated_at"],
+            }
+            for row in result.get("results", [])
+        }
+
+    # Optimized Weights
+
+    async def save_optimized_weights(
+        self,
+        regime: str,
+        weight_iv: float,
+        weight_delta: float,
+        weight_credit: float,
+        weight_ev: float,
+        sharpe_ratio: float | None,
+        n_trades: int,
+    ) -> str:
+        """Save optimized scoring weights for a regime.
+
+        Args:
+            regime: Market regime
+            weight_iv: IV score weight
+            weight_delta: Delta score weight
+            weight_credit: Credit score weight
+            weight_ev: Expected value score weight
+            sharpe_ratio: Sharpe ratio achieved
+            n_trades: Number of trades used
+
+        Returns:
+            ID of the saved record
+        """
+        from uuid import uuid4
+
+        weights_id = str(uuid4())
+        await self.run(
+            """
+            INSERT INTO optimized_weights
+            (id, regime, weight_iv, weight_delta, weight_credit, weight_ev,
+             sharpe_ratio, n_trades, optimized_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            """,
+            [
+                weights_id,
+                regime,
+                weight_iv,
+                weight_delta,
+                weight_credit,
+                weight_ev,
+                sharpe_ratio,
+                n_trades,
+            ],
+        )
+        return weights_id
+
+    async def get_latest_optimized_weights(self) -> dict[str, dict]:
+        """Get most recent optimized weights for each regime.
+
+        Returns:
+            Dict of regime -> weights dict
+        """
+        result = await self.execute(
+            """
+            SELECT DISTINCT regime,
+                FIRST_VALUE(weight_iv) OVER w AS weight_iv,
+                FIRST_VALUE(weight_delta) OVER w AS weight_delta,
+                FIRST_VALUE(weight_credit) OVER w AS weight_credit,
+                FIRST_VALUE(weight_ev) OVER w AS weight_ev,
+                FIRST_VALUE(sharpe_ratio) OVER w AS sharpe_ratio,
+                FIRST_VALUE(n_trades) OVER w AS n_trades,
+                FIRST_VALUE(optimized_at) OVER w AS optimized_at
+            FROM optimized_weights
+            WINDOW w AS (PARTITION BY regime ORDER BY optimized_at DESC)
+            """
+        )
+
+        return {
+            row["regime"]: {
+                "iv": row["weight_iv"],
+                "delta": row["weight_delta"],
+                "credit": row["weight_credit"],
+                "ev": row["weight_ev"],
+                "sharpe_ratio": row["sharpe_ratio"],
+                "n_trades": row["n_trades"],
+                "optimized_at": row["optimized_at"],
+            }
+            for row in result.get("results", [])
+        }
+
+    async def get_trade_stats(self) -> dict:
+        """Get basic trade statistics for optimization checks.
+
+        Returns:
+            Dict with trade counts and basic metrics
+        """
+        result = await self.execute(
+            """
+            SELECT
+                COUNT(*) as total_trades,
+                SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END) as closed_trades,
+                SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) as open_trades,
+                SUM(CASE WHEN profit_loss > 0 THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN profit_loss < 0 THEN 1 ELSE 0 END) as losses
+            FROM trades
+            """
+        )
+
+        if not result.get("results"):
+            return {
+                "total_trades": 0,
+                "closed_trades": 0,
+                "open_trades": 0,
+                "wins": 0,
+                "losses": 0,
+            }
+
+        row = result["results"][0]
+        return {
+            "total_trades": row["total_trades"] or 0,
+            "closed_trades": row["closed_trades"] or 0,
+            "open_trades": row["open_trades"] or 0,
+            "wins": row["wins"] or 0,
+            "losses": row["losses"] or 0,
+        }
+
+    # Rule Validation
+
+    async def tag_trade_with_rules(
+        self,
+        trade_id: str,
+        rule_ids: list[str],
+    ) -> None:
+        """Tag a trade with the playbook rules that influenced it.
+
+        Args:
+            trade_id: The trade ID to tag
+            rule_ids: List of rule IDs that influenced this trade
+        """
+        import json
+
+        rule_ids_json = json.dumps(rule_ids)
+        await self.run(
+            "UPDATE trades SET applied_rule_ids = ? WHERE id = ?",
+            [rule_ids_json, trade_id],
+        )
+
+    async def get_closed_trades_with_rules(
+        self,
+        lookback_days: int = 90,
+    ) -> list[dict]:
+        """Get closed trades with their applied rule IDs.
+
+        Args:
+            lookback_days: Number of days to look back
+
+        Returns:
+            List of trade dicts with profit_loss and applied_rule_ids
+        """
+        result = await self.execute(
+            """
+            SELECT id, profit_loss, applied_rule_ids, closed_at
+            FROM trades
+            WHERE status = 'closed'
+              AND closed_at >= datetime('now', '-' || ? || ' days')
+            ORDER BY closed_at DESC
+            """,
+            [lookback_days],
+        )
+
+        return [
+            {
+                "id": row["id"],
+                "profit_loss": row["profit_loss"] or 0.0,
+                "applied_rule_ids": row["applied_rule_ids"],
+                "closed_at": row["closed_at"],
+            }
+            for row in result.get("results", [])
+        ]
+
+    async def save_rule_validation(
+        self,
+        rule_id: str,
+        trades_with_rule: int,
+        trades_without_rule: int,
+        mean_pnl_with: float,
+        mean_pnl_without: float,
+        win_rate_with: float,
+        win_rate_without: float,
+        u_statistic: float,
+        p_value: float,
+        p_value_adjusted: float,
+        is_significant: bool,
+        effect_direction: str,
+    ) -> str:
+        """Save a rule validation result.
+
+        Args:
+            rule_id: The playbook rule ID
+            trades_with_rule: Number of trades where rule was applied
+            trades_without_rule: Number of trades where rule was not applied
+            mean_pnl_with: Mean P/L for trades with rule
+            mean_pnl_without: Mean P/L for trades without rule
+            win_rate_with: Win rate for trades with rule
+            win_rate_without: Win rate for trades without rule
+            u_statistic: Mann-Whitney U statistic
+            p_value: Raw p-value
+            p_value_adjusted: FDR-corrected p-value
+            is_significant: Whether the effect is statistically significant
+            effect_direction: 'positive', 'negative', or 'neutral'
+
+        Returns:
+            ID of the saved validation
+        """
+        validation_id = str(uuid4())
+        await self.run(
+            """
+            INSERT INTO rule_validations (
+                id, rule_id, validated_at, trades_with_rule, trades_without_rule,
+                mean_pnl_with, mean_pnl_without, win_rate_with, win_rate_without,
+                u_statistic, p_value, p_value_adjusted, is_significant, effect_direction
+            ) VALUES (?, ?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                validation_id,
+                rule_id,
+                trades_with_rule,
+                trades_without_rule,
+                mean_pnl_with,
+                mean_pnl_without,
+                win_rate_with,
+                win_rate_without,
+                u_statistic,
+                p_value,
+                p_value_adjusted,
+                1 if is_significant else 0,
+                effect_direction,
+            ],
+        )
+        return validation_id
+
+    async def update_playbook_validation_status(
+        self,
+        rule_id: str,
+        is_validated: bool,
+        p_value: float | None,
+    ) -> None:
+        """Update the validation status of a playbook rule.
+
+        Args:
+            rule_id: The playbook rule ID
+            is_validated: Whether the rule has been validated as effective
+            p_value: The adjusted p-value from validation
+        """
+        await self.run(
+            """
+            UPDATE playbook
+            SET is_validated = ?, last_validated_at = datetime('now'), validation_p_value = ?
+            WHERE id = ?
+            """,
+            [1 if is_validated else 0, p_value, rule_id],
+        )
+
+    async def get_rule_validations(
+        self,
+        rule_id: str,
+        limit: int = 10,
+    ) -> list[dict]:
+        """Get validation history for a rule.
+
+        Args:
+            rule_id: The playbook rule ID
+            limit: Maximum number of validations to return
+
+        Returns:
+            List of validation result dicts
+        """
+        result = await self.execute(
+            """
+            SELECT * FROM rule_validations
+            WHERE rule_id = ?
+            ORDER BY validated_at DESC
+            LIMIT ?
+            """,
+            [rule_id, limit],
+        )
+
+        return result.get("results", [])
+
+    async def get_latest_rule_validations(self) -> list[dict]:
+        """Get the most recent validation for each rule.
+
+        Returns:
+            List of validation result dicts (one per rule)
+        """
+        result = await self.execute(
+            """
+            SELECT rv.*, p.rule as rule_text
+            FROM rule_validations rv
+            JOIN playbook p ON rv.rule_id = p.id
+            WHERE rv.validated_at = (
+                SELECT MAX(rv2.validated_at)
+                FROM rule_validations rv2
+                WHERE rv2.rule_id = rv.rule_id
+            )
+            ORDER BY rv.is_significant DESC, rv.p_value_adjusted ASC
+            """
+        )
+
+        return result.get("results", [])

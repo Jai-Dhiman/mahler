@@ -122,6 +122,199 @@ async def reconcile_positions(
     return discrepancies, broker_positions_list, db_positions_list
 
 
+async def _run_weekly_optimization(
+    db: D1Client,
+    kv: KVClient,
+    discord: DiscordClient,
+) -> None:
+    """Run weekly weight optimization on Friday after EOD.
+
+    Requirements:
+    - Only runs on Friday
+    - Needs at least 100 closed trades
+    - Optimizes scoring weights for each regime
+    """
+    from datetime import datetime
+
+    # Only run on Friday
+    weekday = datetime.now().weekday()
+    if weekday != 4:
+        return
+
+    print("Running weekly weight optimization...")
+
+    try:
+        # Check trade count
+        trade_stats = await db.get_trade_stats()
+        if trade_stats["closed_trades"] < 100:
+            print(
+                f"Skipping weight optimization: only {trade_stats['closed_trades']} trades (need 100+)"
+            )
+            return
+
+        # Import optimizer
+        from core.analysis.weight_optimizer import WeightOptimizer
+
+        # Create optimizer from DB
+        optimizer = await WeightOptimizer.from_db(db)
+
+        total_trades = optimizer.get_total_trades()
+        if total_trades < 100:
+            print(f"Skipping optimization: insufficient trades ({total_trades})")
+            return
+
+        # Optimize all regimes
+        results = optimizer.optimize_all_regimes()
+
+        if not results:
+            print("No regimes had sufficient data for optimization")
+            return
+
+        # Store optimized weights in D1
+        for regime, opt in results.items():
+            await db.save_optimized_weights(
+                regime=regime,
+                weight_iv=opt.weights.iv_weight,
+                weight_delta=opt.weights.delta_weight,
+                weight_credit=opt.weights.credit_weight,
+                weight_ev=opt.weights.ev_weight,
+                sharpe_ratio=opt.sharpe_ratio,
+                n_trades=opt.n_trades,
+            )
+            print(f"Saved optimized weights for {regime}: Sharpe={opt.sharpe_ratio:.3f}")
+
+        # Cache in KV for fast access
+        weights_for_cache = {
+            regime: {
+                "iv": opt.weights.iv_weight,
+                "delta": opt.weights.delta_weight,
+                "credit": opt.weights.credit_weight,
+                "ev": opt.weights.ev_weight,
+            }
+            for regime, opt in results.items()
+        }
+
+        await kv.cache_weights(weights_for_cache)
+
+        # Send Discord notification
+        regimes_updated = len(results)
+        total_sharpe = sum(r.sharpe_ratio for r in results.values()) / regimes_updated
+        await discord.send_message(
+            f"Weekly weight optimization complete: {regimes_updated} regimes updated (avg Sharpe: {total_sharpe:.2f})"
+        )
+
+        print(f"Weight optimization complete: {regimes_updated} regimes updated")
+
+    except Exception as e:
+        print(f"Weight optimization failed: {e}")
+        import traceback
+
+        print(traceback.format_exc())
+
+
+async def _run_weekly_rule_validation(
+    db: D1Client,
+    kv: KVClient,
+    discord: DiscordClient,
+) -> None:
+    """Run weekly playbook rule validation on Friday after EOD.
+
+    Uses Mann-Whitney U test to compare trade outcomes with/without each rule,
+    with Benjamini-Hochberg FDR correction for multiple testing.
+
+    Requirements:
+    - Only runs on Friday
+    - Needs at least 50 closed trades with rule tags
+    - Validates all rules with sufficient sample sizes
+    """
+    from datetime import datetime
+
+    # Only run on Friday
+    weekday = datetime.now().weekday()
+    if weekday != 4:
+        return
+
+    print("Running weekly rule validation...")
+
+    try:
+        from core.analysis.rule_validator import TradingRuleValidator
+
+        # Create validator from DB (checks for sufficient trades)
+        validator = await TradingRuleValidator.from_db(
+            db, min_trades=50, lookback_days=90
+        )
+
+        if validator is None:
+            print("Skipping rule validation: insufficient trades with rule tags")
+            return
+
+        # Validate all rules
+        results = validator.validate_all_rules()
+        summary = validator.get_validation_summary()
+
+        print(f"Rule validation complete: {summary['total_rules_tested']} rules tested")
+        print(f"  Significant positive: {summary['significant_positive']}")
+        print(f"  Significant negative: {summary['significant_negative']}")
+        print(f"  Non-significant: {summary['non_significant']}")
+        print(f"  Insufficient data: {summary['rules_with_insufficient_data']}")
+
+        if not results:
+            print("No rules had sufficient data for validation")
+            return
+
+        # Store validation results and update playbook status
+        for result in results:
+            # Save validation result
+            await db.save_rule_validation(
+                rule_id=result.rule_id,
+                trades_with_rule=result.trades_with_rule,
+                trades_without_rule=result.trades_without_rule,
+                mean_pnl_with=result.mean_pnl_with,
+                mean_pnl_without=result.mean_pnl_without,
+                win_rate_with=result.win_rate_with,
+                win_rate_without=result.win_rate_without,
+                u_statistic=result.u_statistic,
+                p_value=result.p_value,
+                p_value_adjusted=result.p_value_adjusted,
+                is_significant=result.is_significant,
+                effect_direction=result.effect_direction,
+            )
+
+            # Update playbook rule validation status
+            # Only mark as "validated" if significant AND positive effect
+            is_validated = result.is_significant and result.effect_direction == "positive"
+            await db.update_playbook_validation_status(
+                rule_id=result.rule_id,
+                is_validated=is_validated,
+                p_value=result.p_value_adjusted,
+            )
+
+            status = "validated" if is_validated else ("rejected" if result.is_significant else "inconclusive")
+            print(f"  Rule {result.rule_id[:8]}: {status} (p={result.p_value_adjusted:.3f})")
+
+        # Send Discord notification with validation report
+        await discord.send_rule_validation_report(results, summary)
+
+        # Cache validation summary for quick access
+        await kv.put_json(
+            "validation:latest",
+            {
+                "validated_at": datetime.now().isoformat(),
+                "summary": summary,
+                "results": [r.to_dict() for r in results],
+            },
+            expiration_ttl=7 * 24 * 3600,  # Keep for 1 week
+        )
+
+        print("Rule validation complete")
+
+    except Exception as e:
+        print(f"Rule validation failed: {e}")
+        import traceback
+
+        print(traceback.format_exc())
+
+
 async def handle_eod_summary(env):
     """Generate end-of-day summary."""
     print("Starting EOD summary...")
@@ -410,6 +603,12 @@ async def _run_eod_summary(env):
 
     except Exception as e:
         print(f"Error checking calibration: {e}")
+
+    # Weekly weight optimization (Friday)
+    await _run_weekly_optimization(db, kv, discord)
+
+    # Weekly rule validation (Friday)
+    await _run_weekly_rule_validation(db, kv, discord)
 
     # Send Discord summary
     await discord.send_daily_summary(

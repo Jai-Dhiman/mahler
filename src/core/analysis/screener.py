@@ -1,15 +1,165 @@
 from __future__ import annotations
 
-"""Options screener for finding credit spread opportunities."""
+"""Options screener for finding credit spread opportunities.
 
-from dataclasses import dataclass
+Includes regime-conditional scoring for adaptive weight selection.
+"""
+
+from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 
 from core.analysis.greeks import calculate_greeks, days_to_expiry, years_to_expiry
 from core.analysis.iv_rank import IVMetrics
 from core.broker.types import OptionContract, OptionsChain
 from core.types import CreditSpread, Greeks, SpreadType
 from core.types import OptionContract as CoreOptionContract
+
+
+class MarketRegime(str, Enum):
+    """Market regime types for conditional scoring."""
+
+    BULL_LOW_VOL = "bull_low_vol"
+    BULL_HIGH_VOL = "bull_high_vol"
+    BEAR_LOW_VOL = "bear_low_vol"
+    BEAR_HIGH_VOL = "bear_high_vol"
+
+
+@dataclass
+class ScoringWeights:
+    """Weights for scoring spread opportunities.
+
+    All weights must sum to 1.0.
+    """
+
+    iv_weight: float = 0.25
+    delta_weight: float = 0.25
+    credit_weight: float = 0.25
+    ev_weight: float = 0.25
+
+    def __post_init__(self):
+        total = self.iv_weight + self.delta_weight + self.credit_weight + self.ev_weight
+        if abs(total - 1.0) > 0.01:
+            raise ValueError(f"Weights must sum to 1.0, got {total:.3f}")
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary."""
+        return {
+            "iv": self.iv_weight,
+            "delta": self.delta_weight,
+            "credit": self.credit_weight,
+            "ev": self.ev_weight,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> ScoringWeights:
+        """Create from dictionary."""
+        return cls(
+            iv_weight=data.get("iv", 0.25),
+            delta_weight=data.get("delta", 0.25),
+            credit_weight=data.get("credit", 0.25),
+            ev_weight=data.get("ev", 0.25),
+        )
+
+
+class RegimeConditionalScorer:
+    """Provides regime-specific scoring weights.
+
+    Research shows different factors matter more in different regimes:
+    - Bull Low Vol: EV-focused (trend following works, let winners run)
+    - Bull High Vol: Delta-focused (protection matters, manage risk)
+    - Bear Low Vol: Credit-focused (premium capture in range-bound markets)
+    - Bear High Vol: IV-focused (sell high IV, tight delta control)
+    """
+
+    DEFAULT_WEIGHTS: dict[MarketRegime, ScoringWeights] = {
+        MarketRegime.BULL_LOW_VOL: ScoringWeights(
+            iv_weight=0.20,
+            delta_weight=0.20,
+            credit_weight=0.25,
+            ev_weight=0.35,
+        ),
+        MarketRegime.BULL_HIGH_VOL: ScoringWeights(
+            iv_weight=0.25,
+            delta_weight=0.35,
+            credit_weight=0.20,
+            ev_weight=0.20,
+        ),
+        MarketRegime.BEAR_LOW_VOL: ScoringWeights(
+            iv_weight=0.20,
+            delta_weight=0.25,
+            credit_weight=0.35,
+            ev_weight=0.20,
+        ),
+        MarketRegime.BEAR_HIGH_VOL: ScoringWeights(
+            iv_weight=0.35,
+            delta_weight=0.30,
+            credit_weight=0.20,
+            ev_weight=0.15,
+        ),
+    }
+
+    def __init__(
+        self,
+        custom_weights: dict[MarketRegime, ScoringWeights] | None = None,
+    ):
+        """Initialize with optional custom weights.
+
+        Args:
+            custom_weights: Override weights for specific regimes
+        """
+        self.weights = {**self.DEFAULT_WEIGHTS}
+        if custom_weights:
+            self.weights.update(custom_weights)
+
+    def get_weights(self, regime: MarketRegime | str | None) -> ScoringWeights:
+        """Get scoring weights for a regime.
+
+        Args:
+            regime: Market regime (enum, string, or None for default)
+
+        Returns:
+            ScoringWeights for the regime
+        """
+        if regime is None:
+            return ScoringWeights()  # Default equal weights
+
+        # Convert string to enum if needed
+        if isinstance(regime, str):
+            try:
+                regime = MarketRegime(regime.lower())
+            except ValueError:
+                return ScoringWeights()
+
+        return self.weights.get(regime, ScoringWeights())
+
+    def update_weights(
+        self,
+        regime: MarketRegime | str,
+        weights: ScoringWeights,
+    ) -> None:
+        """Update weights for a regime (from optimization).
+
+        Args:
+            regime: Market regime to update
+            weights: New weights to use
+        """
+        if isinstance(regime, str):
+            regime = MarketRegime(regime.lower())
+        self.weights[regime] = weights
+
+    def load_from_dict(self, weights_dict: dict[str, dict]) -> None:
+        """Load weights from a dictionary (e.g., from KV cache).
+
+        Args:
+            weights_dict: Dict of regime_str -> weight_values
+        """
+        for regime_str, weight_values in weights_dict.items():
+            try:
+                regime = MarketRegime(regime_str.lower())
+                self.weights[regime] = ScoringWeights.from_dict(weight_values)
+            except (ValueError, KeyError):
+                continue
 
 
 @dataclass
@@ -57,24 +207,34 @@ class ScoredSpread:
 
 
 class OptionsScreener:
-    """Screens options chains for credit spread opportunities."""
+    """Screens options chains for credit spread opportunities.
+
+    Supports regime-conditional scoring for adaptive opportunity ranking.
+    """
 
     # Target underlyings per PRD
     UNDERLYINGS = ["SPY", "QQQ", "IWM"]
 
-    def __init__(self, config: ScreenerConfig | None = None):
+    def __init__(
+        self,
+        config: ScreenerConfig | None = None,
+        scorer: RegimeConditionalScorer | None = None,
+    ):
         self.config = config or ScreenerConfig()
+        self.scorer = scorer or RegimeConditionalScorer()
 
     def screen_chain(
         self,
         chain: OptionsChain,
         iv_metrics: IVMetrics,
+        regime: MarketRegime | str | None = None,
     ) -> list[ScoredSpread]:
         """Screen an options chain for credit spread opportunities.
 
         Args:
             chain: Options chain data from broker
             iv_metrics: IV metrics for the underlying
+            regime: Current market regime for conditional scoring (optional)
 
         Returns:
             List of scored spreads, sorted by score descending
@@ -83,6 +243,9 @@ class OptionsScreener:
         # IV Percentile considers all 252 trading days, not just extremes
         if iv_metrics.iv_percentile < self.config.min_iv_percentile:
             return []
+
+        # Get regime-specific weights
+        weights = self.scorer.get_weights(regime)
 
         opportunities = []
 
@@ -95,11 +258,15 @@ class OptionsScreener:
 
         for expiration in valid_expirations:
             # Find bull put spreads (bullish/neutral)
-            put_opportunities = self._find_bull_put_spreads(chain, expiration, iv_metrics)
+            put_opportunities = self._find_bull_put_spreads(
+                chain, expiration, iv_metrics, weights
+            )
             opportunities.extend(put_opportunities)
 
             # Find bear call spreads (bearish/neutral)
-            call_opportunities = self._find_bear_call_spreads(chain, expiration, iv_metrics)
+            call_opportunities = self._find_bear_call_spreads(
+                chain, expiration, iv_metrics, weights
+            )
             opportunities.extend(call_opportunities)
 
         # Sort by score descending
@@ -112,6 +279,7 @@ class OptionsScreener:
         chain: OptionsChain,
         expiration: str,
         iv_metrics: IVMetrics,
+        weights: ScoringWeights,
     ) -> list[ScoredSpread]:
         """Find bull put spread opportunities (sell higher put, buy lower put)."""
         puts = chain.get_puts(expiration)
@@ -156,8 +324,8 @@ class OptionsScreener:
                 if credit_pct < self.config.min_credit_pct:
                     continue
 
-                # Score the spread
-                scored = self._score_spread(spread, iv_metrics, abs(short_delta))
+                # Score the spread with regime-specific weights
+                scored = self._score_spread(spread, iv_metrics, abs(short_delta), weights)
                 opportunities.append(scored)
 
         return opportunities
@@ -167,6 +335,7 @@ class OptionsScreener:
         chain: OptionsChain,
         expiration: str,
         iv_metrics: IVMetrics,
+        weights: ScoringWeights,
     ) -> list[ScoredSpread]:
         """Find bear call spread opportunities (sell lower call, buy higher call)."""
         calls = chain.get_calls(expiration)
@@ -211,8 +380,8 @@ class OptionsScreener:
                 if credit_pct < self.config.min_credit_pct:
                     continue
 
-                # Score the spread
-                scored = self._score_spread(spread, iv_metrics, abs(short_delta))
+                # Score the spread with regime-specific weights
+                scored = self._score_spread(spread, iv_metrics, abs(short_delta), weights)
                 opportunities.append(scored)
 
         return opportunities
@@ -329,14 +498,21 @@ class OptionsScreener:
         spread: CreditSpread,
         iv_metrics: IVMetrics,
         short_delta: float,
+        weights: ScoringWeights,
     ) -> ScoredSpread:
-        """Score a spread for ranking.
+        """Score a spread for ranking using regime-conditional weights.
 
         Score factors:
         - Higher IV percentile = better premium environment
         - Delta closer to 0.25 (sweet spot) = better probability
         - Higher credit/width ratio = better risk/reward
         - Expected value (credit * prob_win - max_loss * prob_loss)
+
+        Args:
+            spread: The credit spread to score
+            iv_metrics: IV metrics for context
+            short_delta: Delta of the short strike
+            weights: Regime-specific scoring weights
         """
         # Probability of expiring OTM (rough estimate from delta)
         prob_otm = 1 - abs(short_delta)
@@ -353,8 +529,13 @@ class OptionsScreener:
         credit_score = min(spread.credit / spread.width, 0.5) * 2  # 0-1
         ev_score = max(0, expected_value) / (spread.width * 100)  # Normalized by width
 
-        # Weighted average
-        score = iv_score * 0.25 + delta_score * 0.25 + credit_score * 0.25 + ev_score * 0.25
+        # Weighted average using regime-specific weights
+        score = (
+            iv_score * weights.iv_weight
+            + delta_score * weights.delta_weight
+            + credit_score * weights.credit_weight
+            + ev_score * weights.ev_weight
+        )
 
         return ScoredSpread(
             spread=spread,

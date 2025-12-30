@@ -158,6 +158,8 @@ class ExitConfig:
     - 50% profit target is well-supported by research
     - 200% stop loss requires >80% win rate to be profitable
     - Consider 150% stop if actual win rate is lower
+    - IV-adjusted targets capture premium before IV crush in high IV
+    - Gamma protection exits early when DTE <= 21 to avoid gamma risk
     """
 
     profit_target_pct: float = 0.50  # 50% of max profit
@@ -169,12 +171,134 @@ class ExitConfig:
     win_rate_threshold: float = 0.80
     tighter_stop_loss_pct: float = 1.50  # 150% stop when win rate < 80%
 
+    # IV-adjusted exit settings
+    iv_adjustment_enabled: bool = True
+    iv_high_threshold: float = 70.0  # IV rank above which to reduce targets
+    iv_low_threshold: float = 30.0  # IV rank below which to increase targets
+
+    # Gamma protection settings
+    gamma_protection_enabled: bool = True
+    gamma_protection_pnl: float = 0.70  # Exit at 70% profit when DTE <= 21
+    gamma_explosion_dte: int = 7  # Force exit when DTE <= 7
+
+
+class IVAdjustedExits:
+    """IV-adjusted exit logic for dynamic profit targets.
+
+    High IV positions should exit faster (before IV crush).
+    Low IV positions can let winners run longer.
+    Gamma protection triggers early exits when DTE <= 21.
+    """
+
+    def __init__(self, config: ExitConfig):
+        self.config = config
+
+    def calculate_iv_rank(
+        self,
+        current_iv: float,
+        iv_52w_high: float,
+        iv_52w_low: float,
+    ) -> float:
+        """Calculate IV rank as percentile between 52-week low and high.
+
+        Args:
+            current_iv: Current implied volatility
+            iv_52w_high: Highest IV in lookback period
+            iv_52w_low: Lowest IV in lookback period
+
+        Returns:
+            IV rank from 0-100
+        """
+        if iv_52w_high <= iv_52w_low:
+            return 50.0  # Default to middle if no range
+
+        iv_range = iv_52w_high - iv_52w_low
+        if iv_range < 1e-8:
+            return 50.0
+
+        rank = (current_iv - iv_52w_low) / iv_range * 100
+        return max(0.0, min(100.0, rank))
+
+    def adjusted_profit_target(
+        self,
+        base_target: float,
+        current_iv: float,
+        iv_history: list[float],
+    ) -> float:
+        """Scale profit target based on IV rank.
+
+        High IV (rank > 70): reduce target by up to 15% to capture premium before IV crush
+        Low IV (rank < 30): increase target by up to 15% to let winners run
+
+        Args:
+            base_target: Base profit target (e.g., 0.50 for 50%)
+            current_iv: Current implied volatility
+            iv_history: Historical IV values (most recent first)
+
+        Returns:
+            Adjusted profit target
+        """
+        if not iv_history or len(iv_history) < 30:
+            return base_target  # Not enough history, use base
+
+        iv_52w_high = max(iv_history[:252]) if len(iv_history) >= 252 else max(iv_history)
+        iv_52w_low = min(iv_history[:252]) if len(iv_history) >= 252 else min(iv_history)
+
+        iv_rank = self.calculate_iv_rank(current_iv, iv_52w_high, iv_52w_low)
+
+        if iv_rank > self.config.iv_high_threshold:
+            # High IV: reduce target to capture premium before crush
+            # Scale: at IV rank 100, reduce by 15%
+            reduction = (iv_rank - self.config.iv_high_threshold) / 100 * 0.5
+            return base_target * (1 - min(reduction, 0.15))
+
+        elif iv_rank < self.config.iv_low_threshold:
+            # Low IV: increase target to let winners run
+            # Scale: at IV rank 0, increase by 15%
+            increase = (self.config.iv_low_threshold - iv_rank) / 100 * 0.5
+            return base_target * (1 + min(increase, 0.15))
+
+        return base_target
+
+    def gamma_aware_exit(
+        self,
+        pnl_pct: float,
+        dte: int,
+        target: float,
+    ) -> tuple[bool, str | None]:
+        """Check for gamma-aware exit conditions.
+
+        Gamma risk accelerates as expiration approaches.
+        Exit earlier when DTE is low to avoid gamma explosion.
+
+        Args:
+            pnl_pct: Current P/L as percentage of max profit
+            dte: Days to expiration
+            target: Current profit target
+
+        Returns:
+            Tuple of (should_exit, reason)
+        """
+        if not self.config.gamma_protection_enabled:
+            return False, None
+
+        # Force exit when DTE <= 7 (gamma explosion zone)
+        if dte <= self.config.gamma_explosion_dte:
+            return True, f"gamma_explosion (DTE={dte})"
+
+        # Exit at 70% of target when DTE <= 21 (gamma acceleration)
+        if dte <= 21 and pnl_pct >= self.config.gamma_protection_pnl * target:
+            return True, f"gamma_protection ({pnl_pct:.0%} profit at {dte} DTE)"
+
+        return False, None
+
 
 class ExitValidator:
     """Validates exit conditions for positions with configurable thresholds."""
 
     def __init__(self, config: ExitConfig | None = None):
         self.config = config or ExitConfig()
+        self.iv_exits = IVAdjustedExits(self.config)
 
     def adjust_for_win_rate(self, historical_win_rate: float | None) -> None:
         """Adjust stop loss based on historical win rate.
@@ -276,23 +400,68 @@ class ExitValidator:
         entry_credit: float,
         current_value: float,
         expiration: str,
-    ) -> tuple[bool, str | None]:
-        """Check all exit conditions.
+        current_iv: float | None = None,
+        iv_history: list[float] | None = None,
+    ) -> tuple[bool, str | None, float | None]:
+        """Check all exit conditions with IV-adjusted targets.
+
+        Args:
+            entry_credit: Original credit received per spread
+            current_value: Current cost to close per spread
+            expiration: Expiration date (YYYY-MM-DD)
+            current_iv: Current implied volatility (optional)
+            iv_history: Historical IV values, most recent first (optional)
 
         Returns:
-            Tuple of (should_exit, reason)
+            Tuple of (should_exit, reason, iv_rank_at_exit)
         """
-        # Check in order of priority
-        profit_check = self.check_profit_target(entry_credit, current_value)
-        if profit_check.valid:
-            return True, profit_check.reason
+        dte = days_to_expiry(expiration)
+        profit = entry_credit - current_value
+        profit_pct = profit / entry_credit if entry_credit > 0 else 0
 
+        # Calculate IV rank if data available
+        iv_rank = None
+        if current_iv is not None and iv_history and len(iv_history) >= 30:
+            iv_52w_high = max(iv_history[:252]) if len(iv_history) >= 252 else max(iv_history)
+            iv_52w_low = min(iv_history[:252]) if len(iv_history) >= 252 else min(iv_history)
+            iv_rank = self.iv_exits.calculate_iv_rank(current_iv, iv_52w_high, iv_52w_low)
+
+        # Determine profit target (IV-adjusted or base)
+        if self.config.iv_adjustment_enabled and current_iv is not None and iv_history:
+            profit_target = self.iv_exits.adjusted_profit_target(
+                self.config.profit_target_pct,
+                current_iv,
+                iv_history,
+            )
+        else:
+            profit_target = self.config.profit_target_pct
+
+        # Priority 1: Gamma explosion (force exit when DTE <= 7)
+        if self.config.gamma_protection_enabled and dte <= self.config.gamma_explosion_dte:
+            return True, f"gamma_explosion (DTE={dte})", iv_rank
+
+        # Priority 2: Gamma protection (exit at 70% of target when DTE <= 21)
+        if self.config.gamma_protection_enabled:
+            gamma_exit, gamma_reason = self.iv_exits.gamma_aware_exit(profit_pct, dte, profit_target)
+            if gamma_exit:
+                return True, gamma_reason, iv_rank
+
+        # Priority 3: IV-adjusted profit target
+        if profit_pct >= profit_target:
+            if iv_rank is not None and profit_target != self.config.profit_target_pct:
+                reason = f"iv_adjusted_profit ({profit_pct:.0%} >= {profit_target:.0%} target, IV rank={iv_rank:.0f})"
+            else:
+                reason = f"profit_target ({profit_pct:.0%} >= {profit_target:.0%})"
+            return True, reason, iv_rank
+
+        # Priority 4: Stop loss
         stop_check = self.check_stop_loss(entry_credit, current_value)
         if stop_check.valid:
-            return True, stop_check.reason
+            return True, stop_check.reason, iv_rank
 
+        # Priority 5: Time exit (redundant with gamma explosion but kept for clarity)
         time_check = self.check_time_exit(expiration)
         if time_check.valid:
-            return True, time_check.reason
+            return True, time_check.reason, iv_rank
 
-        return False, None
+        return False, None, iv_rank

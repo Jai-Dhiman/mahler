@@ -369,9 +369,9 @@ class TestMaybeAdjustOrderPrice:
 
         # Simulate already having made adjustments
         mock_kv_client.get_json = AsyncMock(return_value={
-            "adjustments_made": 4,  # All adjustments done
+            "adjustments_made": 6,  # All adjustments done (6 in schedule)
             "original_price": 1.25,
-            "current_price": 1.10,  # Already adjusted 15 cents (MAX_TOTAL_ADJUSTMENT)
+            "current_price": 0.98,  # Already adjusted 27 cents (close to MAX_TOTAL_ADJUSTMENT of 0.30)
             "original_order_id": "order-123",
         })
 
@@ -479,7 +479,7 @@ class TestPriceAdjustmentSchedule:
         """Test that PRICE_ADJUSTMENT_SCHEDULE is properly defined."""
         from handlers.position_monitor import PRICE_ADJUSTMENT_SCHEDULE
 
-        assert len(PRICE_ADJUSTMENT_SCHEDULE) == 4
+        assert len(PRICE_ADJUSTMENT_SCHEDULE) == 6
         # Should be tuples of (minutes, adjustment)
         for minutes, adjustment in PRICE_ADJUSTMENT_SCHEDULE:
             assert isinstance(minutes, int)
@@ -491,7 +491,7 @@ class TestPriceAdjustmentSchedule:
         """Test that MAX_TOTAL_ADJUSTMENT is properly defined."""
         from handlers.position_monitor import MAX_TOTAL_ADJUSTMENT
 
-        assert MAX_TOTAL_ADJUSTMENT == 0.15
+        assert MAX_TOTAL_ADJUSTMENT == 0.30
 
     def test_min_credit_is_defined(self):
         """Test that MIN_CREDIT is properly defined."""

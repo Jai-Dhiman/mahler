@@ -1,14 +1,16 @@
 """Position monitor worker - runs every 5 minutes during market hours.
 
 Monitors open positions for exit conditions:
-- 50% profit target
+- IV-adjusted profit target (scales with IV rank)
+- Gamma protection (exit at 70% profit when DTE <= 21)
+- Gamma explosion (force exit when DTE <= 7)
 - 200% stop loss (configurable based on win rate)
-- 21 DTE time exit
 """
 
 from datetime import datetime
 
 from core import http
+from core.analysis.greeks import days_to_expiry
 from core.broker.alpaca import AlpacaClient
 from core.broker.types import OrderStatus
 from core.db.d1 import D1Client
@@ -156,15 +158,32 @@ async def _run_position_monitor(env):
                 unrealized_pnl=unrealized_pnl,
             )
 
-            # Check exit conditions
-            should_exit, exit_reason = exit_validator.check_all_exit_conditions(
+            # Extract current IV from contracts (average of short and long)
+            current_iv = None
+            if short_contract.implied_volatility and long_contract.implied_volatility:
+                current_iv = (short_contract.implied_volatility + long_contract.implied_volatility) / 2
+            elif short_contract.implied_volatility:
+                current_iv = short_contract.implied_volatility
+            elif long_contract.implied_volatility:
+                current_iv = long_contract.implied_volatility
+
+            # Fetch IV history for IV-adjusted exits
+            iv_history = await db.get_iv_history(trade.underlying, lookback_days=252)
+
+            # Calculate DTE for logging
+            dte = days_to_expiry(trade.expiration)
+
+            # Check exit conditions with IV context
+            should_exit, exit_reason, iv_rank = exit_validator.check_all_exit_conditions(
                 entry_credit=trade.entry_credit,
                 current_value=current_value,
                 expiration=trade.expiration,
+                current_iv=current_iv,
+                iv_history=iv_history,
             )
 
             if should_exit:
-                print(f"Exit triggered for {trade.underlying}: {exit_reason}")
+                print(f"Exit triggered for {trade.underlying}: {exit_reason} (IV rank={iv_rank}, DTE={dte})")
 
                 # Check if auto-execute is enabled
                 auto_execute = getattr(env, "AUTO_APPROVE_TRADES", "false").lower() == "true"
@@ -178,6 +197,8 @@ async def _run_position_monitor(env):
                         current_value=current_value,
                         unrealized_pnl=unrealized_pnl,
                         exit_reason=exit_reason,
+                        iv_rank=iv_rank,
+                        dte=dte,
                         alpaca=alpaca,
                         db=db,
                         discord=discord,
@@ -446,6 +467,8 @@ async def _auto_execute_exit(
     current_value,
     unrealized_pnl,
     exit_reason,
+    iv_rank,
+    dte,
     alpaca,
     db,
     discord,
@@ -453,7 +476,7 @@ async def _auto_execute_exit(
 ):
     """Auto-execute an exit when conditions are met.
 
-    Places a closing order and updates the database.
+    Places a closing order and updates the database with exit analytics.
     """
     try:
         print(f"Auto-executing exit for {trade.underlying}: {exit_reason}")
@@ -468,10 +491,13 @@ async def _auto_execute_exit(
 
         print(f"Exit order placed: {order.id}")
 
-        # Close the trade in database
+        # Close the trade in database with exit analytics
         await db.close_trade(
             trade_id=trade.id,
             exit_debit=current_value,
+            exit_reason=exit_reason,
+            iv_rank_at_exit=iv_rank,
+            dte_at_exit=dte,
         )
 
         # Delete position snapshot
@@ -483,25 +509,29 @@ async def _auto_execute_exit(
         # Update daily stats
         await kv.update_daily_stats(pnl_delta=realized_pnl)
 
-        # Send Discord notification (no buttons)
+        # Send Discord notification with exit analytics
         pnl_color = 0x57F287 if realized_pnl > 0 else 0xED4245  # Green or Red
         pnl_emoji = "+" if realized_pnl > 0 else ""
+
+        # Build fields with optional IV rank
+        fields = [
+            {"name": "Reason", "value": exit_reason, "inline": False},
+            {"name": "Strategy", "value": trade.spread_type.value.replace("_", " ").title(), "inline": True},
+            {"name": "Strikes", "value": f"${trade.short_strike:.2f}/${trade.long_strike:.2f}", "inline": True},
+            {"name": "DTE", "value": str(dte), "inline": True},
+            {"name": "Entry Credit", "value": f"${trade.entry_credit:.2f}", "inline": True},
+            {"name": "Exit Debit", "value": f"${current_value:.2f}", "inline": True},
+            {"name": "Realized P/L", "value": f"{pnl_emoji}${realized_pnl:.2f}", "inline": True},
+        ]
+        if iv_rank is not None:
+            fields.append({"name": "IV Rank", "value": f"{iv_rank:.0f}", "inline": True})
 
         await discord.send_message(
             content=f"**Position Closed: {trade.underlying}** - {exit_reason}",
             embeds=[{
                 "title": f"Position Closed: {trade.underlying}",
                 "color": pnl_color,
-                "fields": [
-                    {"name": "Reason", "value": exit_reason, "inline": False},
-                    {"name": "Strategy", "value": trade.spread_type.value.replace("_", " ").title(), "inline": True},
-                    {"name": "Strikes", "value": f"${trade.short_strike:.2f}/${trade.long_strike:.2f}", "inline": True},
-                    {"name": "Contracts", "value": str(trade.contracts), "inline": True},
-                    {"name": "Entry Credit", "value": f"${trade.entry_credit:.2f}", "inline": True},
-                    {"name": "Exit Debit", "value": f"${current_value:.2f}", "inline": True},
-                    {"name": "Realized P/L", "value": f"{pnl_emoji}${realized_pnl:.2f}", "inline": True},
-                    {"name": "Order ID", "value": order.id, "inline": False},
-                ],
+                "fields": fields,
             }],
         )
 

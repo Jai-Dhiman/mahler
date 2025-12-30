@@ -7,9 +7,11 @@ a single concentrated bet on US equities. This module implements:
 1. Beta-weighted position sizing
 2. Asset-class-based exposure limits
 3. Per-underlying concentration limits
+4. Dynamic beta integration (from KV cache)
 """
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from core.types import (
     ASSET_BETAS,
@@ -19,6 +21,9 @@ from core.types import (
     Position,
     PortfolioGreeks,
 )
+
+if TYPE_CHECKING:
+    from core.db.kv import KVClient
 
 
 @dataclass
@@ -57,6 +62,14 @@ class RiskLimits:
     high_vix_reduction: float = 0.75
     extreme_vix_threshold: float = 50.0
 
+    # Second-order Greeks thresholds
+    # High vanna = position sensitive to both spot and vol movements
+    # High volga = vega changes significantly with vol (bad for vol sellers)
+    vanna_adjustment_threshold: float = 0.5
+    volga_adjustment_threshold: float = 0.3
+    max_vanna_reduction: float = 0.4  # 40% max reduction from vanna
+    max_volga_reduction: float = 0.5  # 50% max reduction from volga
+
 
 class PositionSizer:
     """Calculates position sizes with correlation-aware risk limits.
@@ -65,14 +78,113 @@ class PositionSizer:
     1. Beta-weighted calculations account for different volatilities
     2. Asset class limits prevent correlation concentration
     3. Per-underlying limits ensure diversification within classes
+    4. Dynamic beta support via KV cache (when kv_client provided)
     """
 
-    def __init__(self, limits: RiskLimits | None = None):
+    def __init__(
+        self,
+        limits: RiskLimits | None = None,
+        kv_client: KVClient | None = None,
+    ):
         self.limits = limits or RiskLimits()
+        self.kv_client = kv_client
+        self._beta_cache: dict[str, float] = {}  # In-memory fallback
 
     def get_beta(self, underlying: str) -> float:
-        """Get beta for an underlying (default 1.0 if unknown)."""
+        """Get beta for an underlying (synchronous, static only).
+
+        For dynamic betas, use get_beta_async() instead.
+        """
+        # Check in-memory cache first
+        if underlying in self._beta_cache:
+            return self._beta_cache[underlying]
         return ASSET_BETAS.get(underlying, 1.0)
+
+    async def get_beta_async(self, underlying: str) -> float:
+        """Get beta for an underlying, checking KV cache for dynamic beta.
+
+        Falls back to static ASSET_BETAS if no cached dynamic beta.
+
+        Args:
+            underlying: The underlying symbol
+
+        Returns:
+            Beta value (dynamic if available, static otherwise)
+        """
+        # Check in-memory cache first
+        if underlying in self._beta_cache:
+            return self._beta_cache[underlying]
+
+        # Try KV cache for dynamic beta
+        if self.kv_client is not None:
+            cached = await self.kv_client.get_cached_beta(underlying)
+            if cached is not None:
+                beta = cached.get("beta_blended", ASSET_BETAS.get(underlying, 1.0))
+                self._beta_cache[underlying] = beta
+                return beta
+
+        # Fall back to static
+        return ASSET_BETAS.get(underlying, 1.0)
+
+    def set_cached_beta(self, underlying: str, beta: float) -> None:
+        """Set a beta value in the in-memory cache.
+
+        Use this to warm the cache with dynamic betas loaded at startup.
+        """
+        self._beta_cache[underlying] = beta
+
+    def clear_beta_cache(self) -> None:
+        """Clear the in-memory beta cache."""
+        self._beta_cache.clear()
+
+    def calculate_second_order_adjustment(
+        self,
+        vanna: float,
+        volga: float,
+    ) -> tuple[float, str | None]:
+        """Calculate position size adjustment based on second-order Greeks.
+
+        High vanna indicates the position's delta is sensitive to volatility changes,
+        meaning you have spot-vol correlation risk. High volga indicates the vega
+        itself changes with volatility (vol-of-vol exposure), which is particularly
+        risky for premium sellers.
+
+        Formula:
+            adjustment = (1 - min(|vanna|/threshold, max_reduction)) *
+                        (1 - min(|volga|/threshold, max_reduction))
+
+        Args:
+            vanna: Spread's net vanna (dDelta/dVol)
+            volga: Spread's net volga (dVega/dVol)
+
+        Returns:
+            Tuple of (multiplier, reason) where:
+            - multiplier: 0.3 to 1.0 to apply to position size
+            - reason: Description of adjustment if any, None if no adjustment
+        """
+        vanna_ratio = abs(vanna) / self.limits.vanna_adjustment_threshold
+        volga_ratio = abs(volga) / self.limits.volga_adjustment_threshold
+
+        vanna_reduction = min(vanna_ratio, self.limits.max_vanna_reduction)
+        volga_reduction = min(volga_ratio, self.limits.max_volga_reduction)
+
+        vanna_factor = 1.0 - vanna_reduction
+        volga_factor = 1.0 - volga_reduction
+
+        adjustment = vanna_factor * volga_factor
+
+        # Only report reason if there's meaningful reduction
+        reason = None
+        if adjustment < 0.95:
+            reasons = []
+            if vanna_reduction > 0.05:
+                reasons.append(f"vanna={vanna:.3f}")
+            if volga_reduction > 0.05:
+                reasons.append(f"volga={volga:.3f}")
+            if reasons:
+                reason = f"Second-order Greeks adjustment ({', '.join(reasons)}): {adjustment:.0%} of base size"
+
+        return adjustment, reason
 
     def get_asset_class(self, underlying: str) -> AssetClass:
         """Get asset class for an underlying (default EQUITY if unknown)."""
@@ -178,6 +290,8 @@ class PositionSizer:
         account_equity: float,
         current_positions: list[Position],
         current_vix: float | None = None,
+        spread_vanna: float | None = None,
+        spread_volga: float | None = None,
     ) -> PositionSizeResult:
         """Calculate position size with correlation-aware limits.
 
@@ -186,6 +300,8 @@ class PositionSizer:
             account_equity: Current account equity
             current_positions: List of open positions
             current_vix: Current VIX level (optional)
+            spread_vanna: Spread's net vanna for second-order adjustment (optional)
+            spread_volga: Spread's net volga for second-order adjustment (optional)
 
         Returns:
             PositionSizeResult with recommended contracts
@@ -293,6 +409,17 @@ class PositionSizer:
                 contracts = max(1, int(contracts * (1 - self.limits.high_vix_reduction)))
             if contracts < original:
                 reason = f"Reduced due to high VIX ({current_vix:.1f})"
+
+        # Apply second-order Greeks adjustment (post-constraint multiplier)
+        if spread_vanna is not None and spread_volga is not None and contracts > 0:
+            adjustment, greek_reason = self.calculate_second_order_adjustment(
+                spread_vanna, spread_volga
+            )
+            if adjustment < 1.0:
+                original = contracts
+                contracts = max(1, int(contracts * adjustment))
+                if contracts < original and greek_reason:
+                    reason = greek_reason
 
         # Ensure at least 1 if any contracts allowed
         if contracts > 0:
