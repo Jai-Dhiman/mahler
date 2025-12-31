@@ -11,11 +11,11 @@ from datetime import datetime, timedelta
 import httpx
 
 
-async def fetch_spy_bars(days: int = 90) -> list[dict]:
+async def fetch_spy_bars(days: int = 750) -> list[dict]:
     """Fetch SPY historical bars from Alpaca API.
 
     Args:
-        days: Number of days of historical data to fetch
+        days: Number of days of historical data to fetch (default 750 = ~3 years)
 
     Returns:
         List of bar dictionaries with keys: timestamp, open, high, low, close, volume
@@ -26,8 +26,8 @@ async def fetch_spy_bars(days: int = 90) -> list[dict]:
     # Use data API endpoint
     base_url = "https://data.alpaca.markets/v2"
 
-    # Calculate date range
-    end_date = datetime.now()
+    # Calculate date range (end yesterday to ensure complete data)
+    end_date = datetime.now() - timedelta(days=1)
     start_date = end_date - timedelta(days=days)
 
     headers = {
@@ -35,35 +35,47 @@ async def fetch_spy_bars(days: int = 90) -> list[dict]:
         "APCA-API-SECRET-KEY": secret_key,
     }
 
-    params = {
-        "start": start_date.strftime("%Y-%m-%d"),
-        "end": end_date.strftime("%Y-%m-%d"),
-        "timeframe": "1Day",
-        "adjustment": "split",
-    }
-
+    # Alpaca paginates results, need to handle next_page_token
     bars = []
+    next_page_token = None
+
     async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{base_url}/stocks/SPY/bars",
-            headers=headers,
-            params=params,
-            timeout=30.0,
-        )
-        response.raise_for_status()
+        while True:
+            params = {
+                "start": start_date.strftime("%Y-%m-%d"),
+                "end": end_date.strftime("%Y-%m-%d"),
+                "timeframe": "1Day",
+                "adjustment": "split",
+                "limit": 10000,  # Max per request
+            }
+            if next_page_token:
+                params["page_token"] = next_page_token
 
-        data = response.json()
-        for bar in data.get("bars", []):
-            bars.append({
-                "timestamp": bar["t"],
-                "open": bar["o"],
-                "high": bar["h"],
-                "low": bar["l"],
-                "close": bar["c"],
-                "volume": bar["v"],
-            })
+            response = await client.get(
+                f"{base_url}/stocks/SPY/bars",
+                headers=headers,
+                params=params,
+                timeout=30.0,
+            )
+            response.raise_for_status()
 
-    print(f"Fetched {len(bars)} SPY bars from Alpaca")
+            data = response.json()
+            for bar in data.get("bars", []):
+                bars.append({
+                    "timestamp": bar["t"],
+                    "open": bar["o"],
+                    "high": bar["h"],
+                    "low": bar["l"],
+                    "close": bar["c"],
+                    "volume": bar["v"],
+                })
+
+            # Check for more pages
+            next_page_token = data.get("next_page_token")
+            if not next_page_token:
+                break
+
+    print(f"Fetched {len(bars)} SPY bars from Alpaca ({days} days requested)")
     return bars
 
 
@@ -136,13 +148,16 @@ async def fetch_trades_from_d1() -> list[dict]:
         return results
 
 
-async def fetch_training_data() -> dict:
+async def fetch_training_data(days: int = 750) -> dict:
     """Fetch all training data.
+
+    Args:
+        days: Number of days of historical bars to fetch (default 750 = ~3 years)
 
     Returns:
         Dictionary with 'bars' and 'trades' keys
     """
-    bars = await fetch_spy_bars(days=90)
+    bars = await fetch_spy_bars(days=days)
     trades = await fetch_trades_from_d1()
 
     return {

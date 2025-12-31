@@ -147,8 +147,8 @@ async def main() -> int:
     trades = []
 
     if train_regime:
-        print("\nFetching SPY historical bars...")
-        bars = await fetch_spy_bars(days=90)
+        print("\nFetching SPY historical bars (3 years)...")
+        bars = await fetch_spy_bars(days=750)
 
     if train_weights or train_exit:
         print("\nFetching trade history from D1...")
