@@ -7,7 +7,7 @@ Monitors open positions for exit conditions:
 - 200% stop loss (configurable based on win rate)
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from core import http
 from core.analysis.greeks import days_to_expiry
@@ -17,7 +17,7 @@ from core.db.d1 import D1Client
 from core.db.kv import KVClient
 from core.notifications.discord import DiscordClient
 from core.risk.circuit_breaker import CircuitBreaker, RiskLevel
-from core.risk.validators import ExitConfig, ExitValidator
+from core.risk.validators import ExitValidator
 from core.types import TradeStatus
 
 
@@ -66,6 +66,9 @@ async def _run_position_monitor(env):
 
     # Step 1: Reconcile pending_fill trades (check if orders filled or expired)
     await _reconcile_pending_orders(db, alpaca, discord, kv)
+
+    # Step 2: Reconcile any pending exit orders (orders placed but DB update failed)
+    await _reconcile_pending_exit_orders(db, alpaca, discord, kv)
 
     # Check if market is open
     if not await alpaca.is_market_open():
@@ -327,6 +330,95 @@ async def _reconcile_pending_orders(db, alpaca, discord, kv):
             print(f"Error reconciling order for trade {trade.id}: {e}")
 
 
+async def _reconcile_pending_exit_orders(db, alpaca, discord, kv):
+    """Reconcile trades that have exit orders placed but weren't closed in DB.
+
+    This handles the case where an exit order was placed but the subsequent
+    database update failed. We check if the exit order filled and close the
+    trade properly.
+    """
+    trades_with_exits = await db.get_trades_with_pending_exits()
+
+    if not trades_with_exits:
+        return
+
+    print(f"Reconciling {len(trades_with_exits)} trades with pending exit orders...")
+
+    for trade in trades_with_exits:
+        try:
+            order = await alpaca.get_order(trade.exit_order_id)
+
+            if order.status == OrderStatus.FILLED:
+                # Exit order filled - close the trade in database
+                print(f"Exit order {order.id} FILLED - closing trade {trade.id}")
+
+                # Get the fill price from the order
+                # For multi-leg orders, filled_avg_price is the net debit/credit
+                exit_debit = abs(order.filled_avg_price) if order.filled_avg_price else 0
+
+                # Calculate realized P/L
+                realized_pnl = (trade.entry_credit - exit_debit) * trade.contracts * 100
+
+                # Close the trade
+                await db.close_trade(
+                    trade_id=trade.id,
+                    exit_debit=exit_debit,
+                    exit_reason="reconciled_exit",
+                )
+
+                # Delete position snapshot
+                await db.delete_position(trade.id)
+
+                # Update daily stats
+                await kv.update_daily_stats(pnl_delta=realized_pnl)
+
+                # Send Discord notification
+                pnl_color = 0x57F287 if realized_pnl > 0 else 0xED4245
+                pnl_emoji = "+" if realized_pnl > 0 else ""
+
+                await discord.send_message(
+                    content=f"**Position Reconciled: {trade.underlying}**",
+                    embeds=[{
+                        "title": f"Exit Reconciled: {trade.underlying}",
+                        "description": "Exit order filled but DB update had failed. Now reconciled.",
+                        "color": pnl_color,
+                        "fields": [
+                            {"name": "Strategy", "value": trade.spread_type.value.replace("_", " ").title(), "inline": True},
+                            {"name": "Entry Credit", "value": f"${trade.entry_credit:.2f}", "inline": True},
+                            {"name": "Exit Debit", "value": f"${exit_debit:.2f}", "inline": True},
+                            {"name": "Realized P/L", "value": f"{pnl_emoji}${realized_pnl:.2f}", "inline": True},
+                        ],
+                    }],
+                )
+
+            elif order.status in [OrderStatus.EXPIRED, OrderStatus.CANCELLED, OrderStatus.REJECTED]:
+                # Exit order did not fill - clear the exit order ID so we can try again
+                print(f"Exit order {order.id} {order.status.value} - clearing from trade {trade.id}")
+                await db.clear_exit_order_id(trade.id)
+
+                await discord.send_message(
+                    content=f"**Exit Order Expired: {trade.underlying}**",
+                    embeds=[{
+                        "title": f"Exit Order {order.status.value.title()}: {trade.underlying}",
+                        "description": "The exit order did not fill. Will retry on next trigger.",
+                        "color": 0xF59E0B,  # Amber
+                        "fields": [
+                            {"name": "Trade ID", "value": trade.id, "inline": True},
+                        ],
+                    }],
+                )
+
+            elif order.status in [OrderStatus.NEW, OrderStatus.ACCEPTED, OrderStatus.PARTIALLY_FILLED]:
+                # Exit order still pending - nothing to do
+                print(f"Exit order {order.id} still pending ({order.status.value}) for trade {trade.id}")
+
+            else:
+                print(f"Exit order {order.id} in unexpected status: {order.status.value}")
+
+        except Exception as e:
+            print(f"Error reconciling exit order for trade {trade.id}: {e}")
+
+
 # Price adjustment schedule for unfilled orders
 # Each tuple is (minutes_elapsed, adjustment_cents)
 # For credit spreads, we adjust by accepting less credit (worse for us, better fill chance)
@@ -357,10 +449,9 @@ async def _maybe_adjust_order_price(trade, order, alpaca, db, discord, kv):
     When an order is replaced, Alpaca creates a new order with a new ID - we update
     the trade record and migrate tracking to the new order ID.
     """
-    from datetime import datetime, timezone
 
     # Get order age in minutes
-    order_age_minutes = (datetime.now(timezone.utc) - order.created_at).total_seconds() / 60
+    order_age_minutes = (datetime.now(UTC) - order.created_at).total_seconds() / 60
     print(f"Order {order.id[:8]}... age: {order_age_minutes:.1f} min, status: {order.status.value}")
 
     # Get current adjustment state from KV
@@ -432,7 +523,7 @@ async def _maybe_adjust_order_price(trade, order, alpaca, db, discord, kv):
         adjustment_data["adjustments_made"] = target_adjustments
         adjustment_data["current_price"] = new_credit
         adjustment_data["current_order_id"] = new_order.id
-        adjustment_data["last_adjustment"] = datetime.now(timezone.utc).isoformat()
+        adjustment_data["last_adjustment"] = datetime.now(UTC).isoformat()
         await kv.put_json(adjustment_key, adjustment_data, expiration_ttl=24 * 3600)
 
         # Send Discord notification about the adjustment
@@ -477,9 +568,17 @@ async def _auto_execute_exit(
     """Auto-execute an exit when conditions are met.
 
     Places a closing order and updates the database with exit analytics.
+    Saves exit_order_id immediately after placing order to enable reconciliation
+    if subsequent database operations fail.
     """
+    order = None
     try:
         print(f"Auto-executing exit for {trade.underlying}: {exit_reason}")
+
+        # Check if there's already a pending exit order for this trade
+        if trade.exit_order_id:
+            print(f"Trade {trade.id} already has exit order {trade.exit_order_id}, skipping")
+            return
 
         # Place closing order (buy back short, sell long)
         order = await alpaca.place_close_spread_order(
@@ -490,6 +589,10 @@ async def _auto_execute_exit(
         )
 
         print(f"Exit order placed: {order.id}")
+
+        # CRITICAL: Save exit order ID immediately after placement
+        # This enables reconciliation if close_trade fails
+        await db.set_exit_order_id(trade.id, order.id)
 
         # Close the trade in database with exit analytics
         await db.close_trade(
@@ -539,13 +642,18 @@ async def _auto_execute_exit(
 
     except Exception as e:
         print(f"Error auto-executing exit for {trade.id}: {e}")
+        # Include order ID in error message if order was placed
+        error_desc = f"Auto-exit failed: {str(e)}"
+        if order:
+            error_desc += f"\nExit order {order.id} was placed - will reconcile on next run."
+
         # Send error notification
         await discord.send_message(
             content=f"**Exit Error: {trade.underlying}**",
             embeds=[{
                 "title": f"Exit Failed: {trade.underlying}",
                 "color": 0xED4245,
-                "description": f"Auto-exit failed: {str(e)}",
+                "description": error_desc,
                 "fields": [
                     {"name": "Reason", "value": exit_reason, "inline": False},
                     {"name": "Trade ID", "value": trade.id, "inline": True},

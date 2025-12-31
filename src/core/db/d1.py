@@ -33,6 +33,60 @@ def js_to_python(obj):
     return obj
 
 
+def sanitize_params(params: list | None) -> list | None:
+    """Sanitize parameters for D1 binding.
+
+    Ensures all values are valid Python types that can be bound to D1:
+    - Converts JsProxy objects to Python equivalents
+    - Converts JavaScript undefined to None
+    - Ensures numeric types are proper Python floats/ints
+    """
+    if params is None:
+        return None
+
+    # Check if we're in Pyodide environment
+    JsProxy = None
+    try:
+        from pyodide.ffi import JsProxy as _JsProxy
+        # Verify it's actually a class/type (not a mock)
+        if isinstance(_JsProxy, type):
+            JsProxy = _JsProxy
+    except (ImportError, ModuleNotFoundError):
+        pass
+
+    # If not in Pyodide (JsProxy is None), no sanitization needed
+    if JsProxy is None:
+        return params
+
+    sanitized = []
+    for val in params:
+        try:
+            is_js_proxy = isinstance(val, JsProxy)
+        except TypeError:
+            # isinstance failed (JsProxy might be invalid type)
+            is_js_proxy = False
+
+        if is_js_proxy:
+            # Convert JsProxy to Python
+            py_val = val.to_py() if hasattr(val, "to_py") else None
+            # Check for undefined (converts to None)
+            if py_val is None or str(val) == "undefined":
+                sanitized.append(None)
+            else:
+                sanitized.append(py_val)
+        elif val is None:
+            sanitized.append(None)
+        elif isinstance(val, (str, int, float, bool, bytes)):
+            sanitized.append(val)
+        else:
+            # Try to convert to a basic type
+            try:
+                sanitized.append(str(val) if val is not None else None)
+            except Exception:
+                sanitized.append(None)
+    return sanitized
+
+
 class D1Client:
     """Client for Cloudflare D1 SQLite database operations."""
 
@@ -42,7 +96,9 @@ class D1Client:
     async def execute(self, query: str, params: list | None = None) -> Any:
         """Execute a query and return results."""
         if params:
-            result = await self.db.prepare(query).bind(*params).all()
+            # Sanitize params to ensure valid D1 types
+            safe_params = sanitize_params(params)
+            result = await self.db.prepare(query).bind(*safe_params).all()
         else:
             result = await self.db.prepare(query).all()
 
@@ -52,7 +108,9 @@ class D1Client:
     async def run(self, query: str, params: list | None = None) -> Any:
         """Execute a query without returning results (INSERT, UPDATE, DELETE)."""
         if params:
-            return await self.db.prepare(query).bind(*params).run()
+            # Sanitize params to ensure valid D1 types
+            safe_params = sanitize_params(params)
+            return await self.db.prepare(query).bind(*safe_params).run()
         return await self.db.prepare(query).run()
 
     # Recommendations
@@ -245,6 +303,41 @@ class D1Client:
         )
         return [self._row_to_trade(row) for row in result["results"]]
 
+    async def set_exit_order_id(self, trade_id: str, exit_order_id: str) -> None:
+        """Set the exit order ID for a trade.
+
+        This should be called immediately after placing an exit order,
+        before attempting to close the trade. This enables reconciliation
+        if the close_trade call fails.
+        """
+        await self.run(
+            "UPDATE trades SET exit_order_id = ? WHERE id = ?",
+            [exit_order_id, trade_id],
+        )
+
+    async def get_trades_with_pending_exits(self) -> list[Trade]:
+        """Get trades that have an exit order but are still open.
+
+        These are trades where an exit order was placed but the database
+        update to close the trade failed. Used for reconciliation.
+        """
+        result = await self.execute(
+            """SELECT * FROM trades
+               WHERE status = 'open' AND exit_order_id IS NOT NULL
+               ORDER BY opened_at DESC"""
+        )
+        return [self._row_to_trade(row) for row in result["results"]]
+
+    async def clear_exit_order_id(self, trade_id: str) -> None:
+        """Clear the exit order ID for a trade.
+
+        Used when an exit order expires/cancels without filling.
+        """
+        await self.run(
+            "UPDATE trades SET exit_order_id = NULL WHERE id = ?",
+            [trade_id],
+        )
+
     async def close_trade(
         self,
         trade_id: str,
@@ -299,6 +392,7 @@ class D1Client:
             profit_loss=row["profit_loss"],
             contracts=row["contracts"],
             broker_order_id=row["broker_order_id"],
+            exit_order_id=row.get("exit_order_id"),
             reflection=row["reflection"],
             lesson=row["lesson"],
         )
@@ -1065,42 +1159,6 @@ class D1Client:
                 "optimized_at": row["optimized_at"],
             }
             for row in result.get("results", [])
-        }
-
-    async def get_trade_stats(self) -> dict:
-        """Get basic trade statistics for optimization checks.
-
-        Returns:
-            Dict with trade counts and basic metrics
-        """
-        result = await self.execute(
-            """
-            SELECT
-                COUNT(*) as total_trades,
-                SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END) as closed_trades,
-                SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) as open_trades,
-                SUM(CASE WHEN profit_loss > 0 THEN 1 ELSE 0 END) as wins,
-                SUM(CASE WHEN profit_loss < 0 THEN 1 ELSE 0 END) as losses
-            FROM trades
-            """
-        )
-
-        if not result.get("results"):
-            return {
-                "total_trades": 0,
-                "closed_trades": 0,
-                "open_trades": 0,
-                "wins": 0,
-                "losses": 0,
-            }
-
-        row = result["results"][0]
-        return {
-            "total_trades": row["total_trades"] or 0,
-            "closed_trades": row["closed_trades"] or 0,
-            "open_trades": row["open_trades"] or 0,
-            "wins": row["wins"] or 0,
-            "losses": row["losses"] or 0,
         }
 
     # Rule Validation

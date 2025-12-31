@@ -134,6 +134,7 @@ class Trade:
 
     contracts: int = 1
     broker_order_id: str | None = None
+    exit_order_id: str | None = None
 
     reflection: str | None = None
     lesson: str | None = None
@@ -184,11 +185,11 @@ class CircuitBreakerStatus:
     triggered_at: datetime | None = None
 
     @classmethod
-    def active(cls) -> "CircuitBreakerStatus":
+    def active(cls) -> CircuitBreakerStatus:
         return cls(halted=False)
 
     @classmethod
-    def tripped(cls, reason: str) -> "CircuitBreakerStatus":
+    def tripped(cls, reason: str) -> CircuitBreakerStatus:
         return cls(halted=True, reason=reason, triggered_at=datetime.now())
 
 
