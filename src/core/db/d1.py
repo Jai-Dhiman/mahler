@@ -36,27 +36,47 @@ def js_to_python(obj):
 def sanitize_params(params: list | None) -> list | None:
     """Sanitize parameters for D1 binding.
 
-    Ensures all values are valid Python types that can be bound to D1:
+    Ensures all values are valid types that can be bound to D1:
     - Converts JsProxy objects to Python equivalents
-    - Converts JavaScript undefined to None
+    - Converts JavaScript undefined to JavaScript null
+    - Converts Python None to JavaScript null
     - Ensures numeric types are proper Python floats/ints
+
+    IMPORTANT: Python None becomes JavaScript undefined when passed through
+    Pyodide FFI, but D1 expects null for SQL NULL values. We use js.null
+    to explicitly pass JavaScript null.
     """
     if params is None:
         return None
 
-    # Check if we're in Pyodide environment
+    # Check if we're in Pyodide environment and get JavaScript null
     JsProxy = None
+    js_null = None
     try:
         from pyodide.ffi import JsProxy as _JsProxy
         # Verify it's actually a class/type (not a mock)
         if isinstance(_JsProxy, type):
             JsProxy = _JsProxy
+        # Get JavaScript null - try multiple approaches
+        try:
+            # Pyodide 0.28+ has jsnull in pyodide.ffi
+            from pyodide.ffi import jsnull
+            js_null = jsnull
+        except ImportError:
+            # Fallback: access JavaScript null via js module
+            import js
+            js_null = js.null
     except (ImportError, ModuleNotFoundError):
         pass
 
     # If not in Pyodide (JsProxy is None), no sanitization needed
     if JsProxy is None:
         return params
+
+    # If we couldn't get js_null, log and use None (will fail but with better error)
+    if js_null is None:
+        print("WARNING: Could not get JavaScript null, D1 bindings may fail")
+        js_null = None
 
     sanitized = []
     for val in params:
@@ -69,21 +89,22 @@ def sanitize_params(params: list | None) -> list | None:
         if is_js_proxy:
             # Convert JsProxy to Python
             py_val = val.to_py() if hasattr(val, "to_py") else None
-            # Check for undefined (converts to None)
+            # Check for undefined (converts to js_null for D1)
             if py_val is None or str(val) == "undefined":
-                sanitized.append(None)
+                sanitized.append(js_null)
             else:
                 sanitized.append(py_val)
         elif val is None:
-            sanitized.append(None)
+            # Convert Python None to JavaScript null for D1
+            sanitized.append(js_null)
         elif isinstance(val, (str, int, float, bool, bytes)):
             sanitized.append(val)
         else:
             # Try to convert to a basic type
             try:
-                sanitized.append(str(val) if val is not None else None)
+                sanitized.append(str(val) if val is not None else js_null)
             except Exception:
-                sanitized.append(None)
+                sanitized.append(js_null)
     return sanitized
 
 
@@ -93,25 +114,75 @@ class D1Client:
     def __init__(self, db_binding: Any):
         self.db = db_binding
 
-    async def execute(self, query: str, params: list | None = None) -> Any:
-        """Execute a query and return results."""
-        if params:
-            # Sanitize params to ensure valid D1 types
-            safe_params = sanitize_params(params)
-            result = await self.db.prepare(query).bind(*safe_params).all()
-        else:
-            result = await self.db.prepare(query).all()
+    async def execute(self, query: str, params: list | None = None, retries: int = 3) -> Any:
+        """Execute a query and return results.
 
-        # Convert the results to Python
-        return js_to_python(result)
+        Includes retry logic for transient D1 failures (per Cloudflare documentation).
+        """
+        import asyncio
 
-    async def run(self, query: str, params: list | None = None) -> Any:
-        """Execute a query without returning results (INSERT, UPDATE, DELETE)."""
-        if params:
-            # Sanitize params to ensure valid D1 types
-            safe_params = sanitize_params(params)
-            return await self.db.prepare(query).bind(*safe_params).run()
-        return await self.db.prepare(query).run()
+        last_error = None
+        for attempt in range(retries):
+            try:
+                if params:
+                    # Sanitize params to ensure valid D1 types
+                    safe_params = sanitize_params(params)
+                    result = await self.db.prepare(query).bind(*safe_params).all()
+                else:
+                    result = await self.db.prepare(query).all()
+
+                # Convert the results to Python
+                return js_to_python(result)
+            except Exception as e:
+                last_error = e
+                error_msg = str(e) if e else "null"
+                error_type = type(e).__name__
+
+                if attempt < retries - 1:
+                    print(f"D1 execute error (attempt {attempt + 1}/{retries}): {error_type}: {error_msg}")
+                    await asyncio.sleep(0.1 * (2 ** attempt))
+                else:
+                    print(f"D1 execute error (final): type={error_type}, str={e}")
+
+        raise last_error
+
+    async def run(self, query: str, params: list | None = None, retries: int = 3) -> Any:
+        """Execute a query without returning results (INSERT, UPDATE, DELETE).
+
+        Includes retry logic for transient D1 failures (per Cloudflare documentation).
+        """
+        import asyncio
+
+        last_error = None
+        for attempt in range(retries):
+            try:
+                if params:
+                    # Sanitize params to ensure valid D1 types
+                    safe_params = sanitize_params(params)
+                    return await self.db.prepare(query).bind(*safe_params).run()
+                return await self.db.prepare(query).run()
+            except Exception as e:
+                last_error = e
+                # Extract error details - handle both Python and JavaScript exceptions
+                error_msg = str(e) if e else "null"
+                error_type = type(e).__name__
+                # Try to get .message attribute (JavaScript error convention)
+                if hasattr(e, "message"):
+                    error_msg = f"{error_msg} (message: {e.message})"
+
+                if attempt < retries - 1:
+                    print(f"D1 run error (attempt {attempt + 1}/{retries}): {error_type}: {error_msg}")
+                    # Exponential backoff: 100ms, 200ms, 400ms...
+                    await asyncio.sleep(0.1 * (2 ** attempt))
+                else:
+                    # Final attempt failed
+                    print(f"D1 run error (final): type={error_type}, str={e}, repr={repr(e)}")
+                    if params:
+                        print(f"D1 query: {query[:100]}...")
+                        # Don't log sanitized params as they may contain sensitive data
+
+        # Re-raise the last error
+        raise last_error
 
     # Recommendations
 
@@ -348,32 +419,52 @@ class D1Client:
         iv_rank_at_exit: float | None = None,
         dte_at_exit: int | None = None,
     ) -> None:
-        """Close a trade with exit details and analytics."""
+        """Close a trade with exit details and analytics.
+
+        Dynamically builds SQL to avoid passing None through FFI (which becomes
+        JavaScript undefined instead of null, causing D1_TYPE_ERROR).
+        """
         trade = await self.get_trade(trade_id)
         if not trade:
             raise ValueError(f"Trade {trade_id} not found")
 
         profit_loss = (trade.entry_credit - exit_debit) * trade.contracts * 100
-        await self.run(
-            """
-            UPDATE trades
-            SET status = 'closed', closed_at = ?, exit_debit = ?, profit_loss = ?,
-                reflection = ?, lesson = ?,
-                exit_reason = ?, iv_rank_at_exit = ?, dte_at_exit = ?
-            WHERE id = ?
-            """,
-            [
-                datetime.now().isoformat(),
-                exit_debit,
-                profit_loss,
-                reflection,
-                lesson,
-                exit_reason,
-                iv_rank_at_exit,
-                dte_at_exit,
-                trade_id,
-            ],
-        )
+
+        # Build dynamic SQL to avoid None values (FFI converts None to undefined, not null)
+        # Required fields (never None)
+        set_clauses = [
+            "status = 'closed'",
+            "closed_at = ?",
+            "exit_debit = ?",
+            "profit_loss = ?",
+        ]
+        params = [
+            datetime.now().isoformat(),
+            exit_debit,
+            profit_loss,
+        ]
+
+        # Optional fields - only include if not None
+        if reflection is not None:
+            set_clauses.append("reflection = ?")
+            params.append(reflection)
+        if lesson is not None:
+            set_clauses.append("lesson = ?")
+            params.append(lesson)
+        if exit_reason is not None:
+            set_clauses.append("exit_reason = ?")
+            params.append(exit_reason)
+        if iv_rank_at_exit is not None:
+            set_clauses.append("iv_rank_at_exit = ?")
+            params.append(iv_rank_at_exit)
+        if dte_at_exit is not None:
+            set_clauses.append("dte_at_exit = ?")
+            params.append(dte_at_exit)
+
+        params.append(trade_id)
+
+        query = f"UPDATE trades SET {', '.join(set_clauses)} WHERE id = ?"
+        await self.run(query, params)
 
     def _row_to_trade(self, row: dict) -> Trade:
         return Trade(
