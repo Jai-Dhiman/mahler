@@ -58,10 +58,134 @@ async def on_fetch(request, env):
                 headers={"Content-Type": "application/json"},
             )
 
-        if "/test/scan" in url:
+        if "/test/scan" in url and "/test/debug-scan" not in url:
             await handle_morning_scan(env)
             return Response(
                 '{"status": "ok", "message": "Morning scan completed"}',
+                headers={"Content-Type": "application/json"},
+            )
+
+        if "/test/debug-scan" in url:
+            # Debug scan - bypasses market hours check and provides verbose output
+            from core.analysis.iv_rank import IVMetrics, calculate_iv_metrics
+            from core.analysis.screener import OptionsScreener, ScreenerConfig
+            from core.broker.alpaca import AlpacaClient
+            from core.db.d1 import D1Client
+            from core.db.kv import KVClient
+            from core.risk.circuit_breaker import CircuitBreaker
+
+            debug_output = {"status": "ok", "checks": {}, "scan_results": {}}
+
+            # Initialize clients
+            db = D1Client(env.MAHLER_DB)
+            kv = KVClient(env.MAHLER_KV)
+            circuit_breaker = CircuitBreaker(kv)
+            alpaca = AlpacaClient(
+                api_key=env.ALPACA_API_KEY,
+                secret_key=env.ALPACA_SECRET_KEY,
+                paper=(env.ENVIRONMENT == "paper"),
+            )
+
+            # Check circuit breaker
+            cb_status = await circuit_breaker.get_status()
+            debug_output["checks"]["circuit_breaker"] = {
+                "halted": cb_status.halted,
+                "reason": cb_status.reason,
+            }
+
+            # Check market status (but don't exit)
+            market_open = await alpaca.is_market_open()
+            debug_output["checks"]["market_open"] = market_open
+
+            # Get account info
+            account = await alpaca.get_account()
+            debug_output["checks"]["account"] = {
+                "equity": account.equity,
+                "buying_power": account.buying_power,
+            }
+
+            # Get VIX
+            try:
+                vix_data = await alpaca.get_vix_snapshot()
+                debug_output["checks"]["vix"] = vix_data
+            except Exception as e:
+                debug_output["checks"]["vix"] = {"error": str(e)}
+
+            # Check IV history counts
+            iv_history_counts = {}
+            underlyings = ["SPY", "QQQ", "IWM", "TLT", "GLD"]
+            for symbol in underlyings:
+                count = await db.get_iv_history_count(symbol)
+                iv_history_counts[symbol] = count
+            debug_output["checks"]["iv_history_counts"] = iv_history_counts
+
+            # Scan each underlying (bypass market hours)
+            screener = OptionsScreener(ScreenerConfig())
+            scan_results = {}
+
+            for symbol in underlyings:
+                try:
+                    chain = await alpaca.get_options_chain(symbol)
+                    if not chain.contracts:
+                        scan_results[symbol] = {"error": "No options data"}
+                        continue
+
+                    # Get current IV from ATM options
+                    atm_contracts = [
+                        c for c in chain.contracts
+                        if abs(c.strike - chain.underlying_price) < chain.underlying_price * 0.02
+                    ]
+                    current_iv = atm_contracts[0].implied_volatility if atm_contracts and atm_contracts[0].implied_volatility else 0.20
+
+                    # Get IV history
+                    historical_ivs = await db.get_iv_history(symbol, lookback_days=252)
+
+                    # Calculate IV metrics
+                    if len(historical_ivs) >= 30:
+                        iv_metrics = calculate_iv_metrics(current_iv, historical_ivs)
+                    else:
+                        # Fallback estimation
+                        current_vix = debug_output["checks"].get("vix", {}).get("vix", 20)
+                        estimated_rank = min(90.0, max(50.0, current_vix * 2.5)) if current_vix else 70.0
+                        iv_metrics = IVMetrics(
+                            current_iv=current_iv,
+                            iv_rank=estimated_rank,
+                            iv_percentile=estimated_rank,
+                            iv_high=current_iv * 1.2,
+                            iv_low=current_iv * 0.7,
+                        )
+
+                    # Screen for opportunities
+                    opportunities = screener.screen_chain(chain, iv_metrics)
+
+                    scan_results[symbol] = {
+                        "underlying_price": chain.underlying_price,
+                        "contracts_count": len(chain.contracts),
+                        "current_iv": round(current_iv * 100, 2),
+                        "iv_rank": round(iv_metrics.iv_rank, 2),
+                        "iv_percentile": round(iv_metrics.iv_percentile, 2),
+                        "iv_history_days": len(historical_ivs),
+                        "opportunities_found": len(opportunities),
+                        "top_opportunities": [
+                            {
+                                "spread_type": opp.spread.spread_type.value,
+                                "strikes": f"{opp.spread.short_strike}/{opp.spread.long_strike}",
+                                "expiration": opp.spread.expiration,
+                                "credit": round(opp.spread.credit, 2),
+                                "score": round(opp.score, 2),
+                            }
+                            for opp in opportunities[:3]
+                        ],
+                        "filter_passed": iv_metrics.iv_percentile >= 50.0,
+                    }
+
+                except Exception as e:
+                    scan_results[symbol] = {"error": str(e)}
+
+            debug_output["scan_results"] = scan_results
+
+            return Response(
+                json.dumps(debug_output, indent=2),
                 headers={"Content-Type": "application/json"},
             )
 
@@ -154,7 +278,7 @@ async def on_fetch(request, env):
                 json.dumps({
                     "halted": status.halted,
                     "reason": status.reason,
-                    "tripped_at": status.tripped_at.isoformat() if status.tripped_at else None,
+                    "triggered_at": status.triggered_at.isoformat() if status.triggered_at else None,
                 }),
                 headers={"Content-Type": "application/json"},
             )

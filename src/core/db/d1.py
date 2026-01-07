@@ -38,45 +38,27 @@ def sanitize_params(params: list | None) -> list | None:
 
     Ensures all values are valid types that can be bound to D1:
     - Converts JsProxy objects to Python equivalents
-    - Converts JavaScript undefined to JavaScript null
-    - Converts Python None to JavaScript null
     - Ensures numeric types are proper Python floats/ints
 
-    IMPORTANT: Python None becomes JavaScript undefined when passed through
-    Pyodide FFI, but D1 expects null for SQL NULL values. We use js.null
-    to explicitly pass JavaScript null.
+    Note: Python None is passed through directly. For queries where None
+    values cause issues, use dynamic SQL construction (like close_trade does).
     """
     if params is None:
         return None
 
-    # Check if we're in Pyodide environment and get JavaScript null
+    # Check if we're in Pyodide environment
     JsProxy = None
-    js_null = None
     try:
         from pyodide.ffi import JsProxy as _JsProxy
         # Verify it's actually a class/type (not a mock)
         if isinstance(_JsProxy, type):
             JsProxy = _JsProxy
-        # Get JavaScript null - try multiple approaches
-        try:
-            # Pyodide 0.28+ has jsnull in pyodide.ffi
-            from pyodide.ffi import jsnull
-            js_null = jsnull
-        except ImportError:
-            # Fallback: access JavaScript null via js module
-            import js
-            js_null = js.null
-    except (ImportError, ModuleNotFoundError):
+    except (ImportError, ModuleNotFoundError, AttributeError):
         pass
 
     # If not in Pyodide (JsProxy is None), no sanitization needed
     if JsProxy is None:
         return params
-
-    # If we couldn't get js_null, log and use None (will fail but with better error)
-    if js_null is None:
-        print("WARNING: Could not get JavaScript null, D1 bindings may fail")
-        js_null = None
 
     sanitized = []
     for val in params:
@@ -89,22 +71,15 @@ def sanitize_params(params: list | None) -> list | None:
         if is_js_proxy:
             # Convert JsProxy to Python
             py_val = val.to_py() if hasattr(val, "to_py") else None
-            # Check for undefined (converts to js_null for D1)
-            if py_val is None or str(val) == "undefined":
-                sanitized.append(js_null)
-            else:
-                sanitized.append(py_val)
-        elif val is None:
-            # Convert Python None to JavaScript null for D1
-            sanitized.append(js_null)
-        elif isinstance(val, (str, int, float, bool, bytes)):
+            sanitized.append(py_val)
+        elif isinstance(val, (str, int, float, bool, bytes)) or val is None:
             sanitized.append(val)
         else:
             # Try to convert to a basic type
             try:
-                sanitized.append(str(val) if val is not None else js_null)
+                sanitized.append(str(val) if val is not None else None)
             except Exception:
-                sanitized.append(js_null)
+                sanitized.append(None)
     return sanitized
 
 
