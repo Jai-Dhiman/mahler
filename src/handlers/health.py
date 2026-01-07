@@ -35,7 +35,7 @@ async def handle_health(request, env):
 
     # # Check R2 connectivity
     # try:
-    #     await env.ARCHIVE.list({"limit": 1})
+    #     await env.MAHLER_BUCKET.list({"limit": 1})
     #     status["checks"]["r2"] = "ok"
     # except Exception as e:
     #     status["checks"]["r2"] = f"error: {str(e)}"

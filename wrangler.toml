@@ -29,17 +29,14 @@ database_id = "b6cb2eac-2903-46bd-baea-b4ff2dc904d0"
 binding = "MAHLER_KV"
 id = "4e63db1305a1424ead3565522a47b5f4"
 
-# R2 bucket for archival storage
-# Create with: wrangler r2 bucket create mahler-archive
+# Single R2 bucket for all storage (models + archive)
+# Create with: wrangler r2 bucket create mahler-bucket
+# Structure:
+#   - models/regime/latest.json, models/weights/latest.json, models/exit/latest.json
+#   - archive/snapshots/{date}/daily.json, archive/options_chains/..., archive/backups/...
 [[r2_buckets]]
-binding = "ARCHIVE"
-bucket_name = "mahler-archive"
-
-# R2 bucket for pre-computed ML models
-# Create with: wrangler r2 bucket create mahler-models
-[[r2_buckets]]
-binding = "MODELS_BUCKET"
-bucket_name = "mahler-models"
+binding = "MAHLER_BUCKET"
+bucket_name = "mahler-bucket"
 
 # Environment variables (non-secret)
 # CPU time limit (paid plan allows up to 300000ms / 5 minutes)

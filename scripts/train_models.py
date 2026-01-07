@@ -24,7 +24,7 @@ Environment Variables Required:
     R2_ACCESS_KEY_ID - R2 access key ID
     R2_SECRET_ACCESS_KEY - R2 secret access key
     R2_ENDPOINT_URL - R2 endpoint URL (e.g., https://ACCOUNT_ID.r2.cloudflarestorage.com)
-    R2_BUCKET_NAME - R2 bucket name (default: mahler-models)
+    R2_BUCKET_NAME - R2 bucket name (default: mahler-bucket)
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ def upload_to_r2(key: str, data: dict) -> None:
     endpoint_url = os.environ["R2_ENDPOINT_URL"]
     access_key_id = os.environ["R2_ACCESS_KEY_ID"]
     secret_access_key = os.environ["R2_SECRET_ACCESS_KEY"]
-    bucket_name = os.environ.get("R2_BUCKET_NAME", "mahler-models")
+    bucket_name = os.environ.get("R2_BUCKET_NAME", "mahler-bucket")
 
     s3 = boto3.client(
         "s3",

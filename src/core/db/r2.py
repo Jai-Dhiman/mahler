@@ -6,16 +6,27 @@ from typing import Any
 
 
 class R2Client:
-    """Client for Cloudflare R2 object storage (archival)."""
+    """Client for Cloudflare R2 object storage (archival).
+
+    All archive paths are prefixed with 'archive/' to share bucket with models.
+    """
+
+    PREFIX = "archive/"
 
     def __init__(self, r2_binding: Any):
         self.r2 = r2_binding
+
+    def _prefixed(self, key: str) -> str:
+        """Add archive prefix to key."""
+        return f"{self.PREFIX}{key}"
 
     async def put(
         self, key: str, data: bytes, content_type: str = "application/octet-stream"
     ) -> None:
         """Store an object in R2."""
-        await self.r2.put(key, data, {"httpMetadata": {"contentType": content_type}})
+        await self.r2.put(
+            self._prefixed(key), data, {"httpMetadata": {"contentType": content_type}}
+        )
 
     async def put_json(self, key: str, data: dict) -> None:
         """Store JSON data in R2."""
@@ -23,7 +34,7 @@ class R2Client:
 
     async def get(self, key: str) -> bytes | None:
         """Get an object from R2."""
-        obj = await self.r2.get(key)
+        obj = await self.r2.get(self._prefixed(key))
         if obj is None:
             return None
         return await obj.arrayBuffer()
@@ -37,12 +48,15 @@ class R2Client:
 
     async def delete(self, key: str) -> None:
         """Delete an object from R2."""
-        await self.r2.delete(key)
+        await self.r2.delete(self._prefixed(key))
 
     async def list(self, prefix: str = "", limit: int = 1000) -> list[str]:
         """List objects with a prefix."""
-        result = await self.r2.list({"prefix": prefix, "limit": limit})
-        return [obj.key for obj in result.objects]
+        full_prefix = self._prefixed(prefix)
+        result = await self.r2.list({"prefix": full_prefix, "limit": limit})
+        # Strip the archive prefix from returned keys
+        prefix_len = len(self.PREFIX)
+        return [obj.key[prefix_len:] for obj in result.objects]
 
     # Archive helpers
 
@@ -80,19 +94,20 @@ class R2Client:
         positions: list[dict],
         performance: dict,
         account: dict,
+        reconciliation: dict | None = None,
     ) -> str:
         """Archive end-of-day snapshot."""
         key = self._daily_snapshot_key(date)
-        await self.put_json(
-            key,
-            {
-                "date": date,
-                "archived_at": datetime.now().isoformat(),
-                "positions": positions,
-                "performance": performance,
-                "account": account,
-            },
-        )
+        data = {
+            "date": date,
+            "archived_at": datetime.now().isoformat(),
+            "positions": positions,
+            "performance": performance,
+            "account": account,
+        }
+        if reconciliation is not None:
+            data["reconciliation"] = reconciliation
+        await self.put_json(key, data)
         return key
 
     async def get_daily_snapshot(self, date: str) -> dict | None:

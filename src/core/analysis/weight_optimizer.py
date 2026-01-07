@@ -285,7 +285,7 @@ async def create_weight_provider(
 ) -> PrecomputedWeightProvider:
     """Factory to create weight provider from pre-computed parameters.
 
-    In production (MODELS_BUCKET binding exists): Loads optimized weights from R2
+    In production (MAHLER_BUCKET binding exists): Loads optimized weights from R2
     In development: Returns provider with None params (uses defaults)
 
     Args:
@@ -298,7 +298,7 @@ async def create_weight_provider(
     from core.inference.weight_inference import PrecomputedWeightProvider
 
     # Check if we have the models bucket binding (production mode)
-    models_bucket = getattr(env, "MODELS_BUCKET", None)
+    models_bucket = getattr(env, "MAHLER_BUCKET", None)
 
     if models_bucket is None:
         # Development mode: return provider with defaults

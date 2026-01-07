@@ -338,7 +338,7 @@ async def _run_eod_summary(env):
     # Initialize clients
     db = D1Client(env.MAHLER_DB)
     kv = KVClient(env.MAHLER_KV)
-    r2 = R2Client(env.ARCHIVE)
+    r2 = R2Client(env.MAHLER_BUCKET)
 
     alpaca = AlpacaClient(
         api_key=env.ALPACA_API_KEY,

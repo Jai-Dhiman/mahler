@@ -406,7 +406,7 @@ async def create_regime_detector(
 ) -> MarketRegimeDetector | PrecomputedRegimeDetector:
     """Factory to create appropriate regime detector.
 
-    In production (MODELS_BUCKET binding exists): Uses pre-computed parameters
+    In production (MAHLER_BUCKET binding exists): Uses pre-computed parameters
     In development: Uses full sklearn implementation
 
     Args:
@@ -417,7 +417,7 @@ async def create_regime_detector(
         Regime detector instance (MarketRegimeDetector or PrecomputedRegimeDetector)
     """
     # Check if we have the models bucket binding (production mode)
-    models_bucket = getattr(env, "MODELS_BUCKET", None)
+    models_bucket = getattr(env, "MAHLER_BUCKET", None)
 
     if models_bucket is None:
         # Development mode: use full sklearn implementation

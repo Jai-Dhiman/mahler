@@ -342,8 +342,8 @@ binding = "STATE"
 id = "<your-kv-id>"
 
 [[r2_buckets]]
-binding = "ARCHIVE"
-bucket_name = "mahler-archive"
+binding = "MAHLER_BUCKET"
+bucket_name = "mahler-bucket"
 
 [vars]
 ENVIRONMENT = "paper"
