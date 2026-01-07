@@ -431,7 +431,7 @@ async def _run_eod_summary(env):
         [f"{today}%"],
     )
 
-    for row in all_trades_result.results:
+    for row in all_trades_result["results"]:
         trade = db._row_to_trade(row)
         closed_today.append(trade)
 

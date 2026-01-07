@@ -748,6 +748,9 @@ class D1Client:
     ) -> str:
         """Save daily VIX observation.
 
+        Dynamically builds SQL to avoid passing None through FFI (which becomes
+        JavaScript undefined instead of null, causing D1_TYPE_ERROR).
+
         Args:
             date: Date in YYYY-MM-DD format
             vix_close: VIX closing value
@@ -756,17 +759,33 @@ class D1Client:
         vix_id = str(uuid4())
         term_structure_ratio = vix_close / vix3m_close if vix3m_close else None
 
-        await self.run(
-            """
-            INSERT INTO vix_history (id, date, vix_close, vix3m_close, term_structure_ratio)
-            VALUES (?, ?, ?, ?, ?)
+        # Build dynamic SQL to avoid None values (FFI converts None to undefined, not null)
+        # Required columns (never None)
+        columns = ["id", "date", "vix_close"]
+        values = [vix_id, date, vix_close]
+        placeholders = ["?", "?", "?"]
+        update_clauses = ["vix_close = excluded.vix_close"]
+
+        # Optional columns - only include if not None
+        if vix3m_close is not None:
+            columns.append("vix3m_close")
+            values.append(vix3m_close)
+            placeholders.append("?")
+            update_clauses.append("vix3m_close = excluded.vix3m_close")
+
+        if term_structure_ratio is not None:
+            columns.append("term_structure_ratio")
+            values.append(term_structure_ratio)
+            placeholders.append("?")
+            update_clauses.append("term_structure_ratio = excluded.term_structure_ratio")
+
+        query = f"""
+            INSERT INTO vix_history ({', '.join(columns)})
+            VALUES ({', '.join(placeholders)})
             ON CONFLICT(date) DO UPDATE SET
-                vix_close = excluded.vix_close,
-                vix3m_close = excluded.vix3m_close,
-                term_structure_ratio = excluded.term_structure_ratio
-            """,
-            [vix_id, date, vix_close, vix3m_close, term_structure_ratio],
-        )
+                {', '.join(update_clauses)}
+        """
+        await self.run(query, values)
         return vix_id
 
     async def get_latest_vix(self) -> dict | None:
