@@ -86,14 +86,19 @@ class KVClient:
 
     async def get_daily_stats(self, date: str | None = None) -> dict:
         """Get daily trading stats."""
-        data = await self.get_json(self._daily_key(date))
-        return data or {
+        defaults = {
             "trades_count": 0,
             "realized_pnl": 0.0,
             "losses_today": 0.0,
             "last_loss_time": None,
             "rapid_loss_amount": 0.0,
+            "starting_equity": 0.0,
         }
+        data = await self.get_json(self._daily_key(date))
+        if data:
+            # Merge defaults with existing data to handle schema evolution
+            return {**defaults, **data}
+        return defaults
 
     async def update_daily_stats(
         self,
@@ -146,13 +151,17 @@ class KVClient:
 
     async def get_weekly_stats(self, date: datetime | None = None) -> dict:
         """Get weekly trading stats."""
-        data = await self.get_json(self._get_week_key(date))
-        return data or {
+        defaults = {
             "starting_equity": 0.0,
             "trades_count": 0,
             "realized_pnl": 0.0,
             "initialized": False,
         }
+        data = await self.get_json(self._get_week_key(date))
+        if data:
+            # Merge defaults with existing data to handle schema evolution
+            return {**defaults, **data}
+        return defaults
 
     async def initialize_weekly_stats(
         self,

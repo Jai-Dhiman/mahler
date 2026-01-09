@@ -336,11 +336,11 @@ async def _reconcile_pending_orders(db, alpaca, discord, kv):
 
 
 async def _reconcile_pending_exit_orders(db, alpaca, discord, kv):
-    """Reconcile trades that have exit orders placed but weren't closed in DB.
+    """Reconcile trades that have exit orders placed but are still open.
 
-    This handles the case where an exit order was placed but the subsequent
-    database update failed. We check if the exit order filled and close the
-    trade properly.
+    This is the primary mechanism for confirming exit order fills.
+    When _auto_execute_exit places an order, the trade stays open until
+    this function confirms the fill and closes it properly.
     """
     trades_with_exits = await db.get_trades_with_pending_exits()
 
@@ -361,14 +361,22 @@ async def _reconcile_pending_exit_orders(db, alpaca, discord, kv):
                 # For multi-leg orders, filled_avg_price is the net debit/credit
                 exit_debit = abs(order.filled_avg_price) if order.filled_avg_price else 0
 
+                # Get exit metadata stored when order was placed
+                exit_metadata = await kv.get_json(f"exit_metadata:{trade.id}")
+                exit_reason = exit_metadata.get("exit_reason") if exit_metadata else None
+                iv_rank_at_exit = exit_metadata.get("iv_rank_at_exit") if exit_metadata else None
+                dte_at_exit = exit_metadata.get("dte_at_exit") if exit_metadata else None
+
                 # Calculate realized P/L
                 realized_pnl = (trade.entry_credit - exit_debit) * trade.contracts * 100
 
-                # Close the trade
+                # Close the trade with exit analytics
                 await db.close_trade(
                     trade_id=trade.id,
                     exit_debit=exit_debit,
-                    exit_reason="reconciled_exit",
+                    exit_reason=exit_reason,
+                    iv_rank_at_exit=iv_rank_at_exit,
+                    dte_at_exit=dte_at_exit,
                 )
 
                 # Delete position snapshot
@@ -377,22 +385,33 @@ async def _reconcile_pending_exit_orders(db, alpaca, discord, kv):
                 # Update daily stats
                 await kv.update_daily_stats(pnl_delta=realized_pnl)
 
+                # Clean up exit metadata
+                await kv.delete(f"exit_metadata:{trade.id}")
+
                 # Send Discord notification
                 pnl_color = 0x57F287 if realized_pnl > 0 else 0xED4245
                 pnl_emoji = "+" if realized_pnl > 0 else ""
 
+                fields = [
+                    {"name": "Strategy", "value": trade.spread_type.value.replace("_", " ").title(), "inline": True},
+                    {"name": "Strikes", "value": f"${trade.short_strike:.2f}/${trade.long_strike:.2f}", "inline": True},
+                    {"name": "Entry Credit", "value": f"${trade.entry_credit:.2f}", "inline": True},
+                    {"name": "Exit Debit", "value": f"${exit_debit:.2f}", "inline": True},
+                    {"name": "Realized P/L", "value": f"{pnl_emoji}${realized_pnl:.2f}", "inline": True},
+                ]
+                if exit_reason:
+                    fields.insert(0, {"name": "Reason", "value": exit_reason, "inline": False})
+                if dte_at_exit is not None:
+                    fields.append({"name": "DTE", "value": str(dte_at_exit), "inline": True})
+                if iv_rank_at_exit is not None:
+                    fields.append({"name": "IV Rank", "value": f"{iv_rank_at_exit:.0f}", "inline": True})
+
                 await discord.send_message(
-                    content=f"**Position Reconciled: {trade.underlying}**",
+                    content=f"**Position Closed: {trade.underlying}**",
                     embeds=[{
-                        "title": f"Exit Reconciled: {trade.underlying}",
-                        "description": "Exit order filled but DB update had failed. Now reconciled.",
+                        "title": f"Position Closed: {trade.underlying}",
                         "color": pnl_color,
-                        "fields": [
-                            {"name": "Strategy", "value": trade.spread_type.value.replace("_", " ").title(), "inline": True},
-                            {"name": "Entry Credit", "value": f"${trade.entry_credit:.2f}", "inline": True},
-                            {"name": "Exit Debit", "value": f"${exit_debit:.2f}", "inline": True},
-                            {"name": "Realized P/L", "value": f"{pnl_emoji}${realized_pnl:.2f}", "inline": True},
-                        ],
+                        "fields": fields,
                     }],
                 )
 
@@ -400,6 +419,9 @@ async def _reconcile_pending_exit_orders(db, alpaca, discord, kv):
                 # Exit order did not fill - clear the exit order ID so we can try again
                 print(f"Exit order {order.id} {order.status.value} - clearing from trade {trade.id}")
                 await db.clear_exit_order_id(trade.id)
+
+                # Clean up exit metadata
+                await kv.delete(f"exit_metadata:{trade.id}")
 
                 await discord.send_message(
                     content=f"**Exit Order Expired: {trade.underlying}**",
@@ -572,9 +594,9 @@ async def _auto_execute_exit(
 ):
     """Auto-execute an exit when conditions are met.
 
-    Places a closing order and updates the database with exit analytics.
-    Saves exit_order_id immediately after placing order to enable reconciliation
-    if subsequent database operations fail.
+    Places a closing order and saves exit_order_id. The trade remains OPEN
+    until _reconcile_pending_exit_orders confirms the order filled.
+    This prevents mismatches between DB and broker state.
     """
     order = None
     try:
@@ -595,31 +617,26 @@ async def _auto_execute_exit(
 
         print(f"Exit order placed: {order.id}")
 
-        # CRITICAL: Save exit order ID immediately after placement
-        # This enables reconciliation if close_trade fails
+        # Save exit order ID - trade stays OPEN until reconciliation confirms fill
+        # This prevents DB/broker mismatch if the limit order doesn't fill immediately
         await db.set_exit_order_id(trade.id, order.id)
 
-        # Close the trade in database with exit analytics
-        await db.close_trade(
-            trade_id=trade.id,
-            exit_debit=current_value,
-            exit_reason=exit_reason,
-            iv_rank_at_exit=iv_rank,
-            dte_at_exit=dte,
+        # Store exit metadata for reconciliation to use when closing
+        await kv.put_json(
+            f"exit_metadata:{trade.id}",
+            {
+                "exit_reason": exit_reason,
+                "iv_rank_at_exit": iv_rank,
+                "dte_at_exit": dte,
+                "expected_exit_debit": current_value,
+            },
+            expiration_ttl=7 * 24 * 3600,
         )
 
-        # Delete position snapshot
-        await db.delete_position(trade.id)
-
-        # Calculate realized P/L
-        realized_pnl = (trade.entry_credit - current_value) * trade.contracts * 100
-
-        # Update daily stats
-        await kv.update_daily_stats(pnl_delta=realized_pnl)
-
-        # Send Discord notification with exit analytics
-        pnl_color = 0x57F287 if realized_pnl > 0 else 0xED4245  # Green or Red
-        pnl_emoji = "+" if realized_pnl > 0 else ""
+        # Calculate expected P/L for notification
+        expected_pnl = (trade.entry_credit - current_value) * trade.contracts * 100
+        pnl_color = 0xF59E0B  # Amber for pending
+        pnl_emoji = "+" if expected_pnl > 0 else ""
 
         # Build fields with optional IV rank
         fields = [
@@ -628,22 +645,23 @@ async def _auto_execute_exit(
             {"name": "Strikes", "value": f"${trade.short_strike:.2f}/${trade.long_strike:.2f}", "inline": True},
             {"name": "DTE", "value": str(dte), "inline": True},
             {"name": "Entry Credit", "value": f"${trade.entry_credit:.2f}", "inline": True},
-            {"name": "Exit Debit", "value": f"${current_value:.2f}", "inline": True},
-            {"name": "Realized P/L", "value": f"{pnl_emoji}${realized_pnl:.2f}", "inline": True},
+            {"name": "Limit Price", "value": f"${current_value:.2f}", "inline": True},
+            {"name": "Expected P/L", "value": f"{pnl_emoji}${expected_pnl:.2f}", "inline": True},
         ]
         if iv_rank is not None:
             fields.append({"name": "IV Rank", "value": f"{iv_rank:.0f}", "inline": True})
 
         await discord.send_message(
-            content=f"**Position Closed: {trade.underlying}** - {exit_reason}",
+            content=f"**Exit Order Placed: {trade.underlying}** - {exit_reason}",
             embeds=[{
-                "title": f"Position Closed: {trade.underlying}",
+                "title": f"Exit Order Placed: {trade.underlying}",
+                "description": "Order placed. Will confirm when filled.",
                 "color": pnl_color,
                 "fields": fields,
             }],
         )
 
-        print(f"Exit complete for {trade.underlying}: P/L ${realized_pnl:.2f}")
+        print(f"Exit order placed for {trade.underlying}, awaiting fill confirmation")
 
     except Exception as e:
         print(f"Error auto-executing exit for {trade.id}: {e}")
