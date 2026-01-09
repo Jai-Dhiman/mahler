@@ -122,8 +122,13 @@ async def _run_position_monitor(env):
     # Process each open trade
     for trade in open_trades:
         try:
-            # Get current prices
-            chain = await alpaca.get_options_chain(trade.underlying)
+            # Get current prices - include the trade's expiration in the date range
+            # so we can find contracts even when DTE < 25 (the default start)
+            chain = await alpaca.get_options_chain(
+                trade.underlying,
+                expiration_start=trade.expiration,
+                expiration_end=trade.expiration,
+            )
 
             # Find our contracts
             exp_parts = trade.expiration.split("-")
