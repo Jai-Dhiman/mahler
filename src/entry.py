@@ -1,19 +1,42 @@
 """Main entry point for Cloudflare Workers.
 
 Routes incoming requests (HTTP and cron) to appropriate handlers.
+
+NOTE: Handler imports are lazy to avoid exceeding Cloudflare's startup CPU limit.
+Heavy imports (numpy, etc.) are only loaded when handlers are actually invoked.
 """
 
 from datetime import datetime
 
 from workers import Response
 
-from handlers.afternoon_scan import handle_afternoon_scan
-from handlers.discord_webhook import handle_discord_webhook
-from handlers.eod_summary import handle_eod_summary
-from handlers.health import handle_health
-from handlers.midday_check import handle_midday_check
-from handlers.morning_scan import handle_morning_scan
-from handlers.position_monitor import handle_position_monitor
+
+# Lazy import helper to defer heavy module loading until needed
+def _import_handler(name: str):
+    """Import a handler function lazily."""
+    if name == "morning_scan":
+        from handlers.morning_scan import handle_morning_scan
+        return handle_morning_scan
+    elif name == "midday_check":
+        from handlers.midday_check import handle_midday_check
+        return handle_midday_check
+    elif name == "afternoon_scan":
+        from handlers.afternoon_scan import handle_afternoon_scan
+        return handle_afternoon_scan
+    elif name == "eod_summary":
+        from handlers.eod_summary import handle_eod_summary
+        return handle_eod_summary
+    elif name == "position_monitor":
+        from handlers.position_monitor import handle_position_monitor
+        return handle_position_monitor
+    elif name == "discord_webhook":
+        from handlers.discord_webhook import handle_discord_webhook
+        return handle_discord_webhook
+    elif name == "health":
+        from handlers.health import handle_health
+        return handle_health
+    else:
+        raise ValueError(f"Unknown handler: {name}")
 
 
 async def on_fetch(request, env):
@@ -26,11 +49,13 @@ async def on_fetch(request, env):
     try:
         # Health check
         if "/health" in url:
-            return await handle_health(request, env)
+            handler = _import_handler("health")
+            return await handler(request, env)
 
         # Discord webhook - handle both /discord and root POST (Discord sometimes ignores path)
         if method == "POST" and ("/discord" in url or url.rstrip("/").endswith(".workers.dev")):
-            return await handle_discord_webhook(request, env)
+            handler = _import_handler("discord_webhook")
+            return await handler(request, env)
 
         # Test endpoints (for development only)
         if "/test/alpaca" in url:
@@ -59,9 +84,42 @@ async def on_fetch(request, env):
             )
 
         if "/test/scan" in url and "/test/debug-scan" not in url:
-            await handle_morning_scan(env)
+            handler = _import_handler("morning_scan")
+            await handler(env)
             return Response(
                 '{"status": "ok", "message": "Morning scan completed"}',
+                headers={"Content-Type": "application/json"},
+            )
+
+        if "/test/position-monitor" in url:
+            handler = _import_handler("position_monitor")
+            await handler(env)
+            return Response(
+                '{"status": "ok", "message": "Position monitor completed"}',
+                headers={"Content-Type": "application/json"},
+            )
+
+        if "/test/midday" in url:
+            handler = _import_handler("midday_check")
+            await handler(env)
+            return Response(
+                '{"status": "ok", "message": "Midday check completed"}',
+                headers={"Content-Type": "application/json"},
+            )
+
+        if "/test/afternoon" in url:
+            handler = _import_handler("afternoon_scan")
+            await handler(env)
+            return Response(
+                '{"status": "ok", "message": "Afternoon scan completed"}',
+                headers={"Content-Type": "application/json"},
+            )
+
+        if "/test/eod" in url:
+            handler = _import_handler("eod_summary")
+            await handler(env)
+            return Response(
+                '{"status": "ok", "message": "EOD summary completed"}',
                 headers={"Content-Type": "application/json"},
             )
 
@@ -308,17 +366,22 @@ async def on_scheduled(event, env, ctx):
     try:
         print(f"Cron triggered: {cron} at {datetime.now().isoformat()}")
 
-        # Route based on cron pattern
+        # Route based on cron pattern (using lazy imports to avoid startup CPU limit)
         if cron == "0 15 * * MON-FRI":  # 10:00 AM ET (moved from 9:35 AM to avoid stale quotes)
-            await handle_morning_scan(env)
+            handler = _import_handler("morning_scan")
+            await handler(env)
         elif cron == "0 17 * * MON-FRI":
-            await handle_midday_check(env)
+            handler = _import_handler("midday_check")
+            await handler(env)
         elif cron == "30 20 * * MON-FRI":
-            await handle_afternoon_scan(env)
+            handler = _import_handler("afternoon_scan")
+            await handler(env)
         elif cron == "15 21 * * MON-FRI":
-            await handle_eod_summary(env)
+            handler = _import_handler("eod_summary")
+            await handler(env)
         elif "*/5" in cron:
-            await handle_position_monitor(env)
+            handler = _import_handler("position_monitor")
+            await handler(env)
         else:
             print(f"Unknown cron pattern: {cron}")
 

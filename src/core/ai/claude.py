@@ -105,6 +105,7 @@ class ClaudeClient:
         iv_rank: float,
         current_iv: float,
         playbook_rules: list[PlaybookRule],
+        additional_context: list[str] | None = None,
     ) -> TradeAnalysis:
         """Analyze a potential credit spread trade."""
         # Calculate DTE
@@ -124,6 +125,11 @@ class ClaudeClient:
         if spread.long_contract.greeks:
             long_delta = spread.long_contract.greeks.delta or 0
 
+        # Build additional context section if provided
+        context_text = ""
+        if additional_context:
+            context_text = "\n\nAdditional IV Analysis:\n" + "\n".join(f"- {ctx}" for ctx in additional_context)
+
         prompt = TRADE_ANALYSIS_USER.format(
             underlying=spread.underlying,
             underlying_price=underlying_price,
@@ -141,6 +147,10 @@ class ClaudeClient:
             current_iv=current_iv,
             playbook_rules=rules_text or "No rules loaded",
         )
+
+        # Append additional context to prompt
+        if context_text:
+            prompt += context_text
 
         response = await self._request(
             [{"role": "user", "content": prompt}],
