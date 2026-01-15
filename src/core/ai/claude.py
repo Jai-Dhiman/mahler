@@ -24,6 +24,12 @@ class ClaudeError(Exception):
     pass
 
 
+class ClaudeRateLimitError(ClaudeError):
+    """Claude API rate limit or token exhaustion error."""
+
+    pass
+
+
 @dataclass
 class TradeAnalysis:
     """Result of AI trade analysis."""
@@ -85,7 +91,22 @@ class ClaudeClient:
 
             return content[0].get("text", "")
         except Exception as e:
-            raise ClaudeError(f"Claude API error: {str(e)}")
+            error_str = str(e)
+            # Check for rate limit / token exhaustion errors
+            if any(
+                indicator in error_str.lower()
+                for indicator in [
+                    "http 429",
+                    "rate_limit",
+                    "rate limit",
+                    "overloaded",
+                    "credit balance",
+                    "insufficient_quota",
+                    "billing",
+                ]
+            ):
+                raise ClaudeRateLimitError(f"Claude API rate limit/token error: {error_str}")
+            raise ClaudeError(f"Claude API error: {error_str}")
 
     def _parse_json_response(self, text: str) -> dict:
         """Parse JSON from Claude response, handling markdown code blocks."""

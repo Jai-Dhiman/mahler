@@ -395,6 +395,23 @@ class DiscordClient:
             embeds=[embed],
         )
 
+    async def send_api_token_alert(self, service: str, error_message: str) -> str:
+        """Send alert when API tokens are exhausted or rate limited."""
+        embed = {
+            "title": f"{service} API Token Alert",
+            "color": 0xED4245,  # Red
+            "description": f"**Error:** {error_message}\n\nPlease add more API credits or wait for rate limits to reset.",
+            "fields": [
+                {"name": "Service", "value": service, "inline": True},
+                {"name": "Action Required", "value": "Add API credits", "inline": True},
+            ],
+        }
+
+        return await self.send_message(
+            content=f"**API TOKEN ALERT: {service}**",
+            embeds=[embed],
+        )
+
     # Order updates
 
     async def send_order_filled(self, trade: Trade, filled_price: float) -> str:

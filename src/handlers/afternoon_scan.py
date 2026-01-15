@@ -7,7 +7,7 @@ probability setups with excellent IV conditions.
 from datetime import datetime, timedelta
 
 from core import http
-from core.ai.claude import ClaudeClient
+from core.ai.claude import ClaudeClient, ClaudeRateLimitError
 from core.analysis.iv_rank import calculate_iv_metrics
 from core.analysis.screener import OptionsScreener, ScreenerConfig
 from core.broker.alpaca import AlpacaClient
@@ -171,6 +171,9 @@ async def _run_afternoon_scan(env):
 
                     print(f"Sent afternoon recommendation: {rec_id}")
 
+            except ClaudeRateLimitError as e:
+                print(f"Claude API rate limit error: {e}")
+                await discord.send_api_token_alert("Claude", str(e))
             except Exception as e:
                 print(f"Error processing opportunity: {e}")
 

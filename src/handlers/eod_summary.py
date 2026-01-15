@@ -11,7 +11,7 @@ Generates daily summary with:
 from datetime import datetime
 
 from core import http
-from core.ai.claude import ClaudeClient
+from core.ai.claude import ClaudeClient, ClaudeRateLimitError
 from core.broker.alpaca import AlpacaClient
 from core.db.d1 import D1Client
 from core.db.kv import KVClient
@@ -459,6 +459,9 @@ async def _run_eod_summary(env):
 
             print(f"Generated reflection for trade {trade.id}")
 
+        except ClaudeRateLimitError as e:
+            print(f"Claude API rate limit error: {e}")
+            await discord.send_api_token_alert("Claude", str(e))
         except Exception as e:
             print(f"Error generating reflection: {e}")
 
@@ -483,6 +486,9 @@ async def _run_eod_summary(env):
                     )
                     print(f"Added playbook rule: {new_rule['rule']}")
 
+        except ClaudeRateLimitError as e:
+            print(f"Claude API rate limit error: {e}")
+            await discord.send_api_token_alert("Claude", str(e))
         except Exception as e:
             print(f"Error updating playbook: {e}")
 

@@ -10,7 +10,7 @@ when spreads are wide and quotes are stale.
 from datetime import datetime, timedelta
 
 from core import http
-from core.ai.claude import ClaudeClient
+from core.ai.claude import ClaudeClient, ClaudeRateLimitError
 from core.analysis.iv_rank import (
     IVMeanReversion,
     IVTermStructure,
@@ -568,6 +568,10 @@ async def _run_morning_scan(env):
                 except Exception as e:
                     print(f"Error auto-approving trade: {e}")
 
+        except ClaudeRateLimitError as e:
+            print(f"Claude API rate limit error: {e}")
+            await discord.send_api_token_alert("Claude", str(e))
+            # Continue processing other opportunities
         except Exception as e:
             import traceback
             print(f"Error processing opportunity: {e}")
