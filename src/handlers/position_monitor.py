@@ -263,6 +263,10 @@ async def _reconcile_pending_orders(db, alpaca, discord, kv):
                 # Update daily stats now that we have a confirmed fill
                 await kv.update_daily_stats(trades_delta=1)
 
+                # Update D1 daily performance for accurate daily summaries
+                today = datetime.now().strftime("%Y-%m-%d")
+                await db.update_daily_performance(today, trades_opened_delta=1)
+
                 # Send Discord notification
                 await discord.send_message(
                     content=f"**Trade Filled: {trade.underlying}**",
@@ -382,8 +386,20 @@ async def _reconcile_pending_exit_orders(db, alpaca, discord, kv):
                 # Delete position snapshot
                 await db.delete_position(trade.id)
 
-                # Update daily stats
+                # Update daily stats (KV)
                 await kv.update_daily_stats(pnl_delta=realized_pnl)
+
+                # Update D1 daily performance for accurate daily summaries
+                today = datetime.now().strftime("%Y-%m-%d")
+                win_delta = 1 if realized_pnl > 0 else 0
+                loss_delta = 1 if realized_pnl < 0 else 0
+                await db.update_daily_performance(
+                    today,
+                    realized_pnl_delta=realized_pnl,
+                    trades_closed_delta=1,
+                    win_delta=win_delta,
+                    loss_delta=loss_delta,
+                )
 
                 # Clean up exit metadata
                 await kv.delete(f"exit_metadata:{trade.id}")

@@ -33,13 +33,24 @@ async def handle_health(request, env):
         status["checks"]["kv"] = f"error: {str(e)}"
         status["status"] = "degraded"
 
-    # # Check R2 connectivity
-    # try:
-    #     await env.MAHLER_BUCKET.list({"limit": 1})
-    #     status["checks"]["r2"] = "ok"
-    # except Exception as e:
-    #     status["checks"]["r2"] = f"error: {str(e)}"
-    #     status["status"] = "degraded"
+    # Check Alpaca API connectivity
+    try:
+        from core.broker.alpaca import AlpacaClient
+        alpaca = AlpacaClient(
+            api_key=env.ALPACA_API_KEY,
+            secret_key=env.ALPACA_SECRET_KEY,
+            paper=(env.ENVIRONMENT == "paper"),
+        )
+        account = await alpaca.get_account()
+        status["checks"]["alpaca"] = "ok"
+        status["alpaca_account"] = {
+            "equity": account.equity,
+            "cash": account.cash,
+            "status": account.status,
+        }
+    except Exception as e:
+        status["checks"]["alpaca"] = f"error: {str(e)}"
+        status["status"] = "degraded"
 
     return Response(
         __import__("json").dumps(status),

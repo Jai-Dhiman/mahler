@@ -34,13 +34,19 @@ async def reconcile_positions(
     # Get broker option positions
     broker_positions = await alpaca.get_option_positions()
 
+    # Helper to normalize strike for consistent key format
+    # Both Alpaca (float from division) and DB (could be int or float) must match
+    def normalize_strike(strike):
+        """Normalize strike to consistent format (e.g., 645.0 -> '645.0')."""
+        return f"{float(strike)}"
+
     # Build lookup of broker positions by parsed components
     broker_lookup = {}
     broker_positions_list = []
     for bp in broker_positions:
         parsed = alpaca.parse_occ_symbol(bp.symbol)
         if parsed:
-            key = f"{parsed['underlying']}:{parsed['expiration']}:{parsed['strike']}"
+            key = f"{parsed['underlying']}:{parsed['expiration']}:{normalize_strike(parsed['strike'])}"
             broker_lookup[key] = {
                 "symbol": bp.symbol,
                 "qty": bp.qty,
@@ -58,7 +64,7 @@ async def reconcile_positions(
     for dp in db_positions:
         # For spreads, we have both short and long strikes
         # Check short strike
-        short_key = f"{dp.underlying}:{dp.expiration}:{dp.short_strike}"
+        short_key = f"{dp.underlying}:{dp.expiration}:{normalize_strike(dp.short_strike)}"
         db_lookup[short_key] = {
             "trade_id": dp.trade_id,
             "underlying": dp.underlying,
@@ -69,7 +75,7 @@ async def reconcile_positions(
         }
 
         # Check long strike
-        long_key = f"{dp.underlying}:{dp.expiration}:{dp.long_strike}"
+        long_key = f"{dp.underlying}:{dp.expiration}:{normalize_strike(dp.long_strike)}"
         db_lookup[long_key] = {
             "trade_id": dp.trade_id,
             "underlying": dp.underlying,
