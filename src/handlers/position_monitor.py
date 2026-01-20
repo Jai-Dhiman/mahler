@@ -106,7 +106,9 @@ async def _run_position_monitor(env):
 
     # Log risk state
     if risk_state.level != RiskLevel.NORMAL:
-        print(f"Risk level: {risk_state.level.value}, size multiplier: {risk_state.size_multiplier}")
+        print(
+            f"Risk level: {risk_state.level.value}, size multiplier: {risk_state.size_multiplier}"
+        )
         if risk_state.reason:
             print(f"Reason: {risk_state.reason}")
 
@@ -169,7 +171,9 @@ async def _run_position_monitor(env):
             # Extract current IV from contracts (average of short and long)
             current_iv = None
             if short_contract.implied_volatility and long_contract.implied_volatility:
-                current_iv = (short_contract.implied_volatility + long_contract.implied_volatility) / 2
+                current_iv = (
+                    short_contract.implied_volatility + long_contract.implied_volatility
+                ) / 2
             elif short_contract.implied_volatility:
                 current_iv = short_contract.implied_volatility
             elif long_contract.implied_volatility:
@@ -191,7 +195,9 @@ async def _run_position_monitor(env):
             )
 
             if should_exit:
-                print(f"Exit triggered for {trade.underlying}: {exit_reason} (IV rank={iv_rank}, DTE={dte})")
+                print(
+                    f"Exit triggered for {trade.underlying}: {exit_reason} (IV rank={iv_rank}, DTE={dte})"
+                )
 
                 # Check if auto-execute is enabled
                 auto_execute = getattr(env, "AUTO_APPROVE_TRADES", "false").lower() == "true"
@@ -270,17 +276,35 @@ async def _reconcile_pending_orders(db, alpaca, discord, kv):
                 # Send Discord notification
                 await discord.send_message(
                     content=f"**Trade Filled: {trade.underlying}**",
-                    embeds=[{
-                        "title": f"Order Filled: {trade.underlying}",
-                        "description": "Your order has been filled and position is now active.",
-                        "color": 0x57F287,  # Green
-                        "fields": [
-                            {"name": "Strategy", "value": trade.spread_type.value.replace("_", " ").title(), "inline": True},
-                            {"name": "Strikes", "value": f"${trade.short_strike:.2f}/${trade.long_strike:.2f}", "inline": True},
-                            {"name": "Credit", "value": f"${trade.entry_credit:.2f}", "inline": True},
-                            {"name": "Contracts", "value": str(trade.contracts), "inline": True},
-                        ],
-                    }],
+                    embeds=[
+                        {
+                            "title": f"Order Filled: {trade.underlying}",
+                            "description": "Your order has been filled and position is now active.",
+                            "color": 0x57F287,  # Green
+                            "fields": [
+                                {
+                                    "name": "Strategy",
+                                    "value": trade.spread_type.value.replace("_", " ").title(),
+                                    "inline": True,
+                                },
+                                {
+                                    "name": "Strikes",
+                                    "value": f"${trade.short_strike:.2f}/${trade.long_strike:.2f}",
+                                    "inline": True,
+                                },
+                                {
+                                    "name": "Credit",
+                                    "value": f"${trade.entry_credit:.2f}",
+                                    "inline": True,
+                                },
+                                {
+                                    "name": "Contracts",
+                                    "value": str(trade.contracts),
+                                    "inline": True,
+                                },
+                            ],
+                        }
+                    ],
                 )
 
             elif order.status in [OrderStatus.EXPIRED, OrderStatus.CANCELLED, OrderStatus.REJECTED]:
@@ -290,9 +314,19 @@ async def _reconcile_pending_orders(db, alpaca, discord, kv):
 
                 # Get adjustment data before cleaning up (to show final price)
                 adjustment_data = await kv.get_json(f"order_adjustment:{trade.id}")
-                final_price = adjustment_data.get("current_price", trade.entry_credit) if adjustment_data else trade.entry_credit
-                original_price = adjustment_data.get("original_price", trade.entry_credit) if adjustment_data else trade.entry_credit
-                adjustments_made = adjustment_data.get("adjustments_made", 0) if adjustment_data else 0
+                final_price = (
+                    adjustment_data.get("current_price", trade.entry_credit)
+                    if adjustment_data
+                    else trade.entry_credit
+                )
+                original_price = (
+                    adjustment_data.get("original_price", trade.entry_credit)
+                    if adjustment_data
+                    else trade.entry_credit
+                )
+                adjustments_made = (
+                    adjustment_data.get("adjustments_made", 0) if adjustment_data else 0
+                )
 
                 # Clean up adjustment tracking (keyed by trade.id)
                 await kv.delete(f"order_adjustment:{trade.id}")
@@ -302,26 +336,48 @@ async def _reconcile_pending_orders(db, alpaca, discord, kv):
 
                 # Build fields for Discord notification
                 fields = [
-                    {"name": "Strategy", "value": trade.spread_type.value.replace("_", " ").title(), "inline": True},
-                    {"name": "Strikes", "value": f"${trade.short_strike:.2f}/${trade.long_strike:.2f}", "inline": True},
+                    {
+                        "name": "Strategy",
+                        "value": trade.spread_type.value.replace("_", " ").title(),
+                        "inline": True,
+                    },
+                    {
+                        "name": "Strikes",
+                        "value": f"${trade.short_strike:.2f}/${trade.long_strike:.2f}",
+                        "inline": True,
+                    },
                     {"name": "Final Price", "value": f"${final_price:.2f}", "inline": True},
                 ]
                 if adjustments_made > 0:
-                    fields.append({"name": "Original Price", "value": f"${original_price:.2f}", "inline": True})
-                    fields.append({"name": "Adjustments", "value": str(adjustments_made), "inline": True})
+                    fields.append(
+                        {
+                            "name": "Original Price",
+                            "value": f"${original_price:.2f}",
+                            "inline": True,
+                        }
+                    )
+                    fields.append(
+                        {"name": "Adjustments", "value": str(adjustments_made), "inline": True}
+                    )
 
                 # Send Discord notification
                 await discord.send_message(
                     content=f"**Order Expired: {trade.underlying}**",
-                    embeds=[{
-                        "title": f"Order {order.status.value.title()}: {trade.underlying}",
-                        "description": "The limit order did not fill before expiration.",
-                        "color": 0xED4245,  # Red
-                        "fields": fields,
-                    }],
+                    embeds=[
+                        {
+                            "title": f"Order {order.status.value.title()}: {trade.underlying}",
+                            "description": "The limit order did not fill before expiration.",
+                            "color": 0xED4245,  # Red
+                            "fields": fields,
+                        }
+                    ],
                 )
 
-            elif order.status in [OrderStatus.NEW, OrderStatus.ACCEPTED, OrderStatus.PARTIALLY_FILLED]:
+            elif order.status in [
+                OrderStatus.NEW,
+                OrderStatus.ACCEPTED,
+                OrderStatus.PARTIALLY_FILLED,
+            ]:
                 # Order still pending - check if we should adjust price
                 await _maybe_adjust_order_price(
                     trade=trade,
@@ -409,31 +465,49 @@ async def _reconcile_pending_exit_orders(db, alpaca, discord, kv):
                 pnl_emoji = "+" if realized_pnl > 0 else ""
 
                 fields = [
-                    {"name": "Strategy", "value": trade.spread_type.value.replace("_", " ").title(), "inline": True},
-                    {"name": "Strikes", "value": f"${trade.short_strike:.2f}/${trade.long_strike:.2f}", "inline": True},
+                    {
+                        "name": "Strategy",
+                        "value": trade.spread_type.value.replace("_", " ").title(),
+                        "inline": True,
+                    },
+                    {
+                        "name": "Strikes",
+                        "value": f"${trade.short_strike:.2f}/${trade.long_strike:.2f}",
+                        "inline": True,
+                    },
                     {"name": "Entry Credit", "value": f"${trade.entry_credit:.2f}", "inline": True},
                     {"name": "Exit Debit", "value": f"${exit_debit:.2f}", "inline": True},
-                    {"name": "Realized P/L", "value": f"{pnl_emoji}${realized_pnl:.2f}", "inline": True},
+                    {
+                        "name": "Realized P/L",
+                        "value": f"{pnl_emoji}${realized_pnl:.2f}",
+                        "inline": True,
+                    },
                 ]
                 if exit_reason:
                     fields.insert(0, {"name": "Reason", "value": exit_reason, "inline": False})
                 if dte_at_exit is not None:
                     fields.append({"name": "DTE", "value": str(dte_at_exit), "inline": True})
                 if iv_rank_at_exit is not None:
-                    fields.append({"name": "IV Rank", "value": f"{iv_rank_at_exit:.0f}", "inline": True})
+                    fields.append(
+                        {"name": "IV Rank", "value": f"{iv_rank_at_exit:.0f}", "inline": True}
+                    )
 
                 await discord.send_message(
                     content=f"**Position Closed: {trade.underlying}**",
-                    embeds=[{
-                        "title": f"Position Closed: {trade.underlying}",
-                        "color": pnl_color,
-                        "fields": fields,
-                    }],
+                    embeds=[
+                        {
+                            "title": f"Position Closed: {trade.underlying}",
+                            "color": pnl_color,
+                            "fields": fields,
+                        }
+                    ],
                 )
 
             elif order.status in [OrderStatus.EXPIRED, OrderStatus.CANCELLED, OrderStatus.REJECTED]:
                 # Exit order did not fill - clear the exit order ID so we can try again
-                print(f"Exit order {order.id} {order.status.value} - clearing from trade {trade.id}")
+                print(
+                    f"Exit order {order.id} {order.status.value} - clearing from trade {trade.id}"
+                )
                 await db.clear_exit_order_id(trade.id)
 
                 # Clean up exit metadata
@@ -441,19 +515,27 @@ async def _reconcile_pending_exit_orders(db, alpaca, discord, kv):
 
                 await discord.send_message(
                     content=f"**Exit Order Expired: {trade.underlying}**",
-                    embeds=[{
-                        "title": f"Exit Order {order.status.value.title()}: {trade.underlying}",
-                        "description": "The exit order did not fill. Will retry on next trigger.",
-                        "color": 0xF59E0B,  # Amber
-                        "fields": [
-                            {"name": "Trade ID", "value": trade.id, "inline": True},
-                        ],
-                    }],
+                    embeds=[
+                        {
+                            "title": f"Exit Order {order.status.value.title()}: {trade.underlying}",
+                            "description": "The exit order did not fill. Will retry on next trigger.",
+                            "color": 0xF59E0B,  # Amber
+                            "fields": [
+                                {"name": "Trade ID", "value": trade.id, "inline": True},
+                            ],
+                        }
+                    ],
                 )
 
-            elif order.status in [OrderStatus.NEW, OrderStatus.ACCEPTED, OrderStatus.PARTIALLY_FILLED]:
+            elif order.status in [
+                OrderStatus.NEW,
+                OrderStatus.ACCEPTED,
+                OrderStatus.PARTIALLY_FILLED,
+            ]:
                 # Exit order still pending - nothing to do
-                print(f"Exit order {order.id} still pending ({order.status.value}) for trade {trade.id}")
+                print(
+                    f"Exit order {order.id} still pending ({order.status.value}) for trade {trade.id}"
+                )
 
             else:
                 print(f"Exit order {order.id} in unexpected status: {order.status.value}")
@@ -467,7 +549,7 @@ async def _reconcile_pending_exit_orders(db, alpaca, discord, kv):
 # For credit spreads, we adjust by accepting less credit (worse for us, better fill chance)
 # More aggressive schedule to improve fill rates - position_monitor runs every 5 min
 PRICE_ADJUSTMENT_SCHEDULE = [
-    (5, 0.03),   # After 5 min: adjust 3 cents (total 3 cents)
+    (5, 0.03),  # After 5 min: adjust 3 cents (total 3 cents)
     (10, 0.04),  # After 10 min: adjust 4 more cents (total 7 cents)
     (15, 0.05),  # After 15 min: adjust 5 more cents (total 12 cents)
     (20, 0.05),  # After 20 min: adjust 5 more cents (total 17 cents)
@@ -522,7 +604,9 @@ async def _maybe_adjust_order_price(trade, order, alpaca, db, discord, kv):
 
     if target_adjustments <= adjustments_made:
         # No new adjustment needed yet
-        print(f"Order {order.id[:8]}... no adjustment needed (made {adjustments_made}, target {target_adjustments})")
+        print(
+            f"Order {order.id[:8]}... no adjustment needed (made {adjustments_made}, target {target_adjustments})"
+        )
         return
 
     # Calculate the new price
@@ -541,7 +625,9 @@ async def _maybe_adjust_order_price(trade, order, alpaca, db, discord, kv):
 
     if new_credit >= current_price:
         # Price would be same or worse, skip
-        print(f"Order {order.id[:8]}... calculated price ${new_credit:.2f} not better than current ${current_price:.2f}")
+        print(
+            f"Order {order.id[:8]}... calculated price ${new_credit:.2f} not better than current ${current_price:.2f}"
+        )
         return
 
     # Adjust the order price
@@ -549,7 +635,9 @@ async def _maybe_adjust_order_price(trade, order, alpaca, db, discord, kv):
         # For Alpaca multi-leg orders, limit_price is negative for credits
         new_limit_price = -abs(new_credit)
 
-        print(f"Adjusting order {order.id[:8]}... from ${current_price:.2f} to ${new_credit:.2f} credit")
+        print(
+            f"Adjusting order {order.id[:8]}... from ${current_price:.2f} to ${new_credit:.2f} credit"
+        )
 
         new_order = await alpaca.replace_order(
             order_id=order.id,
@@ -572,22 +660,42 @@ async def _maybe_adjust_order_price(trade, order, alpaca, db, discord, kv):
         # Send Discord notification about the adjustment
         await discord.send_message(
             content=f"**Order Price Adjusted: {trade.underlying}**",
-            embeds=[{
-                "title": f"Price Adjusted: {trade.underlying}",
-                "description": f"Order unfilled after {int(order_age_minutes)} min - adjusted price to improve fill chance.",
-                "color": 0xF59E0B,  # Amber/warning color
-                "fields": [
-                    {"name": "Strategy", "value": trade.spread_type.value.replace("_", " ").title(), "inline": True},
-                    {"name": "Strikes", "value": f"${trade.short_strike:.2f}/${trade.long_strike:.2f}", "inline": True},
-                    {"name": "Original Credit", "value": f"${original_price:.2f}", "inline": True},
-                    {"name": "New Credit", "value": f"${new_credit:.2f}", "inline": True},
-                    {"name": "Adjustment", "value": f"-${original_price - new_credit:.2f}", "inline": True},
-                    {"name": "Adjustment #", "value": str(target_adjustments), "inline": True},
-                ],
-            }],
+            embeds=[
+                {
+                    "title": f"Price Adjusted: {trade.underlying}",
+                    "description": f"Order unfilled after {int(order_age_minutes)} min - adjusted price to improve fill chance.",
+                    "color": 0xF59E0B,  # Amber/warning color
+                    "fields": [
+                        {
+                            "name": "Strategy",
+                            "value": trade.spread_type.value.replace("_", " ").title(),
+                            "inline": True,
+                        },
+                        {
+                            "name": "Strikes",
+                            "value": f"${trade.short_strike:.2f}/${trade.long_strike:.2f}",
+                            "inline": True,
+                        },
+                        {
+                            "name": "Original Credit",
+                            "value": f"${original_price:.2f}",
+                            "inline": True,
+                        },
+                        {"name": "New Credit", "value": f"${new_credit:.2f}", "inline": True},
+                        {
+                            "name": "Adjustment",
+                            "value": f"-${original_price - new_credit:.2f}",
+                            "inline": True,
+                        },
+                        {"name": "Adjustment #", "value": str(target_adjustments), "inline": True},
+                    ],
+                }
+            ],
         )
 
-        print(f"Order {order.id[:8]}... price adjusted successfully. New order: {new_order.id[:8]}...")
+        print(
+            f"Order {order.id[:8]}... price adjusted successfully. New order: {new_order.id[:8]}..."
+        )
 
     except Exception as e:
         print(f"Error adjusting order {order.id}: {e}")
@@ -657,8 +765,16 @@ async def _auto_execute_exit(
         # Build fields with optional IV rank
         fields = [
             {"name": "Reason", "value": exit_reason, "inline": False},
-            {"name": "Strategy", "value": trade.spread_type.value.replace("_", " ").title(), "inline": True},
-            {"name": "Strikes", "value": f"${trade.short_strike:.2f}/${trade.long_strike:.2f}", "inline": True},
+            {
+                "name": "Strategy",
+                "value": trade.spread_type.value.replace("_", " ").title(),
+                "inline": True,
+            },
+            {
+                "name": "Strikes",
+                "value": f"${trade.short_strike:.2f}/${trade.long_strike:.2f}",
+                "inline": True,
+            },
             {"name": "DTE", "value": str(dte), "inline": True},
             {"name": "Entry Credit", "value": f"${trade.entry_credit:.2f}", "inline": True},
             {"name": "Limit Price", "value": f"${current_value:.2f}", "inline": True},
@@ -669,12 +785,14 @@ async def _auto_execute_exit(
 
         await discord.send_message(
             content=f"**Exit Order Placed: {trade.underlying}** - {exit_reason}",
-            embeds=[{
-                "title": f"Exit Order Placed: {trade.underlying}",
-                "description": "Order placed. Will confirm when filled.",
-                "color": pnl_color,
-                "fields": fields,
-            }],
+            embeds=[
+                {
+                    "title": f"Exit Order Placed: {trade.underlying}",
+                    "description": "Order placed. Will confirm when filled.",
+                    "color": pnl_color,
+                    "fields": fields,
+                }
+            ],
         )
 
         print(f"Exit order placed for {trade.underlying}, awaiting fill confirmation")
@@ -689,13 +807,15 @@ async def _auto_execute_exit(
         # Send error notification
         await discord.send_message(
             content=f"**Exit Error: {trade.underlying}**",
-            embeds=[{
-                "title": f"Exit Failed: {trade.underlying}",
-                "color": 0xED4245,
-                "description": error_desc,
-                "fields": [
-                    {"name": "Reason", "value": exit_reason, "inline": False},
-                    {"name": "Trade ID", "value": trade.id, "inline": True},
-                ],
-            }],
+            embeds=[
+                {
+                    "title": f"Exit Failed: {trade.underlying}",
+                    "color": 0xED4245,
+                    "description": error_desc,
+                    "fields": [
+                        {"name": "Reason", "value": exit_reason, "inline": False},
+                        {"name": "Trade ID", "value": trade.id, "inline": True},
+                    ],
+                }
+            ],
         )
