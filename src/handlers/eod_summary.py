@@ -58,32 +58,42 @@ async def reconcile_positions(
             }
             broker_positions_list.append(broker_lookup[key])
 
-    # Build lookup of DB positions
+    # Build lookup of DB positions (aggregate contracts for same strikes)
     db_lookup = {}
     db_positions_list = []
     for dp in db_positions:
         # For spreads, we have both short and long strikes
-        # Check short strike
+        # Check short strike - aggregate if key already exists
         short_key = f"{dp.underlying}:{dp.expiration}:{normalize_strike(dp.short_strike)}"
-        db_lookup[short_key] = {
-            "trade_id": dp.trade_id,
-            "underlying": dp.underlying,
-            "expiration": dp.expiration,
-            "strike": dp.short_strike,
-            "contracts": dp.contracts,
-            "type": "short",
-        }
+        if short_key in db_lookup:
+            # Aggregate contracts for same strike
+            db_lookup[short_key]["contracts"] += dp.contracts
+            db_lookup[short_key]["trade_ids"].append(dp.trade_id)
+        else:
+            db_lookup[short_key] = {
+                "trade_ids": [dp.trade_id],
+                "underlying": dp.underlying,
+                "expiration": dp.expiration,
+                "strike": dp.short_strike,
+                "contracts": dp.contracts,
+                "type": "short",
+            }
 
-        # Check long strike
+        # Check long strike - aggregate if key already exists
         long_key = f"{dp.underlying}:{dp.expiration}:{normalize_strike(dp.long_strike)}"
-        db_lookup[long_key] = {
-            "trade_id": dp.trade_id,
-            "underlying": dp.underlying,
-            "expiration": dp.expiration,
-            "strike": dp.long_strike,
-            "contracts": dp.contracts,
-            "type": "long",
-        }
+        if long_key in db_lookup:
+            # Aggregate contracts for same strike
+            db_lookup[long_key]["contracts"] += dp.contracts
+            db_lookup[long_key]["trade_ids"].append(dp.trade_id)
+        else:
+            db_lookup[long_key] = {
+                "trade_ids": [dp.trade_id],
+                "underlying": dp.underlying,
+                "expiration": dp.expiration,
+                "strike": dp.long_strike,
+                "contracts": dp.contracts,
+                "type": "long",
+            }
 
         db_positions_list.append({
             "trade_id": dp.trade_id,

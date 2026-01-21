@@ -383,16 +383,32 @@ class DiscordClient:
     # Circuit breaker
 
     async def send_circuit_breaker_alert(self, reason: str) -> str:
-        """Send circuit breaker activation alert."""
+        """Send circuit breaker activation alert with Resume button."""
         embed = {
             "title": "Circuit Breaker Activated",
             "color": 0xED4245,  # Red
-            "description": f"**Reason:** {reason}\n\nTrading has been halted. Manual intervention required to resume.",
+            "description": f"**Reason:** {reason}\n\nTrading has been halted. Click **Resume Trading** when ready to continue.",
         }
+
+        # Include Resume Trading button for manual reset
+        components = [
+            {
+                "type": 1,  # Action row
+                "components": [
+                    {
+                        "type": 2,  # Button
+                        "style": 3,  # Success (green)
+                        "label": "Resume Trading",
+                        "custom_id": "resume_trading",
+                    },
+                ],
+            }
+        ]
 
         return await self.send_message(
             content="**CIRCUIT BREAKER ACTIVATED**",
             embeds=[embed],
+            components=components,
         )
 
     async def send_api_token_alert(self, service: str, error_message: str) -> str:

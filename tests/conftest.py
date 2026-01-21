@@ -313,6 +313,9 @@ def mock_d1_client():
     client.upsert_position = AsyncMock()
     client.delete_position = AsyncMock()
 
+    # Daily performance operations
+    client.update_daily_performance = AsyncMock()
+
     return client
 
 

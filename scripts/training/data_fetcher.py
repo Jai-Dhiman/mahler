@@ -1,6 +1,7 @@
 """Data fetcher for model training.
 
 Fetches training data from Alpaca (historical bars) and Cloudflare D1 (trades).
+Falls back to yfinance if Alpaca fails.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from datetime import datetime, timedelta
 import httpx
 
 
-async def fetch_spy_bars(days: int = 750) -> list[dict]:
+async def fetch_spy_bars_alpaca(days: int = 750) -> list[dict]:
     """Fetch SPY historical bars from Alpaca API.
 
     Args:
@@ -19,9 +20,15 @@ async def fetch_spy_bars(days: int = 750) -> list[dict]:
 
     Returns:
         List of bar dictionaries with keys: timestamp, open, high, low, close, volume
+
+    Raises:
+        Exception if Alpaca API fails
     """
-    api_key = os.environ["ALPACA_API_KEY"]
-    secret_key = os.environ["ALPACA_SECRET_KEY"]
+    api_key = os.environ.get("ALPACA_API_KEY")
+    secret_key = os.environ.get("ALPACA_SECRET_KEY")
+
+    if not api_key or not secret_key:
+        raise ValueError("ALPACA_API_KEY and ALPACA_SECRET_KEY environment variables required")
 
     # Use data API endpoint
     base_url = "https://data.alpaca.markets/v2"
@@ -77,6 +84,68 @@ async def fetch_spy_bars(days: int = 750) -> list[dict]:
 
     print(f"Fetched {len(bars)} SPY bars from Alpaca ({days} days requested)")
     return bars
+
+
+def fetch_spy_bars_yfinance(days: int = 750) -> list[dict]:
+    """Fetch SPY historical bars from Yahoo Finance (fallback).
+
+    Args:
+        days: Number of days of historical data to fetch
+
+    Returns:
+        List of bar dictionaries with keys: timestamp, open, high, low, close, volume
+    """
+    try:
+        import yfinance as yf
+    except ImportError:
+        raise ImportError("yfinance not installed. Run: pip install yfinance")
+
+    # Calculate date range
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=days)
+
+    # Fetch data
+    spy = yf.Ticker("SPY")
+    df = spy.history(start=start_date, end=end_date, auto_adjust=True)
+
+    if df.empty:
+        raise ValueError("No data returned from Yahoo Finance")
+
+    bars = []
+    for idx, row in df.iterrows():
+        bars.append({
+            "timestamp": idx.isoformat(),
+            "open": float(row["Open"]),
+            "high": float(row["High"]),
+            "low": float(row["Low"]),
+            "close": float(row["Close"]),
+            "volume": int(row["Volume"]),
+        })
+
+    print(f"Fetched {len(bars)} SPY bars from Yahoo Finance ({days} days requested)")
+    return bars
+
+
+async def fetch_spy_bars(days: int = 750) -> list[dict]:
+    """Fetch SPY historical bars, with fallback to Yahoo Finance.
+
+    Tries Alpaca first, falls back to yfinance if Alpaca fails.
+
+    Args:
+        days: Number of days of historical data to fetch (default 750 = ~3 years)
+
+    Returns:
+        List of bar dictionaries with keys: timestamp, open, high, low, close, volume
+    """
+    # Try Alpaca first
+    try:
+        return await fetch_spy_bars_alpaca(days)
+    except Exception as e:
+        print(f"Alpaca API failed: {e}")
+        print("Falling back to Yahoo Finance...")
+
+    # Fallback to yfinance (synchronous but wrapped)
+    return fetch_spy_bars_yfinance(days)
 
 
 async def fetch_trades_from_d1() -> list[dict]:

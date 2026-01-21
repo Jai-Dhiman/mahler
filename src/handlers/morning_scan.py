@@ -11,6 +11,11 @@ from datetime import datetime, timedelta
 
 from core import http
 from core.ai.claude import ClaudeClient, ClaudeRateLimitError
+from core.analysis.greeks import (
+    calculate_second_order_greeks,
+    calculate_spread_second_order_greeks,
+    years_to_expiry,
+)
 from core.analysis.iv_rank import (
     IVMeanReversion,
     IVTermStructure,
@@ -122,11 +127,25 @@ async def _run_morning_scan(env):
     kv = KVClient(env.MAHLER_KV)
     circuit_breaker = CircuitBreaker(kv)
 
-    # Quick check if manually halted (full evaluation happens after account info loaded)
+    # Check circuit breaker with daily auto-reset
+    # Research: Circuit breakers need "cooling off" periods, so we auto-reset at start of new day
+    circuit_breaker_auto_reset = False
+    previous_halt_reason = None
     status = await circuit_breaker.get_status()
     if status.halted:
-        print(f"Trading manually halted: {status.reason}")
-        return
+        today = datetime.now().strftime("%Y-%m-%d")
+        triggered_date = status.triggered_at.strftime("%Y-%m-%d") if status.triggered_at else None
+
+        if triggered_date and triggered_date < today:
+            # Halt was from a previous day - auto-reset for new trading day
+            print(f"Auto-resetting circuit breaker (triggered {triggered_date}, now {today})")
+            previous_halt_reason = status.reason
+            await circuit_breaker.reset()
+            circuit_breaker_auto_reset = True
+        else:
+            # Halt is from today - respect the halt
+            print(f"Trading halted today: {status.reason}")
+            return
 
     # Initialize external clients
     alpaca = AlpacaClient(
@@ -149,6 +168,17 @@ async def _run_morning_scan(env):
     if not market_open:
         print("Market is closed, skipping scan")
         return
+
+    # Notify if circuit breaker was auto-reset
+    if circuit_breaker_auto_reset:
+        await discord.send_message(
+            content="**Circuit Breaker Auto-Reset**",
+            embeds=[{
+                "title": "Trading Resumed",
+                "color": 0x57F287,  # Green
+                "description": f"Circuit breaker automatically reset for new trading day.\n\n**Previous halt reason:** {previous_halt_reason}",
+            }]
+        )
 
     # Refresh dynamic betas (daily calculation)
     try:
@@ -420,12 +450,47 @@ async def _run_morning_scan(env):
         try:
             spread = opp.spread
 
-            # Calculate position size
+            # Calculate second-order Greeks (vanna/volga) for position sizing adjustment
+            # These measure sensitivity to spot-vol correlation (vanna) and vol-of-vol (volga)
+            spread_vanna = None
+            spread_volga = None
+            try:
+                time_to_exp = years_to_expiry(spread.expiration)
+                short_iv = spread.short_contract.implied_volatility or 0.20
+                long_iv = spread.long_contract.implied_volatility or 0.20
+
+                # Calculate second-order Greeks for each leg
+                option_type = "put" if spread.spread_type.value == "bull_put" else "call"
+                short_second = calculate_second_order_greeks(
+                    spot=underlying_price,
+                    strike=spread.short_strike,
+                    time_to_expiry=time_to_exp,
+                    volatility=short_iv,
+                    option_type=option_type,
+                )
+                long_second = calculate_second_order_greeks(
+                    spot=underlying_price,
+                    strike=spread.long_strike,
+                    time_to_expiry=time_to_exp,
+                    volatility=long_iv,
+                    option_type=option_type,
+                )
+
+                # Calculate net spread Greeks
+                spread_greeks = calculate_spread_second_order_greeks(short_second, long_second)
+                spread_vanna = spread_greeks.vanna
+                spread_volga = spread_greeks.volga
+            except Exception as e:
+                print(f"Error calculating second-order Greeks: {e}")
+
+            # Calculate position size (with vanna/volga adjustment)
             size_result = sizer.calculate_size(
                 spread=spread,
                 account_equity=account.equity,
                 current_positions=positions,
                 current_vix=current_vix,
+                spread_vanna=spread_vanna,
+                spread_volga=spread_volga,
             )
 
             if size_result.contracts == 0:

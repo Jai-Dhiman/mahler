@@ -20,6 +20,34 @@ from core.risk.circuit_breaker import CircuitBreaker, RiskLevel
 from core.risk.validators import ExitValidator
 from core.types import TradeStatus
 
+# Circuit breaker alert deduplication window (1 hour)
+CIRCUIT_BREAKER_ALERT_DEDUP_SECONDS = 3600
+
+
+async def _should_send_circuit_breaker_alert(kv: KVClient, reason: str) -> bool:
+    """Check if we should send a circuit breaker alert (dedup within 1 hour).
+
+    Prevents notification spam by tracking the last alert time for each reason.
+    Returns True if we should send the alert, False if we should skip it.
+    """
+    # Create a key based on the reason (normalized)
+    reason_key = reason.lower().replace(" ", "_").replace("(", "").replace(")", "")
+    key = f"circuit_breaker_alert:{reason_key}"
+
+    # Check if we've already alerted recently
+    last_alert = await kv.get(key)
+    if last_alert:
+        # Already alerted within the dedup window, skip
+        return False
+
+    # Record this alert with TTL
+    await kv.put(
+        key,
+        datetime.now(UTC).isoformat(),
+        expiration_ttl=CIRCUIT_BREAKER_ALERT_DEDUP_SECONDS,
+    )
+    return True
+
 
 async def handle_position_monitor(env):
     """Monitor positions for exit conditions."""
@@ -112,9 +140,14 @@ async def _run_position_monitor(env):
         if risk_state.reason:
             print(f"Reason: {risk_state.reason}")
 
-    # Send alert if needed
+    # Send alert if needed (with deduplication to prevent spam)
     if risk_state.should_alert and risk_state.reason:
-        await discord.send_circuit_breaker_alert(risk_state.reason)
+        # Check if we've already alerted for this reason recently (1 hour dedup window)
+        should_send = await _should_send_circuit_breaker_alert(kv, risk_state.reason)
+        if should_send:
+            await discord.send_circuit_breaker_alert(risk_state.reason)
+        else:
+            print(f"Skipping duplicate circuit breaker alert: {risk_state.reason}")
 
     # If halted, stop processing
     if risk_state.level == RiskLevel.HALTED:

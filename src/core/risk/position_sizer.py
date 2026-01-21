@@ -53,6 +53,10 @@ class RiskLimits:
     max_treasury_class_pct: float = 0.25  # 25% max in treasuries
     max_commodity_class_pct: float = 0.25  # 25% max in commodities
 
+    # Correlation limit: max 1 position per asset class to avoid correlated losses
+    # Research: SPY/QQQ/IWM are 86-92% correlated - having multiple is a concentrated bet
+    max_positions_per_equity_class: int = 1  # Only 1 equity position at a time
+
     # Portfolio Greeks limits
     max_portfolio_delta: float = 0.30  # Max absolute beta-weighted delta
     max_portfolio_gamma: float = 0.20  # Max absolute gamma
@@ -382,6 +386,19 @@ class PositionSizer:
         constraints.append(
             (max_by_class, f"{asset_class.value} class limit ({current_class_pct:.1%} of {max_class_pct:.0%})")
         )
+
+        # 6. Correlation limit: Only 1 position per equity class
+        # Research: SPY/QQQ/IWM are 86-92% correlated, multiple positions = concentrated bet
+        if asset_class == AssetClass.EQUITY:
+            equity_positions = [
+                p for p in current_positions
+                if self.get_asset_class(p.underlying) == AssetClass.EQUITY
+            ]
+            if len(equity_positions) >= self.limits.max_positions_per_equity_class:
+                existing_symbols = ", ".join(sorted(set(p.underlying for p in equity_positions)))
+                constraints.append(
+                    (0, f"Equity correlation limit (already have {existing_symbols})")
+                )
 
         # Find binding constraint
         contracts = min(c[0] for c in constraints)

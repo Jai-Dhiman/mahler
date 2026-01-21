@@ -569,7 +569,20 @@ class D1Client:
         win_delta: int = 0,
         loss_delta: int = 0,
     ) -> None:
-        """Update daily performance metrics."""
+        """Update daily performance metrics.
+
+        Creates the row if it doesn't exist (with starting_balance=0, to be filled by EOD).
+        """
+        # Ensure row exists first (INSERT OR IGNORE won't overwrite existing)
+        await self.run(
+            """
+            INSERT OR IGNORE INTO daily_performance
+                (date, starting_balance, ending_balance, realized_pnl)
+            VALUES (?, 0, 0, 0)
+            """,
+            [date],
+        )
+
         updates = []
         params = []
 
