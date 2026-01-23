@@ -573,6 +573,8 @@ class D1Client:
 
         Creates the row if it doesn't exist (with starting_balance=0, to be filled by EOD).
         """
+        print(f"[DEBUG] update_daily_performance called: date={date}, trades_opened_delta={trades_opened_delta}, trades_closed_delta={trades_closed_delta}")
+
         # Ensure row exists first (INSERT OR IGNORE won't overwrite existing)
         await self.run(
             """
@@ -607,10 +609,10 @@ class D1Client:
 
         if updates:
             params.append(date)
-            await self.run(
-                f"UPDATE daily_performance SET {', '.join(updates)} WHERE date = ?",
-                params,
-            )
+            query = f"UPDATE daily_performance SET {', '.join(updates)} WHERE date = ?"
+            print(f"[DEBUG] Running update query: {query} with params: {params}")
+            await self.run(query, params)
+            print(f"[DEBUG] update_daily_performance completed for {date}")
 
     def _row_to_daily_performance(self, row: dict) -> DailyPerformance:
         return DailyPerformance(

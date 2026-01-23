@@ -375,9 +375,11 @@ async def _run_eod_summary(env):
 
     # Capture daily IV for each underlying (including diversification assets)
     underlyings = ["SPY", "QQQ", "IWM", "TLT", "GLD"]
+    print(f"[DEBUG] Capturing IV for {len(underlyings)} underlyings")
     for symbol in underlyings:
         try:
             chain = await alpaca.get_options_chain(symbol)
+            print(f"[DEBUG] {symbol}: got {len(chain.contracts) if chain.contracts else 0} contracts, price={chain.underlying_price}")
             if chain.contracts:
                 # Find ATM contracts (within 2% of underlying price)
                 atm_contracts = [
@@ -386,6 +388,7 @@ async def _run_eod_summary(env):
                     if abs(c.strike - chain.underlying_price) < chain.underlying_price * 0.02
                     and c.implied_volatility
                 ]
+                print(f"[DEBUG] {symbol}: found {len(atm_contracts)} ATM contracts with IV")
                 if atm_contracts:
                     # Use average IV of ATM options
                     atm_iv = sum(c.implied_volatility for c in atm_contracts) / len(atm_contracts)
@@ -396,6 +399,10 @@ async def _run_eod_summary(env):
                         underlying_price=chain.underlying_price,
                     )
                     print(f"Saved IV for {symbol}: {atm_iv:.2%}")
+                else:
+                    print(f"[DEBUG] {symbol}: no ATM contracts with IV found")
+            else:
+                print(f"[DEBUG] {symbol}: no contracts in chain")
         except Exception as e:
             print(f"Error capturing IV for {symbol}: {e}")
 

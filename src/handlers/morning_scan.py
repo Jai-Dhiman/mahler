@@ -442,6 +442,7 @@ async def _run_morning_scan(env):
 
     # Sort all opportunities by score
     all_opportunities.sort(key=lambda x: x[0].score, reverse=True)
+    print(f"[DEBUG] Total opportunities found across all symbols: {len(all_opportunities)}")
 
     # Process top opportunities
     recommendations_sent = 0

@@ -264,7 +264,50 @@ async def _run_position_monitor(env):
             print(f"Error monitoring trade {trade.id}: {e}")
             await circuit_breaker.check_api_errors()
 
+    # Capture IV during market hours (more reliable than EOD when quotes may be stale)
+    # Only capture once per hour to avoid excessive API calls
+    from datetime import datetime
+    current_minute = datetime.now().minute
+    if current_minute < 5:  # First 5 minutes of each hour
+        await _capture_intraday_iv(db, alpaca)
+
     print("Position monitor complete.")
+
+
+async def _capture_intraday_iv(db, alpaca):
+    """Capture IV for all underlyings during market hours.
+
+    This supplements EOD IV capture since quotes may be stale after close.
+    """
+    from datetime import datetime
+
+    underlyings = ["SPY", "QQQ", "IWM", "TLT", "GLD"]
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    for symbol in underlyings:
+        try:
+            chain = await alpaca.get_options_chain(symbol)
+            if not chain.contracts:
+                continue
+
+            # Find ATM contracts with IV
+            atm_contracts = [
+                c for c in chain.contracts
+                if abs(c.strike - chain.underlying_price) < chain.underlying_price * 0.02
+                and c.implied_volatility
+            ]
+
+            if atm_contracts:
+                atm_iv = sum(c.implied_volatility for c in atm_contracts) / len(atm_contracts)
+                await db.save_daily_iv(
+                    date=today,
+                    underlying=symbol,
+                    atm_iv=atm_iv,
+                    underlying_price=chain.underlying_price,
+                )
+                print(f"Captured IV for {symbol}: {atm_iv:.2%}")
+        except Exception as e:
+            print(f"Error capturing IV for {symbol}: {e}")
 
 
 async def _reconcile_pending_orders(db, alpaca, discord, kv):
