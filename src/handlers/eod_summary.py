@@ -19,6 +19,18 @@ from core.db.r2 import R2Client
 from core.notifications.discord import DiscordClient
 from core.types import Position, TradeStatus
 
+# V2 Reflection Engine imports
+from core.reflection import (
+    SelfReflectionEngine,
+    TradeOutcome,
+    PredictedOutcome,
+)
+from core.memory.vectorize import EpisodicMemoryStore
+from core.memory.retriever import MemoryRetriever
+
+# V2 Learning imports
+from core.learning import TrajectoryStore, DataSynthesizer
+
 
 async def reconcile_positions(
     alpaca: AlpacaClient,
@@ -514,6 +526,190 @@ async def _run_eod_summary(env):
             await discord.send_api_token_alert("Claude", str(e))
         except Exception as e:
             print(f"Error updating playbook: {e}")
+
+    # V2: Process reflections for trades with episodic memory
+    multi_agent_enabled = getattr(env, "MULTI_AGENT_ENABLED", "false").lower() == "true"
+
+    if multi_agent_enabled and closed_today:
+        print("[V2] Processing reflections for trades with episodic memory...")
+
+        # Initialize V2 components if bindings available
+        episodic_store = None
+        memory_retriever = None
+        reflection_engine = None
+
+        if hasattr(env, "EPISODIC_MEMORY") and hasattr(env, "AI"):
+            episodic_store = EpisodicMemoryStore(
+                vectorize_binding=env.EPISODIC_MEMORY,
+                ai_binding=env.AI,
+                d1_binding=env.MAHLER_DB,
+            )
+            memory_retriever = MemoryRetriever(
+                d1_binding=env.MAHLER_DB,
+                episodic_store=episodic_store,
+            )
+            reflection_engine = SelfReflectionEngine(
+                claude=claude,
+                memory_retriever=memory_retriever,
+                episodic_store=episodic_store,
+            )
+            print("[V2] Reflection engine initialized")
+        else:
+            print("[V2] Skipping V2 reflection (bindings not configured)")
+
+        if reflection_engine:
+            for trade in closed_today:
+                try:
+                    # Check if trade has episodic memory record
+                    episodic_result = await db.execute(
+                        "SELECT * FROM episodic_memory WHERE trade_id = ?",
+                        [trade.id],
+                    )
+
+                    if not episodic_result["results"]:
+                        print(f"[V2] No episodic memory for trade {trade.id[:8]}, skipping")
+                        continue
+
+                    episodic_row = episodic_result["results"][0]
+                    memory_id = episodic_row["id"]
+
+                    # Skip if already has actual outcome
+                    if episodic_row.get("actual_outcome"):
+                        print(f"[V2] Trade {trade.id[:8]} already has outcome, skipping")
+                        continue
+
+                    # Build TradeOutcome from trade
+                    entry_date = trade.opened_at.strftime("%Y-%m-%d") if trade.opened_at else today
+                    exit_date = trade.closed_at.strftime("%Y-%m-%d") if trade.closed_at else today
+                    days_held = (trade.closed_at - trade.opened_at).days if trade.closed_at and trade.opened_at else 0
+
+                    # Determine exit reason based on P/L
+                    profit_pct = (trade.profit_loss / (trade.entry_credit * trade.contracts * 100) * 100) if trade.profit_loss and trade.entry_credit else 0
+                    if profit_pct >= 50:
+                        exit_reason = "profit_target"
+                    elif profit_pct <= -100:
+                        exit_reason = "stop_loss"
+                    elif days_held >= 21:
+                        exit_reason = "time_exit"
+                    else:
+                        exit_reason = "manual"
+
+                    trade_outcome = TradeOutcome(
+                        trade_id=trade.id,
+                        entry_date=entry_date,
+                        exit_date=exit_date,
+                        underlying=trade.underlying,
+                        spread_type=trade.spread_type.value,
+                        entry_credit=trade.entry_credit,
+                        exit_debit=trade.exit_debit or 0,
+                        profit_loss=trade.profit_loss or 0,
+                        profit_loss_percent=profit_pct,
+                        was_profitable=(trade.profit_loss or 0) > 0,
+                        exit_reason=exit_reason,
+                        days_held=days_held,
+                    )
+
+                    # Build PredictedOutcome from episodic memory
+                    import json
+                    predicted_data = json.loads(episodic_row["predicted_outcome"]) if episodic_row.get("predicted_outcome") else {}
+
+                    predicted_outcome = PredictedOutcome(
+                        recommendation=predicted_data.get("recommendation", "enter"),
+                        confidence=predicted_data.get("confidence", 0.5),
+                        expected_profit_probability=predicted_data.get("expected_profit_probability", 0.5),
+                        key_bull_points=predicted_data.get("key_bull_points", []),
+                        key_bear_points=predicted_data.get("key_bear_points", []),
+                        thesis=predicted_data.get("thesis", ""),
+                    )
+
+                    # Generate reflection using V2 engine
+                    reflection = await reflection_engine.generate_reflection(
+                        outcome=trade_outcome,
+                        predicted=predicted_outcome,
+                        memory_id=memory_id,
+                        market_regime=episodic_row.get("market_regime"),
+                        iv_rank=episodic_row.get("iv_rank"),
+                        vix=episodic_row.get("vix_at_entry"),
+                    )
+
+                    print(f"[V2] Generated reflection for trade {trade.id[:8]}: prediction_correct={reflection.prediction_correct}")
+
+                    # Process candidate rules for learning
+                    rule_ids = await reflection_engine.process_candidate_rules(reflection, trade_outcome)
+                    if rule_ids:
+                        print(f"[V2] Processed {len(rule_ids)} candidate rules for trade {trade.id[:8]}")
+
+                except ClaudeRateLimitError as e:
+                    print(f"[V2] Claude rate limit during reflection: {e}")
+                    await discord.send_api_token_alert("Claude", str(e))
+                    break  # Stop processing more reflections
+                except Exception as e:
+                    import traceback
+                    print(f"[V2] Error generating V2 reflection for trade {trade.id[:8]}: {e}")
+                    print(traceback.format_exc())
+
+    # V2: Record outcomes for closed trades in trajectory store
+    if multi_agent_enabled and closed_today:
+        print("[V2] Recording outcomes for trajectories...")
+        trajectory_store = TrajectoryStore(env.MAHLER_DB)
+
+        for trade in closed_today:
+            try:
+                # Look up trajectory by trade ID
+                trajectory = await trajectory_store.get_trajectory_by_trade_id(trade.id)
+                if not trajectory:
+                    print(f"[V2] No trajectory found for trade {trade.id[:8]}")
+                    continue
+
+                if trajectory.has_outcome:
+                    print(f"[V2] Trajectory for trade {trade.id[:8]} already has outcome")
+                    continue
+
+                # Calculate P/L percentage
+                entry_date = trade.opened_at.strftime("%Y-%m-%d") if trade.opened_at else today
+                exit_date = trade.closed_at.strftime("%Y-%m-%d") if trade.closed_at else today
+                days_held = (trade.closed_at - trade.opened_at).days if trade.closed_at and trade.opened_at else 0
+
+                pnl_pct = 0.0
+                if trade.entry_credit and trade.contracts:
+                    total_credit = trade.entry_credit * trade.contracts * 100
+                    pnl_pct = (trade.profit_loss or 0) / total_credit if total_credit > 0 else 0
+
+                # Determine exit reason
+                if pnl_pct >= 0.50:
+                    exit_reason = "profit_target"
+                elif pnl_pct <= -1.00:
+                    exit_reason = "stop_loss"
+                elif days_held >= 21:
+                    exit_reason = "time_exit"
+                else:
+                    exit_reason = "manual"
+
+                # Update trajectory with outcome
+                await trajectory_store.update_outcome(
+                    trajectory_id=trajectory.id,
+                    actual_pnl=trade.profit_loss or 0,
+                    actual_pnl_percent=pnl_pct,
+                    exit_reason=exit_reason,
+                    days_held=days_held,
+                )
+                print(f"[V2] Updated outcome for trajectory {trajectory.id[:8]}: P/L={pnl_pct:.1%}")
+
+            except Exception as e:
+                print(f"[V2] Error recording outcome for trade {trade.id[:8]}: {e}")
+
+        # Run auto-labeling at end of day
+        try:
+            synthesizer = DataSynthesizer(trajectory_store)
+            labeled_count = await synthesizer.label_unlabeled_trajectories(limit=100)
+            if labeled_count > 0:
+                print(f"[V2] Auto-labeled {labeled_count} trajectories")
+
+                # Log label distribution
+                distribution = await synthesizer.get_label_distribution()
+                print(f"[V2] Label distribution: {distribution}")
+        except Exception as e:
+            print(f"[V2] Error during auto-labeling: {e}")
 
     # Reconcile positions with broker
     try:

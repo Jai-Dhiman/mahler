@@ -231,6 +231,99 @@ class DiscordClient:
             components=components,
         )
 
+    async def send_autonomous_notification(
+        self,
+        rec: Recommendation,
+        v2_confidence: float | None = None,
+        v2_thesis: str | None = None,
+        order_id: str | None = None,
+    ) -> str:
+        """Send an autonomous mode notification (info-only, no buttons).
+
+        Used when AUTONOMOUS_MODE is enabled to show trade execution
+        without requiring manual approval.
+
+        Args:
+            rec: Recommendation details
+            v2_confidence: V2 pipeline confidence (0.0-1.0)
+            v2_thesis: V2 synthesis thesis
+            order_id: Broker order ID if order was placed
+
+        Returns:
+            Message ID
+        """
+        spread_name = (
+            "Bull Put Spread" if rec.spread_type.value == "bull_put" else "Bear Call Spread"
+        )
+        direction = "Bullish" if rec.spread_type.value == "bull_put" else "Bearish"
+
+        # Use V2 confidence for color if available, otherwise use standard confidence
+        if v2_confidence is not None:
+            if v2_confidence >= 0.7:
+                color = 0x57F287  # Green
+            elif v2_confidence >= 0.4:
+                color = 0xF97316  # Orange
+            else:
+                color = 0xFEE75C  # Yellow
+        else:
+            confidence_color = {
+                "low": 0xFEE75C,
+                "medium": 0xF97316,
+                "high": 0x57F287,
+            }
+            color = confidence_color.get(rec.confidence.value if rec.confidence else "low", 0x5865F2)
+
+        # Use V2 thesis if available
+        description = v2_thesis if v2_thesis else (rec.thesis if rec.thesis else "No analysis provided")
+
+        fields = [
+            {"name": "Strategy", "value": spread_name, "inline": True},
+            {"name": "Direction", "value": direction, "inline": True},
+            {"name": "Expiration", "value": rec.expiration, "inline": True},
+            {"name": "Short Strike", "value": f"${rec.short_strike:.2f}", "inline": True},
+            {"name": "Long Strike", "value": f"${rec.long_strike:.2f}", "inline": True},
+            {"name": "Credit", "value": f"${rec.credit:.2f}", "inline": True},
+            {"name": "Max Loss", "value": f"${rec.max_loss:.2f}", "inline": True},
+            {"name": "Contracts", "value": str(rec.suggested_contracts or 1), "inline": True},
+        ]
+
+        # Add V2 confidence if available
+        if v2_confidence is not None:
+            fields.append(
+                {"name": "V2 Confidence", "value": f"{v2_confidence:.0%}", "inline": True}
+            )
+        else:
+            fields.append(
+                {
+                    "name": "Confidence",
+                    "value": (rec.confidence.value.upper() if rec.confidence else "N/A"),
+                    "inline": True,
+                }
+            )
+
+        if rec.iv_rank:
+            fields.append({"name": "IV Rank", "value": f"{rec.iv_rank:.1f}%", "inline": True})
+        if rec.delta:
+            fields.append({"name": "Delta", "value": f"{rec.delta:.3f}", "inline": True})
+        if order_id:
+            fields.append({"name": "Order ID", "value": order_id, "inline": True})
+
+        embed = {
+            "title": f"Autonomous Trade: {rec.underlying}",
+            "description": description,
+            "color": color,
+            "fields": fields,
+            "footer": {
+                "text": f"Autonomous Mode | ID: {rec.id[:8]}",
+            },
+        }
+
+        return await self.send_message(
+            content=f"**Autonomous Trade Executed: {rec.underlying}**",
+            embeds=[embed],
+            components=[],  # No buttons in autonomous mode
+        )
+
     async def update_recommendation_approved(
         self,
         message_id: str,
