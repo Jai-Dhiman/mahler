@@ -156,80 +156,7 @@ class DiscordClient:
         except Exception as e:
             raise DiscordError(f"Discord interaction error: {str(e)}")
 
-    # Trade recommendation
-
-    async def send_recommendation(self, rec: Recommendation) -> str:
-        """Send a trade recommendation with approve/reject buttons."""
-        spread_name = (
-            "Bull Put Spread" if rec.spread_type.value == "bull_put" else "Bear Call Spread"
-        )
-        direction = "Bullish" if rec.spread_type.value == "bull_put" else "Bearish"
-
-        confidence_color = {
-            "low": 0xFEE75C,  # Yellow
-            "medium": 0xF97316,  # Orange
-            "high": 0x57F287,  # Green
-        }
-        color = confidence_color.get(rec.confidence.value if rec.confidence else "low", 0x5865F2)
-
-        embed = {
-            "title": f"Trade Recommendation: {rec.underlying}",
-            "description": rec.thesis if rec.thesis else "No analysis provided",
-            "color": color,
-            "fields": [
-                {"name": "Strategy", "value": spread_name, "inline": True},
-                {"name": "Direction", "value": direction, "inline": True},
-                {"name": "Expiration", "value": rec.expiration, "inline": True},
-                {"name": "Short Strike", "value": f"${rec.short_strike:.2f}", "inline": True},
-                {"name": "Long Strike", "value": f"${rec.long_strike:.2f}", "inline": True},
-                {"name": "Credit", "value": f"${rec.credit:.2f}", "inline": True},
-                {"name": "Max Loss", "value": f"${rec.max_loss:.2f}", "inline": True},
-                {"name": "Contracts", "value": str(rec.suggested_contracts or 1), "inline": True},
-                {
-                    "name": "Confidence",
-                    "value": (rec.confidence.value.upper() if rec.confidence else "N/A"),
-                    "inline": True,
-                },
-            ],
-            "footer": {
-                "text": f"Expires: {rec.expires_at.strftime('%H:%M:%S')} | ID: {rec.id[:8]}",
-            },
-        }
-
-        if rec.iv_rank:
-            embed["fields"].insert(
-                6, {"name": "IV Rank", "value": f"{rec.iv_rank:.1f}%", "inline": True}
-            )
-        if rec.delta:
-            embed["fields"].insert(
-                7, {"name": "Delta", "value": f"{rec.delta:.3f}", "inline": True}
-            )
-
-        components = [
-            {
-                "type": 1,  # Action Row
-                "components": [
-                    {
-                        "type": 2,  # Button
-                        "style": 3,  # Success (green)
-                        "label": "Approve",
-                        "custom_id": f"approve_trade:{rec.id}",
-                    },
-                    {
-                        "type": 2,  # Button
-                        "style": 4,  # Danger (red)
-                        "label": "Reject",
-                        "custom_id": f"reject_trade:{rec.id}",
-                    },
-                ],
-            }
-        ]
-
-        return await self.send_message(
-            content=f"**New Trade Recommendation: {rec.underlying}**",
-            embeds=[embed],
-            components=components,
-        )
+    # Trade notification (V2 autonomous mode)
 
     async def send_autonomous_notification(
         self,
@@ -324,58 +251,6 @@ class DiscordClient:
             components=[],  # No buttons in autonomous mode
         )
 
-    async def update_recommendation_approved(
-        self,
-        message_id: str,
-        rec: Recommendation,
-        order_id: str,
-    ) -> None:
-        """Update recommendation message to show approved status."""
-        spread_name = rec.spread_type.value.replace("_", " ").title()
-
-        embed = {
-            "title": f"Trade Approved: {rec.underlying}",
-            "color": 0x57F287,  # Green
-            "fields": [
-                {"name": "Strategy", "value": spread_name, "inline": True},
-                {"name": "Expiration", "value": rec.expiration, "inline": True},
-                {
-                    "name": "Strikes",
-                    "value": f"${rec.short_strike:.2f}/${rec.long_strike:.2f}",
-                    "inline": True,
-                },
-                {"name": "Credit", "value": f"${rec.credit:.2f}", "inline": True},
-                {"name": "Contracts", "value": str(rec.suggested_contracts or 1), "inline": True},
-                {"name": "Order ID", "value": order_id, "inline": True},
-            ],
-        }
-
-        await self.update_message(
-            message_id,
-            content=f"**Trade Approved: {rec.underlying}**",
-            embeds=[embed],
-            components=[],  # Remove buttons
-        )
-
-    async def update_recommendation_rejected(
-        self,
-        message_id: str,
-        rec: Recommendation,
-    ) -> None:
-        """Update recommendation message to show rejected status."""
-        embed = {
-            "title": f"Trade Rejected: {rec.underlying}",
-            "color": 0xED4245,  # Red
-            "description": f"{rec.spread_type.value.replace('_', ' ').title()} | ${rec.short_strike:.2f}/${rec.long_strike:.2f} | {rec.expiration}",
-        }
-
-        await self.update_message(
-            message_id,
-            content=f"**Trade Rejected: {rec.underlying}**",
-            embeds=[embed],
-            components=[],
-        )
-
     # Exit alerts
 
     async def send_exit_alert(
@@ -400,30 +275,9 @@ class DiscordClient:
             ],
         }
 
-        components = [
-            {
-                "type": 1,
-                "components": [
-                    {
-                        "type": 2,
-                        "style": 3,  # Success
-                        "label": "Close Position",
-                        "custom_id": f"close_position:{trade.id}",
-                    },
-                    {
-                        "type": 2,
-                        "style": 2,  # Secondary (gray)
-                        "label": "Hold",
-                        "custom_id": f"hold_position:{trade.id}",
-                    },
-                ],
-            }
-        ]
-
         return await self.send_message(
             content=f"**Exit Alert: {trade.underlying}** - {reason}",
             embeds=[embed],
-            components=components,
         )
 
     # Daily summary
@@ -476,32 +330,16 @@ class DiscordClient:
     # Circuit breaker
 
     async def send_circuit_breaker_alert(self, reason: str) -> str:
-        """Send circuit breaker activation alert with Resume button."""
+        """Send circuit breaker activation alert (info-only)."""
         embed = {
             "title": "Circuit Breaker Activated",
             "color": 0xED4245,  # Red
-            "description": f"**Reason:** {reason}\n\nTrading has been halted. Click **Resume Trading** when ready to continue.",
+            "description": f"**Reason:** {reason}\n\nTrading has been halted. Use /admin/resume endpoint to restore trading.",
         }
-
-        # Include Resume Trading button for manual reset
-        components = [
-            {
-                "type": 1,  # Action row
-                "components": [
-                    {
-                        "type": 2,  # Button
-                        "style": 3,  # Success (green)
-                        "label": "Resume Trading",
-                        "custom_id": "resume_trading",
-                    },
-                ],
-            }
-        ]
 
         return await self.send_message(
             content="**CIRCUIT BREAKER ACTIVATED**",
             embeds=[embed],
-            components=components,
         )
 
     async def send_api_token_alert(self, service: str, error_message: str) -> str:
@@ -604,24 +442,9 @@ class DiscordClient:
             "inline": False,
         })
 
-        components = [
-            {
-                "type": 1,
-                "components": [
-                    {
-                        "type": 2,
-                        "style": 3,  # Success
-                        "label": "Acknowledge",
-                        "custom_id": "acknowledge_reconciliation",
-                    },
-                ],
-            }
-        ]
-
         return await self.send_message(
             content="**RECONCILIATION ALERT - MANUAL REVIEW REQUIRED**",
             embeds=[embed],
-            components=components,
         )
 
     async def send_reconciliation_success(self, position_count: int) -> str:

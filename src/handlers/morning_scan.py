@@ -857,129 +857,108 @@ async def _run_morning_scan(env):
             # Get the full recommendation
             rec = await db.get_recommendation(rec_id)
 
-            # Send to Discord
-            message_id = await discord.send_recommendation(rec)
-            await db.set_recommendation_discord_message_id(rec_id, message_id)
+            # V2: Place order directly (autonomous mode)
+            try:
+                # Build OCC symbols
+                exp_parts = spread.expiration.split("-")
+                exp_str = exp_parts[0][2:] + exp_parts[1] + exp_parts[2]
+                option_type = "P" if spread.spread_type == SpreadType.BULL_PUT else "C"
+                short_symbol = f"{spread.underlying}{exp_str}{option_type}{int(spread.short_strike * 1000):08d}"
+                long_symbol = f"{spread.underlying}{exp_str}{option_type}{int(spread.long_strike * 1000):08d}"
 
-            recommendations_sent += 1
-            print(f"Sent recommendation for {spread.underlying}: {rec_id}")
+                # Place order
+                from core.broker.types import SpreadOrder
+                spread_order = SpreadOrder(
+                    underlying=spread.underlying,
+                    short_symbol=short_symbol,
+                    long_symbol=long_symbol,
+                    contracts=adjusted_contracts,
+                    limit_price=spread.credit,
+                )
+                order = await alpaca.place_spread_order(spread_order)
 
-            # Auto-approve if enabled
-            auto_approve = getattr(env, "AUTO_APPROVE_TRADES", "false").lower() == "true"
-            if auto_approve:
+                # Update recommendation status
+                await db.update_recommendation_status(rec_id, RecommendationStatus.APPROVED)
+
+                # Create trade record with pending_fill status
+                # The position monitor will verify the order filled and update to 'open'
+                trade_id = await db.create_trade(
+                    recommendation_id=rec_id,
+                    underlying=spread.underlying,
+                    spread_type=spread.spread_type,
+                    short_strike=spread.short_strike,
+                    long_strike=spread.long_strike,
+                    expiration=spread.expiration,
+                    entry_credit=spread.credit,
+                    contracts=adjusted_contracts,
+                    broker_order_id=order.id,
+                    status=TradeStatus.PENDING_FILL,
+                )
+
+                # Send autonomous notification (info-only, no buttons)
+                await discord.send_autonomous_notification(
+                    rec=rec,
+                    v2_confidence=v2_result.confidence,
+                    v2_thesis=v2_result.thesis,
+                    order_id=order.id,
+                )
+
+                recommendations_sent += 1
+                print(f"Order placed (pending fill): {trade_id}, Order: {order.id}")
+
+                # Store episodic memory with trade ID
+                if episodic_store:
+                    try:
+                        memory_id = await _store_episodic_memory(
+                            episodic_store=episodic_store,
+                            trade_id=trade_id,
+                            spread=spread,
+                            result=v2_result,
+                            regime_result=regime_result,
+                            iv_metrics=iv_metrics,
+                            current_vix=current_vix,
+                        )
+                        print(f"Stored episodic memory: {memory_id}")
+                    except Exception as e:
+                        print(f"Error storing episodic memory: {e}")
+
+                # Store trajectory for learning
                 try:
-                    # Build OCC symbols
-                    exp_parts = spread.expiration.split("-")
-                    exp_str = exp_parts[0][2:] + exp_parts[1] + exp_parts[2]
-                    option_type = "P" if spread.spread_type == SpreadType.BULL_PUT else "C"
-                    short_symbol = f"{spread.underlying}{exp_str}{option_type}{int(spread.short_strike * 1000):08d}"
-                    long_symbol = f"{spread.underlying}{exp_str}{option_type}{int(spread.long_strike * 1000):08d}"
+                    # Build three-perspective result if available
+                    three_persp_result = None
+                    if three_persp_manager and current_vix:
+                        three_persp_result = three_persp_manager.assess(
+                            spread=spread,
+                            account_equity=account.equity,
+                            current_positions=positions,
+                            current_vix=current_vix,
+                        )
 
-                    # Place order
-                    from core.broker.types import SpreadOrder
-                    spread_order = SpreadOrder(
+                    trajectory = TradeTrajectory.from_pipeline_result(
                         underlying=spread.underlying,
-                        short_symbol=short_symbol,
-                        long_symbol=long_symbol,
-                        contracts=adjusted_contracts,
-                        limit_price=spread.credit,
-                    )
-                    order = await alpaca.place_spread_order(spread_order)
-
-                    # Update recommendation status
-                    await db.update_recommendation_status(rec_id, RecommendationStatus.APPROVED)
-
-                    # Create trade record with pending_fill status
-                    # The position monitor will verify the order filled and update to 'open'
-                    trade_id = await db.create_trade(
-                        recommendation_id=rec_id,
-                        underlying=spread.underlying,
-                        spread_type=spread.spread_type,
+                        spread_type=spread.spread_type.value,
                         short_strike=spread.short_strike,
                         long_strike=spread.long_strike,
                         expiration=spread.expiration,
                         entry_credit=spread.credit,
                         contracts=adjusted_contracts,
-                        broker_order_id=order.id,
-                        status=TradeStatus.PENDING_FILL,
+                        analyst_messages=v2_result.analyst_messages,
+                        debate_messages=v2_result.debate_messages,
+                        synthesis_message=v2_result.synthesis_message,
+                        decision_output=v2_result.synthesis_message.structured_data if v2_result.synthesis_message else None,
+                        three_perspective=three_persp_result,
+                        market_regime=regime_result.get("regime") if regime_result else None,
+                        iv_rank=iv_metrics.iv_rank if iv_metrics else None,
+                        vix_at_entry=current_vix,
+                        trade_id=trade_id,
                     )
-
-                    # Update Discord message to show order placed (pending fill)
-                    await discord.update_message(
-                        message_id=message_id,
-                        content=f"**Order Placed: {spread.underlying}** (awaiting fill)",
-                        embeds=[{
-                            "title": f"Trade Order Placed: {spread.underlying}",
-                            "description": "Order submitted - awaiting fill confirmation",
-                            "color": 0xFEE75C,  # Yellow for pending
-                            "fields": [
-                                {"name": "Strategy", "value": spread.spread_type.value.replace("_", " ").title(), "inline": True},
-                                {"name": "Expiration", "value": spread.expiration, "inline": True},
-                                {"name": "Strikes", "value": f"${spread.short_strike:.2f}/${spread.long_strike:.2f}", "inline": True},
-                                {"name": "Credit", "value": f"${spread.credit:.2f}", "inline": True},
-                                {"name": "Contracts", "value": str(adjusted_contracts), "inline": True},
-                                {"name": "Order ID", "value": order.id, "inline": True},
-                            ],
-                        }],
-                        components=[],  # Remove buttons
-                    )
-
-                    # Don't update daily stats yet - wait for fill confirmation
-                    print(f"Order placed (pending fill): {trade_id}, Order: {order.id}")
-
-                    # Store episodic memory with trade ID
-                    if episodic_store:
-                        try:
-                            memory_id = await _store_episodic_memory(
-                                episodic_store=episodic_store,
-                                trade_id=trade_id,
-                                spread=spread,
-                                result=v2_result,
-                                regime_result=regime_result,
-                                iv_metrics=iv_metrics,
-                                current_vix=current_vix,
-                            )
-                            print(f"Stored episodic memory: {memory_id}")
-                        except Exception as e:
-                            print(f"Error storing episodic memory: {e}")
-
-                    # Store trajectory for learning
-                    try:
-                        # Build three-perspective result if available
-                        three_persp_result = None
-                        if three_persp_manager and current_vix:
-                            three_persp_result = three_persp_manager.assess(
-                                spread=spread,
-                                account_equity=account.equity,
-                                current_positions=positions,
-                                current_vix=current_vix,
-                            )
-
-                        trajectory = TradeTrajectory.from_pipeline_result(
-                            underlying=spread.underlying,
-                            spread_type=spread.spread_type.value,
-                            short_strike=spread.short_strike,
-                            long_strike=spread.long_strike,
-                            expiration=spread.expiration,
-                            entry_credit=spread.credit,
-                            contracts=adjusted_contracts,
-                            analyst_messages=v2_result.analyst_messages,
-                            debate_messages=v2_result.debate_messages,
-                            synthesis_message=v2_result.synthesis_message,
-                            decision_output=v2_result.synthesis_message.structured_data if v2_result.synthesis_message else None,
-                            three_perspective=three_persp_result,
-                            market_regime=regime_result.get("regime") if regime_result else None,
-                            iv_rank=iv_metrics.iv_rank if iv_metrics else None,
-                            vix_at_entry=current_vix,
-                            trade_id=trade_id,
-                        )
-                        trajectory_id = await trajectory_store.store_trajectory(trajectory)
-                        print(f"Stored trajectory: {trajectory_id}")
-                    except Exception as e:
-                        print(f"Error storing trajectory: {e}")
-
+                    trajectory_id = await trajectory_store.store_trajectory(trajectory)
+                    print(f"Stored trajectory: {trajectory_id}")
                 except Exception as e:
-                    print(f"Error auto-approving trade: {e}")
+                    print(f"Error storing trajectory: {e}")
+
+            except Exception as e:
+                print(f"Error placing order: {e}")
 
         except ClaudeRateLimitError as e:
             print(f"Claude API rate limit error: {e}")

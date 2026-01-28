@@ -29,9 +29,6 @@ def _import_handler(name: str):
     elif name == "position_monitor":
         from handlers.position_monitor import handle_position_monitor
         return handle_position_monitor
-    elif name == "discord_webhook":
-        from handlers.discord_webhook import handle_discord_webhook
-        return handle_discord_webhook
     elif name == "health":
         from handlers.health import handle_health
         return handle_health
@@ -50,11 +47,6 @@ async def on_fetch(request, env):
         # Health check
         if "/health" in url:
             handler = _import_handler("health")
-            return await handler(request, env)
-
-        # Discord webhook - handle both /discord and root POST (Discord sometimes ignores path)
-        if method == "POST" and ("/discord" in url or url.rstrip("/").endswith(".workers.dev")):
-            handler = _import_handler("discord_webhook")
             return await handler(request, env)
 
         # Test endpoints (for development only)
