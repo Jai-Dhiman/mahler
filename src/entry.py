@@ -115,6 +115,218 @@ async def on_fetch(request, env):
                 headers={"Content-Type": "application/json"},
             )
 
+        if "/test/v2-pipeline" in url:
+            # Test V2 multi-agent pipeline with a mock spread
+            from core.ai.claude import ClaudeClient
+            from core.broker.alpaca import AlpacaClient
+            from core.db.d1 import D1Client
+            from core.db.kv import KVClient
+            from core.agents import (
+                AgentOrchestrator,
+                DebateConfig,
+                IVAnalyst,
+                TechnicalAnalyst,
+                MacroAnalyst,
+                GreeksAnalyst,
+                BullResearcher,
+                BearResearcher,
+                DebateFacilitator,
+                TradingDecisionAgent,
+                RiskState,
+                build_agent_context,
+            )
+            from core.memory.retriever import MemoryRetriever
+            from core.risk.three_perspective import ThreePerspectiveRiskManager
+            from core.risk.position_sizer import PositionSizer
+            from core.types import SpreadType
+
+            output = {"status": "running", "stages": {}}
+
+            try:
+                # Initialize clients
+                db = D1Client(env.MAHLER_DB)
+                kv = KVClient(env.MAHLER_KV)
+                alpaca = AlpacaClient(
+                    api_key=env.ALPACA_API_KEY,
+                    secret_key=env.ALPACA_SECRET_KEY,
+                    paper=(env.ENVIRONMENT == "paper"),
+                )
+                claude = ClaudeClient(api_key=env.ANTHROPIC_API_KEY)
+
+                # Get market data
+                account = await alpaca.get_account()
+                vix_data = await alpaca.get_vix_snapshot()
+                current_vix = vix_data.get("vix", 20.0) if vix_data else 20.0
+                output["stages"]["market_data"] = {
+                    "status": "ok",
+                    "equity": account.equity,
+                    "vix": current_vix,
+                }
+
+                # Get a real options chain for SPY
+                chain = await alpaca.get_options_chain("SPY")
+                if not chain.contracts:
+                    return Response(
+                        json.dumps({"error": "No options data available"}),
+                        status=500,
+                        headers={"Content-Type": "application/json"},
+                    )
+
+                # Find a suitable spread for testing
+                from core.analysis.screener import OptionsScreener, ScreenerConfig
+                from core.analysis.iv_rank import IVMetrics
+
+                # Estimate IV metrics
+                iv_metrics = IVMetrics(
+                    current_iv=0.20,
+                    iv_rank=65.0,
+                    iv_percentile=65.0,
+                    iv_high=0.30,
+                    iv_low=0.15,
+                )
+                screener = OptionsScreener(ScreenerConfig())
+                opportunities = screener.screen_chain(chain, iv_metrics)
+
+                if not opportunities:
+                    return Response(
+                        json.dumps({"error": "No opportunities found", "chain_size": len(chain.contracts)}),
+                        status=200,
+                        headers={"Content-Type": "application/json"},
+                    )
+
+                spread = opportunities[0].spread
+                output["stages"]["spread_selection"] = {
+                    "status": "ok",
+                    "underlying": spread.underlying,
+                    "spread_type": spread.spread_type.value,
+                    "strikes": f"{spread.short_strike}/{spread.long_strike}",
+                    "expiration": spread.expiration,
+                    "credit": spread.credit,
+                }
+
+                # Initialize V2 components
+                memory_retriever = MemoryRetriever(env.MAHLER_DB, episodic_store=None)
+
+                # Create orchestrator
+                debate_rounds = int(env.MULTI_AGENT_DEBATE_ROUNDS or "2")
+                orchestrator = AgentOrchestrator(
+                    claude=claude,
+                    debate_config=DebateConfig(
+                        max_rounds=debate_rounds,
+                        min_rounds=1,
+                        consensus_threshold=0.7,
+                    ),
+                )
+                orchestrator.register_analyst(IVAnalyst(claude))
+                orchestrator.register_analyst(TechnicalAnalyst(claude))
+                orchestrator.register_analyst(MacroAnalyst(claude))
+                orchestrator.register_analyst(GreeksAnalyst(claude))
+                orchestrator.register_debater(BullResearcher(claude), "bull")
+                orchestrator.register_debater(BearResearcher(claude), "bear")
+                orchestrator.set_facilitator(DebateFacilitator(claude))
+
+                output["stages"]["orchestrator_init"] = {"status": "ok", "debate_rounds": debate_rounds}
+
+                # Build agent context
+                context = build_agent_context(
+                    spread=spread,
+                    underlying_price=chain.underlying_price,
+                    iv_metrics=iv_metrics,
+                    regime=None,
+                    regime_probability=None,
+                    current_vix=current_vix,
+                    vix_3m=current_vix,
+                    price_bars=None,
+                    positions=[],
+                    portfolio_greeks=None,
+                    account_equity=account.equity,
+                    buying_power=account.buying_power,
+                    daily_pnl=0.0,
+                    weekly_pnl=0.0,
+                    playbook_rules=await db.get_playbook_rules(),
+                    similar_trades=[],
+                )
+                output["stages"]["context_build"] = {"status": "ok"}
+
+                # Run V2 pipeline
+                result = await orchestrator.run_pipeline(context)
+                output["stages"]["pipeline_result"] = {
+                    "status": "ok",
+                    "recommendation": result.recommendation,
+                    "confidence": result.confidence,
+                    "thesis": result.thesis[:200] if result.thesis else None,
+                    "analyst_count": len(result.analyst_messages),
+                    "debate_rounds": len(result.debate_messages) // 2 if result.debate_messages else 0,
+                    "duration_ms": result.duration_ms,
+                }
+
+                # Test three-perspective risk
+                sizer = PositionSizer()
+                three_persp = ThreePerspectiveRiskManager(sizer)
+                risk_result = three_persp.assess(
+                    spread=spread,
+                    account_equity=account.equity,
+                    current_positions=[],
+                    current_vix=current_vix,
+                )
+                output["stages"]["three_perspective"] = {
+                    "status": "ok",
+                    "aggressive_contracts": risk_result.aggressive.recommended_contracts,
+                    "neutral_contracts": risk_result.neutral.recommended_contracts,
+                    "conservative_contracts": risk_result.conservative.recommended_contracts,
+                    "weighted_contracts": risk_result.weighted_contracts,
+                    "consensus": risk_result.consensus_recommendation,
+                }
+
+                # Test decision agent
+                decision_agent = TradingDecisionAgent(claude)
+                risk_state = RiskState(
+                    risk_level="normal",
+                    size_multiplier=1.0,
+                    portfolio_heat=0.0,
+                    daily_pnl=0.0,
+                    weekly_pnl=0.0,
+                    is_halted=False,
+                )
+
+                # Retrieve context for decision
+                retrieved_context = await memory_retriever.retrieve_context(
+                    underlying=spread.underlying,
+                    spread_type=spread.spread_type.value,
+                    market_regime=None,
+                    iv_rank=iv_metrics.iv_rank,
+                    vix=current_vix,
+                )
+
+                decision = await decision_agent.make_decision(
+                    context=context,
+                    risk_state=risk_state,
+                    retrieved_context=retrieved_context,
+                    three_persp_manager=three_persp,
+                    current_vix=current_vix,
+                )
+                output["stages"]["decision_agent"] = {
+                    "status": "ok",
+                    "decision": decision.decision,
+                    "position_size": decision.position_size,
+                    "confidence": decision.confidence,
+                    "thesis": decision.final_thesis[:200] if decision.final_thesis else None,
+                    "key_factors": decision.key_factors[:3],
+                }
+
+                output["status"] = "complete"
+
+            except Exception as e:
+                import traceback
+                output["status"] = "error"
+                output["error"] = str(e)
+                output["traceback"] = traceback.format_exc()
+
+            return Response(
+                json.dumps(output, indent=2),
+                headers={"Content-Type": "application/json"},
+            )
+
         if "/test/debug-scan" in url:
             # Debug scan - bypasses market hours check and provides verbose output
             from core.analysis.iv_rank import IVMetrics, calculate_iv_metrics

@@ -23,6 +23,7 @@ crons = [
 binding = "MAHLER_DB"
 database_name = "mahler-db"
 database_id = "b6cb2eac-2903-46bd-baea-b4ff2dc904d0"
+migrations_dir = "src/migrations"
 
 # KV namespace for fast state (circuit breakers, rate limits)
 [[kv_namespaces]]
