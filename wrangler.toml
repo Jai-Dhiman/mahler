@@ -57,7 +57,5 @@ ENVIRONMENT = "paper"
 LOG_LEVEL = "INFO"
 AUTO_APPROVE_TRADES = "true"  # Auto-execute trades without manual Discord approval
 
-# V2 Multi-Agent System Feature Flags
-MULTI_AGENT_ENABLED = "false"  # Enable V2 multi-agent analysis pipeline
+# Multi-Agent System Configuration
 MULTI_AGENT_DEBATE_ROUNDS = "2"  # Number of debate rounds between bull/bear
-AUTONOMOUS_MODE = "false"  # Skip approval buttons in autonomous mode

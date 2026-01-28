@@ -377,38 +377,34 @@ async def _run_morning_scan(env):
     claude = ClaudeClient(api_key=env.ANTHROPIC_API_KEY)
 
     # V2 Multi-Agent System initialization
-    multi_agent_enabled = getattr(env, "MULTI_AGENT_ENABLED", "false").lower() == "true"
-    autonomous_mode = getattr(env, "AUTONOMOUS_MODE", "false").lower() == "true"
     debate_rounds = int(getattr(env, "MULTI_AGENT_DEBATE_ROUNDS", "2"))
 
-    orchestrator = None
+    print(f"V2 Multi-Agent System (debate_rounds={debate_rounds})")
+    orchestrator = _create_v2_orchestrator(claude, debate_rounds=debate_rounds)
+
+    # Initialize episodic memory if bindings are available
     episodic_store = None
     memory_retriever = None
+    if hasattr(env, "EPISODIC_MEMORY") and hasattr(env, "AI"):
+        episodic_store = EpisodicMemoryStore(
+            vectorize_binding=env.EPISODIC_MEMORY,
+            ai_binding=env.AI,
+            d1_binding=env.MAHLER_DB,
+        )
+        memory_retriever = MemoryRetriever(
+            d1_binding=env.MAHLER_DB,
+            episodic_store=episodic_store,
+        )
+        print("V2 Episodic memory initialized")
+    else:
+        print("V2 Running without episodic memory (bindings not configured)")
+
+    # Initialize trajectory store for learning
+    trajectory_store = TrajectoryStore(env.MAHLER_DB)
+    print("V2 Trajectory store initialized")
+
+    # Initialize three-perspective risk manager
     three_persp_manager = None
-    trajectory_store = None
-
-    if multi_agent_enabled:
-        print(f"V2 Multi-Agent System enabled (debate_rounds={debate_rounds})")
-        orchestrator = _create_v2_orchestrator(claude, debate_rounds=debate_rounds)
-
-        # Initialize episodic memory if bindings are available
-        if hasattr(env, "EPISODIC_MEMORY") and hasattr(env, "AI"):
-            episodic_store = EpisodicMemoryStore(
-                vectorize_binding=env.EPISODIC_MEMORY,
-                ai_binding=env.AI,
-                d1_binding=env.MAHLER_DB,
-            )
-            memory_retriever = MemoryRetriever(
-                d1_binding=env.MAHLER_DB,
-                episodic_store=episodic_store,
-            )
-            print("V2 Episodic memory initialized")
-        else:
-            print("V2 Running without episodic memory (bindings not configured)")
-
-        # Initialize trajectory store for learning
-        trajectory_store = TrajectoryStore(env.MAHLER_DB)
-        print("V2 Trajectory store initialized")
 
     # Check if market is open
     market_open = await alpaca.is_market_open()
@@ -561,10 +557,9 @@ async def _run_morning_scan(env):
     screener = OptionsScreener(ScreenerConfig(), scorer=scorer)
     sizer = PositionSizer(kv_client=kv)
 
-    # V2: Initialize three-perspective risk manager if multi-agent enabled
-    if multi_agent_enabled:
-        three_persp_manager = ThreePerspectiveRiskManager(sizer)
-        print("V2 Three-perspective risk manager initialized")
+    # V2: Initialize three-perspective risk manager
+    three_persp_manager = ThreePerspectiveRiskManager(sizer)
+    print("V2 Three-perspective risk manager initialized")
 
     # Combined size multiplier (risk + regime)
     # Use the more conservative (lower) of the two multipliers
@@ -770,83 +765,67 @@ async def _run_morning_scan(env):
                     f"IV mean reversion: {mr_result.signal.value} (z-score: {mr_result.z_score:.2f})"
                 )
 
-            # Get AI analysis - V2 multi-agent or V1 single-agent
-            v2_result = None
-            v2_memory_id = None
+            # V2 Multi-Agent Analysis Pipeline
+            print(f"Running multi-agent analysis for {spread.underlying}...")
 
-            if multi_agent_enabled and orchestrator:
-                # V2 Multi-Agent Analysis Pipeline
-                print(f"[V2] Running multi-agent analysis for {spread.underlying}...")
+            # Get daily and weekly P&L for portfolio context
+            daily_stats = await kv.get_daily_stats()
+            daily_pnl = daily_stats.get("realized_pnl", 0)
+            weekly_pnl = weekly_stats.get("realized_pnl", 0) if weekly_stats else 0
 
-                # Get daily and weekly P&L for portfolio context
-                daily_stats = await kv.get_daily_stats()
-                daily_pnl = daily_stats.get("realized_pnl", 0)
-                weekly_pnl = weekly_stats.get("realized_pnl", 0) if weekly_stats else 0
+            # Get price bars for technical analysis
+            price_bars = None
+            try:
+                price_bars = await alpaca.get_historical_bars(spread.underlying, timeframe="1Day", limit=50)
+            except Exception as e:
+                print(f"Could not fetch price bars: {e}")
 
-                # Get price bars for technical analysis
-                price_bars = None
-                try:
-                    price_bars = await alpaca.get_historical_bars(spread.underlying, timeframe="1Day", limit=50)
-                except Exception as e:
-                    print(f"[V2] Could not fetch price bars: {e}")
+            # Get portfolio Greeks if available
+            portfolio_greeks = None  # TODO: Calculate from positions if needed
 
-                # Get portfolio Greeks if available
-                portfolio_greeks = None  # TODO: Calculate from positions if needed
+            v2_result, similar_trades = await _run_v2_analysis(
+                orchestrator=orchestrator,
+                spread=spread,
+                underlying_price=underlying_price,
+                iv_metrics=iv_metrics,
+                term_structure=ts_result,
+                mean_reversion=mr_result,
+                regime_result=regime_result,
+                current_vix=current_vix,
+                vix_3m=vix_3m if 'vix_3m' in dir() else None,
+                price_bars=price_bars,
+                positions=positions,
+                portfolio_greeks=portfolio_greeks,
+                account=account,
+                daily_pnl=daily_pnl,
+                weekly_pnl=weekly_pnl,
+                playbook_rules=playbook_rules,
+                episodic_store=episodic_store,
+                memory_retriever=memory_retriever,
+            )
 
-                v2_result, similar_trades = await _run_v2_analysis(
-                    orchestrator=orchestrator,
-                    spread=spread,
-                    underlying_price=underlying_price,
-                    iv_metrics=iv_metrics,
-                    term_structure=ts_result,
-                    mean_reversion=mr_result,
-                    regime_result=regime_result,
-                    current_vix=current_vix,
-                    vix_3m=vix_3m if 'vix_3m' in dir() else None,
-                    price_bars=price_bars,
-                    positions=positions,
-                    portfolio_greeks=portfolio_greeks,
-                    account=account,
-                    daily_pnl=daily_pnl,
-                    weekly_pnl=weekly_pnl,
-                    playbook_rules=playbook_rules,
-                    episodic_store=episodic_store,
-                    memory_retriever=memory_retriever,
-                )
+            print(f"Pipeline complete: recommendation={v2_result.recommendation}, confidence={v2_result.confidence:.0%}")
 
-                print(f"[V2] Pipeline complete: recommendation={v2_result.recommendation}, confidence={v2_result.confidence:.0%}")
+            # Map V2 result to TradeAnalysis format
+            analysis = _map_v2_result_to_analysis(v2_result)
 
-                # Map V2 result to TradeAnalysis format
-                analysis = _map_v2_result_to_analysis(v2_result)
-
-                # Apply V2 position size adjustment if synthesis suggests it
-                if v2_result.synthesis_message and v2_result.synthesis_message.structured_data:
-                    v2_size_mult = v2_result.synthesis_message.structured_data.get("position_size_multiplier", 1.0)
-                    if v2_size_mult < 1.0:
-                        new_adjusted = max(1, int(adjusted_contracts * v2_size_mult))
-                        if new_adjusted < adjusted_contracts:
-                            print(f"[V2] Reducing position size: {adjusted_contracts} -> {new_adjusted} (V2 multiplier: {v2_size_mult:.2f})")
-                            adjusted_contracts = new_adjusted
-
-            else:
-                # V1 Single-Agent Analysis (original path)
-                analysis = await claude.analyze_trade(
-                    spread=spread,
-                    underlying_price=underlying_price,
-                    iv_rank=iv_metrics.iv_rank,
-                    current_iv=iv_metrics.current_iv,
-                    playbook_rules=playbook_rules,
-                    additional_context=iv_analysis_context if iv_analysis_context else None,
-                )
+            # Apply V2 position size adjustment if synthesis suggests it
+            if v2_result.synthesis_message and v2_result.synthesis_message.structured_data:
+                v2_size_mult = v2_result.synthesis_message.structured_data.get("position_size_multiplier", 1.0)
+                if v2_size_mult < 1.0:
+                    new_adjusted = max(1, int(adjusted_contracts * v2_size_mult))
+                    if new_adjusted < adjusted_contracts:
+                        print(f"Reducing position size: {adjusted_contracts} -> {new_adjusted} (V2 multiplier: {v2_size_mult:.2f})")
+                        adjusted_contracts = new_adjusted
 
             # Skip low confidence trades
             if analysis.confidence == Confidence.LOW:
                 print(f"Skipping low confidence trade: {spread.underlying}")
                 continue
 
-            # V2: Skip if recommendation is "skip"
-            if multi_agent_enabled and v2_result and v2_result.recommendation == "skip":
-                print(f"[V2] Skipping trade per multi-agent recommendation: {spread.underlying}")
+            # Skip if recommendation is "skip"
+            if v2_result.recommendation == "skip":
+                print(f"Skipping trade per multi-agent recommendation: {spread.underlying}")
                 continue
 
             # Get delta/theta from the scored spread or Greeks if available
@@ -948,10 +927,10 @@ async def _run_morning_scan(env):
                     # Don't update daily stats yet - wait for fill confirmation
                     print(f"Order placed (pending fill): {trade_id}, Order: {order.id}")
 
-                    # V2: Store episodic memory with trade ID
-                    if multi_agent_enabled and episodic_store and v2_result:
+                    # Store episodic memory with trade ID
+                    if episodic_store:
                         try:
-                            v2_memory_id = await _store_episodic_memory(
+                            memory_id = await _store_episodic_memory(
                                 episodic_store=episodic_store,
                                 trade_id=trade_id,
                                 spread=spread,
@@ -960,45 +939,44 @@ async def _run_morning_scan(env):
                                 iv_metrics=iv_metrics,
                                 current_vix=current_vix,
                             )
-                            print(f"[V2] Stored episodic memory: {v2_memory_id}")
+                            print(f"Stored episodic memory: {memory_id}")
                         except Exception as e:
-                            print(f"[V2] Error storing episodic memory: {e}")
+                            print(f"Error storing episodic memory: {e}")
 
-                    # V2: Store trajectory for learning
-                    if multi_agent_enabled and trajectory_store and v2_result:
-                        try:
-                            # Build three-perspective result if available
-                            three_persp_result = None
-                            if three_persp_manager and current_vix:
-                                three_persp_result = three_persp_manager.assess(
-                                    spread=spread,
-                                    account_equity=account.equity,
-                                    current_positions=positions,
-                                    current_vix=current_vix,
-                                )
-
-                            trajectory = TradeTrajectory.from_pipeline_result(
-                                underlying=spread.underlying,
-                                spread_type=spread.spread_type.value,
-                                short_strike=spread.short_strike,
-                                long_strike=spread.long_strike,
-                                expiration=spread.expiration,
-                                entry_credit=spread.credit,
-                                contracts=adjusted_contracts,
-                                analyst_messages=v2_result.analyst_messages,
-                                debate_messages=v2_result.debate_messages,
-                                synthesis_message=v2_result.synthesis_message,
-                                decision_output=v2_result.synthesis_message.structured_data if v2_result.synthesis_message else None,
-                                three_perspective=three_persp_result,
-                                market_regime=regime_result.get("regime") if regime_result else None,
-                                iv_rank=iv_metrics.iv_rank if iv_metrics else None,
-                                vix_at_entry=current_vix,
-                                trade_id=trade_id,
+                    # Store trajectory for learning
+                    try:
+                        # Build three-perspective result if available
+                        three_persp_result = None
+                        if three_persp_manager and current_vix:
+                            three_persp_result = three_persp_manager.assess(
+                                spread=spread,
+                                account_equity=account.equity,
+                                current_positions=positions,
+                                current_vix=current_vix,
                             )
-                            trajectory_id = await trajectory_store.store_trajectory(trajectory)
-                            print(f"[V2] Stored trajectory: {trajectory_id}")
-                        except Exception as e:
-                            print(f"[V2] Error storing trajectory: {e}")
+
+                        trajectory = TradeTrajectory.from_pipeline_result(
+                            underlying=spread.underlying,
+                            spread_type=spread.spread_type.value,
+                            short_strike=spread.short_strike,
+                            long_strike=spread.long_strike,
+                            expiration=spread.expiration,
+                            entry_credit=spread.credit,
+                            contracts=adjusted_contracts,
+                            analyst_messages=v2_result.analyst_messages,
+                            debate_messages=v2_result.debate_messages,
+                            synthesis_message=v2_result.synthesis_message,
+                            decision_output=v2_result.synthesis_message.structured_data if v2_result.synthesis_message else None,
+                            three_perspective=three_persp_result,
+                            market_regime=regime_result.get("regime") if regime_result else None,
+                            iv_rank=iv_metrics.iv_rank if iv_metrics else None,
+                            vix_at_entry=current_vix,
+                            trade_id=trade_id,
+                        )
+                        trajectory_id = await trajectory_store.store_trajectory(trajectory)
+                        print(f"Stored trajectory: {trajectory_id}")
+                    except Exception as e:
+                        print(f"Error storing trajectory: {e}")
 
                 except Exception as e:
                     print(f"Error auto-approving trade: {e}")

@@ -19,8 +19,52 @@ from core.risk.circuit_breaker import CircuitBreaker
 from core.risk.position_sizer import PositionSizer
 from core.types import Confidence, RecommendationStatus, SpreadType, TradeStatus
 
+# V2 Multi-Agent System imports
+from core.agents import (
+    AgentOrchestrator,
+    DebateConfig,
+    IVAnalyst,
+    TechnicalAnalyst,
+    MacroAnalyst,
+    GreeksAnalyst,
+    BullResearcher,
+    BearResearcher,
+    DebateFacilitator,
+    build_agent_context,
+)
+
 UNDERLYINGS = ["SPY", "QQQ", "IWM"]
 MAX_RECOMMENDATIONS = 2  # Fewer than morning scan
+
+
+def _create_orchestrator(claude, debate_rounds: int = 2) -> AgentOrchestrator:
+    """Create a configured agent orchestrator."""
+    orchestrator = AgentOrchestrator(
+        claude=claude,
+        debate_config=DebateConfig(
+            max_rounds=debate_rounds,
+            min_rounds=1,
+            consensus_threshold=0.7,
+        ),
+    )
+    orchestrator.register_analyst(IVAnalyst(claude))
+    orchestrator.register_analyst(TechnicalAnalyst(claude))
+    orchestrator.register_analyst(MacroAnalyst(claude))
+    orchestrator.register_analyst(GreeksAnalyst(claude))
+    orchestrator.register_debater(BullResearcher(claude), "bull")
+    orchestrator.register_debater(BearResearcher(claude), "bear")
+    orchestrator.set_facilitator(DebateFacilitator(claude))
+    return orchestrator
+
+
+def _map_result_to_confidence(result) -> Confidence:
+    """Map pipeline result confidence to Confidence enum."""
+    if result.confidence >= 0.7:
+        return Confidence.HIGH
+    elif result.confidence >= 0.4:
+        return Confidence.MEDIUM
+    else:
+        return Confidence.LOW
 
 
 async def handle_midday_check(env):
@@ -66,6 +110,10 @@ async def _run_midday_check(env):
     )
 
     claude = ClaudeClient(api_key=env.ANTHROPIC_API_KEY)
+
+    # V2 Multi-Agent System
+    debate_rounds = int(getattr(env, "MULTI_AGENT_DEBATE_ROUNDS", "2"))
+    orchestrator = _create_orchestrator(claude, debate_rounds=debate_rounds)
 
     # Check if market is open
     if not await alpaca.is_market_open():
@@ -137,15 +185,37 @@ async def _run_midday_check(env):
 
         if size_result.contracts > 0:
             try:
-                analysis = await claude.analyze_trade(
+                # Build agent context for V2 analysis
+                context = build_agent_context(
                     spread=spread,
                     underlying_price=underlying_price,
-                    iv_rank=iv_metrics.iv_rank,
-                    current_iv=iv_metrics.current_iv,
+                    iv_metrics=iv_metrics,
+                    term_structure=None,
+                    mean_reversion=None,
+                    regime=None,
+                    regime_probability=None,
+                    current_vix=None,
+                    vix_3m=None,
+                    price_bars=None,
+                    positions=positions,
+                    portfolio_greeks=None,
+                    account_equity=account.equity,
+                    buying_power=account.buying_power,
+                    daily_pnl=0,
+                    weekly_pnl=0,
                     playbook_rules=playbook_rules,
+                    similar_trades=[],
+                    scan_type="midday",
                 )
 
-                if analysis.confidence != Confidence.LOW:
+                # Run V2 multi-agent analysis
+                result = await orchestrator.run_pipeline(context)
+                confidence = _map_result_to_confidence(result)
+
+                # Skip if recommendation is "skip" or low confidence
+                if result.recommendation == "skip" or confidence == Confidence.LOW:
+                    print(f"Skipping trade: recommendation={result.recommendation}, confidence={result.confidence:.0%}")
+                else:
                     rec_id = await db.create_recommendation(
                         underlying=spread.underlying,
                         spread_type=spread.spread_type,
@@ -162,8 +232,8 @@ async def _run_midday_check(env):
                         theta=(spread.short_contract.greeks.theta
                               if spread.short_contract and spread.short_contract.greeks
                               else None),
-                        thesis=analysis.thesis,
-                        confidence=analysis.confidence,
+                        thesis=result.thesis,
+                        confidence=confidence,
                         suggested_contracts=size_result.contracts,
                         analysis_price=spread.credit,
                     )

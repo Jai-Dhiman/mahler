@@ -470,70 +470,11 @@ async def _run_eod_summary(env):
         trade = db._row_to_trade(row)
         closed_today.append(trade)
 
-    # Generate AI reflections for closed trades
-    for trade in closed_today:
-        if trade.reflection:
-            continue  # Already has reflection
+    # Process reflections for trades with episodic memory
+    if closed_today:
+        print("Processing reflections for trades with episodic memory...")
 
-        try:
-            # Get original thesis from recommendation
-            rec = (
-                await db.get_recommendation(trade.recommendation_id)
-                if trade.recommendation_id
-                else None
-            )
-            original_thesis = rec.thesis if rec else None
-
-            reflection = await claude.generate_reflection(trade, original_thesis)
-
-            # Update trade with reflection
-            await db.run(
-                "UPDATE trades SET reflection = ?, lesson = ? WHERE id = ?",
-                [reflection.reflection, reflection.lesson, trade.id],
-            )
-
-            print(f"Generated reflection for trade {trade.id}")
-
-        except ClaudeRateLimitError as e:
-            print(f"Claude API rate limit error: {e}")
-            await discord.send_api_token_alert("Claude", str(e))
-        except Exception as e:
-            print(f"Error generating reflection: {e}")
-
-    # Check for playbook updates if we have enough closed trades
-    if len(closed_today) >= 2:
-        try:
-            # Get recent trades with reflections
-            recent_with_reflections = [t for t in closed_today if t.reflection]
-
-            if recent_with_reflections:
-                playbook_rules = await db.get_playbook_rules()
-                updates = await claude.suggest_playbook_updates(
-                    recent_trades=recent_with_reflections,
-                    current_rules=playbook_rules,
-                )
-
-                for new_rule in updates.new_rules:
-                    await db.add_playbook_rule(
-                        rule=new_rule["rule"],
-                        source="learned",
-                        supporting_trade_ids=new_rule.get("supporting_trades", []),
-                    )
-                    print(f"Added playbook rule: {new_rule['rule']}")
-
-        except ClaudeRateLimitError as e:
-            print(f"Claude API rate limit error: {e}")
-            await discord.send_api_token_alert("Claude", str(e))
-        except Exception as e:
-            print(f"Error updating playbook: {e}")
-
-    # V2: Process reflections for trades with episodic memory
-    multi_agent_enabled = getattr(env, "MULTI_AGENT_ENABLED", "false").lower() == "true"
-
-    if multi_agent_enabled and closed_today:
-        print("[V2] Processing reflections for trades with episodic memory...")
-
-        # Initialize V2 components if bindings available
+        # Initialize reflection components if bindings available
         episodic_store = None
         memory_retriever = None
         reflection_engine = None
@@ -553,9 +494,9 @@ async def _run_eod_summary(env):
                 memory_retriever=memory_retriever,
                 episodic_store=episodic_store,
             )
-            print("[V2] Reflection engine initialized")
+            print("Reflection engine initialized")
         else:
-            print("[V2] Skipping V2 reflection (bindings not configured)")
+            print("Skipping reflection (bindings not configured)")
 
         if reflection_engine:
             for trade in closed_today:
@@ -567,7 +508,7 @@ async def _run_eod_summary(env):
                     )
 
                     if not episodic_result["results"]:
-                        print(f"[V2] No episodic memory for trade {trade.id[:8]}, skipping")
+                        print(f"No episodic memory for trade {trade.id[:8]}, skipping")
                         continue
 
                     episodic_row = episodic_result["results"][0]
@@ -575,7 +516,7 @@ async def _run_eod_summary(env):
 
                     # Skip if already has actual outcome
                     if episodic_row.get("actual_outcome"):
-                        print(f"[V2] Trade {trade.id[:8]} already has outcome, skipping")
+                        print(f"Trade {trade.id[:8]} already has outcome, skipping")
                         continue
 
                     # Build TradeOutcome from trade
@@ -622,7 +563,7 @@ async def _run_eod_summary(env):
                         thesis=predicted_data.get("thesis", ""),
                     )
 
-                    # Generate reflection using V2 engine
+                    # Generate reflection using reflection engine
                     reflection = await reflection_engine.generate_reflection(
                         outcome=trade_outcome,
                         predicted=predicted_outcome,
@@ -632,25 +573,25 @@ async def _run_eod_summary(env):
                         vix=episodic_row.get("vix_at_entry"),
                     )
 
-                    print(f"[V2] Generated reflection for trade {trade.id[:8]}: prediction_correct={reflection.prediction_correct}")
+                    print(f"Generated reflection for trade {trade.id[:8]}: prediction_correct={reflection.prediction_correct}")
 
                     # Process candidate rules for learning
                     rule_ids = await reflection_engine.process_candidate_rules(reflection, trade_outcome)
                     if rule_ids:
-                        print(f"[V2] Processed {len(rule_ids)} candidate rules for trade {trade.id[:8]}")
+                        print(f"Processed {len(rule_ids)} candidate rules for trade {trade.id[:8]}")
 
                 except ClaudeRateLimitError as e:
-                    print(f"[V2] Claude rate limit during reflection: {e}")
+                    print(f"Claude rate limit during reflection: {e}")
                     await discord.send_api_token_alert("Claude", str(e))
                     break  # Stop processing more reflections
                 except Exception as e:
                     import traceback
-                    print(f"[V2] Error generating V2 reflection for trade {trade.id[:8]}: {e}")
+                    print(f"Error generating reflection for trade {trade.id[:8]}: {e}")
                     print(traceback.format_exc())
 
-    # V2: Record outcomes for closed trades in trajectory store
-    if multi_agent_enabled and closed_today:
-        print("[V2] Recording outcomes for trajectories...")
+    # Record outcomes for closed trades in trajectory store
+    if closed_today:
+        print("Recording outcomes for trajectories...")
         trajectory_store = TrajectoryStore(env.MAHLER_DB)
 
         for trade in closed_today:
@@ -658,11 +599,11 @@ async def _run_eod_summary(env):
                 # Look up trajectory by trade ID
                 trajectory = await trajectory_store.get_trajectory_by_trade_id(trade.id)
                 if not trajectory:
-                    print(f"[V2] No trajectory found for trade {trade.id[:8]}")
+                    print(f"No trajectory found for trade {trade.id[:8]}")
                     continue
 
                 if trajectory.has_outcome:
-                    print(f"[V2] Trajectory for trade {trade.id[:8]} already has outcome")
+                    print(f"Trajectory for trade {trade.id[:8]} already has outcome")
                     continue
 
                 # Calculate P/L percentage
@@ -693,23 +634,23 @@ async def _run_eod_summary(env):
                     exit_reason=exit_reason,
                     days_held=days_held,
                 )
-                print(f"[V2] Updated outcome for trajectory {trajectory.id[:8]}: P/L={pnl_pct:.1%}")
+                print(f"Updated outcome for trajectory {trajectory.id[:8]}: P/L={pnl_pct:.1%}")
 
             except Exception as e:
-                print(f"[V2] Error recording outcome for trade {trade.id[:8]}: {e}")
+                print(f"Error recording outcome for trade {trade.id[:8]}: {e}")
 
         # Run auto-labeling at end of day
         try:
             synthesizer = DataSynthesizer(trajectory_store)
             labeled_count = await synthesizer.label_unlabeled_trajectories(limit=100)
             if labeled_count > 0:
-                print(f"[V2] Auto-labeled {labeled_count} trajectories")
+                print(f"Auto-labeled {labeled_count} trajectories")
 
                 # Log label distribution
                 distribution = await synthesizer.get_label_distribution()
-                print(f"[V2] Label distribution: {distribution}")
+                print(f"Label distribution: {distribution}")
         except Exception as e:
-            print(f"[V2] Error during auto-labeling: {e}")
+            print(f"Error during auto-labeling: {e}")
 
     # Reconcile positions with broker
     try:
