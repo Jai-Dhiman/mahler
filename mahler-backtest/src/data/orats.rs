@@ -1,11 +1,3 @@
-//! ORATS API client for downloading historical options data.
-//!
-//! API Constraints:
-//! - Row limit: 5,000 rows per request
-//! - Rate limit: 1,000 requests/minute
-//! - Monthly limit: 20,000 requests/month
-//! - Date range: 2007-01-01 to present
-
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -43,6 +35,9 @@ pub enum ORATSError {
 
     #[error("No data available for {ticker} on {date}")]
     NoData { ticker: String, date: NaiveDate },
+
+    #[error("No data for this date (404)")]
+    NoDataForDate,
 }
 
 /// API response wrapper - ORATS wraps all responses in {"data": [...]}
@@ -255,15 +250,21 @@ impl ORATSClient {
             return Err(ORATSError::RateLimitExceeded);
         }
 
+        // 404 means no data for that date - not an error, just empty
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(ORATSError::NoDataForDate);
+        }
+
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
             return Err(ORATSError::ApiError(format!("{}: {}", status, text)));
         }
 
-        response.json().await.map_err(|e| {
-            ORATSError::InvalidResponse(format!("Failed to parse response: {}", e))
-        })
+        response
+            .json()
+            .await
+            .map_err(|e| ORATSError::InvalidResponse(format!("Failed to parse response: {}", e)))
     }
 
     /// Get request count for monitoring.
@@ -272,7 +273,10 @@ impl ORATSClient {
     }
 
     /// Get available tickers with date ranges.
-    pub async fn get_tickers(&mut self, ticker: Option<&str>) -> Result<Vec<TickerInfo>, ORATSError> {
+    pub async fn get_tickers(
+        &mut self,
+        ticker: Option<&str>,
+    ) -> Result<Vec<TickerInfo>, ORATSError> {
         let params: Vec<(&str, &str)> = match ticker {
             Some(t) => vec![("ticker", t)],
             None => vec![],
@@ -290,7 +294,8 @@ impl ORATSClient {
         let date_str = trade_date.format("%Y-%m-%d").to_string();
         let params = vec![("ticker", ticker), ("tradeDate", &date_str)];
 
-        let response: ApiResponse<Vec<RawStrikeRecord>> = self.request("hist/strikes", &params).await?;
+        let response: ApiResponse<Vec<RawStrikeRecord>> =
+            self.request("hist/strikes", &params).await?;
         Ok(response.data)
     }
 
@@ -310,7 +315,8 @@ impl ORATSClient {
         );
         let params = vec![("ticker", ticker), ("tradeDate", &date_range)];
 
-        let response: ApiResponse<Vec<RawStrikeRecord>> = self.request("hist/strikes", &params).await?;
+        let response: ApiResponse<Vec<RawStrikeRecord>> =
+            self.request("hist/strikes", &params).await?;
         Ok(response.data)
     }
 
@@ -394,7 +400,13 @@ mod tests {
             max: "2024-01-15".to_string(),
         };
 
-        assert_eq!(info.min_date(), Some(NaiveDate::from_ymd_opt(2007, 1, 3).unwrap()));
-        assert_eq!(info.max_date(), Some(NaiveDate::from_ymd_opt(2024, 1, 15).unwrap()));
+        assert_eq!(
+            info.min_date(),
+            Some(NaiveDate::from_ymd_opt(2007, 1, 3).unwrap())
+        );
+        assert_eq!(
+            info.max_date(),
+            Some(NaiveDate::from_ymd_opt(2024, 1, 15).unwrap())
+        );
     }
 }

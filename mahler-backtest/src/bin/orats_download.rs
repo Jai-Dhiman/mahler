@@ -1,28 +1,8 @@
-//! ORATS Data Downloader
-//!
-//! Downloads historical options data from ORATS API and stores in Parquet format.
-//!
-//! # Usage
-//!
-//! ```bash
-//! # Set API token
-//! export ORATS_API_KEY=your-token
-//!
-//! # Explore API and data availability
-//! orats-download explore --tickers SPY,QQQ,IWM
-//!
 //! # Download all data
 //! orats-download download --tickers SPY,QQQ,IWM
 //!
-//! # Download specific date range
-//! orats-download download --tickers SPY --start 2020-01-01 --end 2020-12-31
-//!
-//! # Resume interrupted download
-//! orats-download download --resume
-//!
 //! # Validate downloaded data
 //! orats-download validate --tickers SPY,QQQ,IWM
-//! ```
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -37,7 +17,7 @@ use polars::prelude::*;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use mahler_backtest::data::{ORATSClient, RawStrikeRecord, records_to_snapshot};
+use mahler_backtest::data::{records_to_snapshot, ORATSClient, ORATSError, RawStrikeRecord};
 
 const SEPARATOR: &str = "============================================================";
 
@@ -251,12 +231,7 @@ fn records_to_dataframe(records: &[RawStrikeRecord]) -> Result<DataFrame> {
 }
 
 /// Save DataFrame to Parquet file (append if exists).
-fn save_to_parquet(
-    data_dir: &PathBuf,
-    ticker: &str,
-    year: i32,
-    df: DataFrame,
-) -> Result<PathBuf> {
+fn save_to_parquet(data_dir: &PathBuf, ticker: &str, year: i32, df: DataFrame) -> Result<PathBuf> {
     let output_dir = data_dir.join("strikes").join(ticker);
     fs::create_dir_all(&output_dir)?;
 
@@ -264,25 +239,22 @@ fn save_to_parquet(
 
     // If file exists, read and concatenate
     let final_df = if output_path.exists() {
-        let existing_df = LazyFrame::scan_parquet(&output_path, ScanArgsParquet::default())?
-            .collect()?;
+        let existing_df =
+            LazyFrame::scan_parquet(&output_path, ScanArgsParquet::default())?.collect()?;
 
         // Concatenate and deduplicate
-        let combined = concat(
-            [existing_df.lazy(), df.lazy()],
-            UnionArgs::default(),
-        )?
-        .unique(
-            Some(vec![
-                "ticker".into(),
-                "trade_date".into(),
-                "expir_date".into(),
-                "strike".into(),
-                "option_type".into(),
-            ]),
-            UniqueKeepStrategy::Last,
-        )
-        .collect()?;
+        let combined = concat([existing_df.lazy(), df.lazy()], UnionArgs::default())?
+            .unique(
+                Some(vec![
+                    "ticker".into(),
+                    "trade_date".into(),
+                    "expir_date".into(),
+                    "strike".into(),
+                    "option_type".into(),
+                ]),
+                UniqueKeepStrategy::Last,
+            )
+            .collect()?;
 
         combined
     } else {
@@ -299,8 +271,8 @@ fn save_to_parquet(
 }
 
 async fn cmd_explore(tickers: Vec<&str>) -> Result<()> {
-    let token = std::env::var("ORATS_API_KEY")
-        .context("ORATS_API_KEY environment variable not set")?;
+    let token =
+        std::env::var("ORATS_API_KEY").context("ORATS_API_KEY environment variable not set")?;
 
     let mut client = ORATSClient::new(token);
 
@@ -358,7 +330,10 @@ async fn cmd_explore(tickers: Vec<&str>) -> Result<()> {
                 // Convert to snapshot and show summary
                 let snapshot = records_to_snapshot(sample_ticker, try_date, records);
                 println!("\n   Converted to OptionsSnapshot:");
-                println!("     Underlying: {} @ {}", snapshot.ticker, snapshot.underlying_price);
+                println!(
+                    "     Underlying: {} @ {}",
+                    snapshot.ticker, snapshot.underlying_price
+                );
                 println!("     Chains: {}", snapshot.chains.len());
                 println!("     Total quotes: {}", snapshot.total_quotes());
 
@@ -380,7 +355,10 @@ async fn cmd_explore(tickers: Vec<&str>) -> Result<()> {
     println!("   Trading days (2007-present): ~{}", days.len());
     println!("   Requests needed: ~{}", requests_needed);
     println!("   Monthly limit: 20,000");
-    println!("   Months needed: ~{:.1}", requests_needed as f64 / 20_000.0);
+    println!(
+        "   Months needed: ~{:.1}",
+        requests_needed as f64 / 20_000.0
+    );
 
     println!("\n{}", SEPARATOR);
 
@@ -394,8 +372,8 @@ async fn cmd_download(
     end_date: NaiveDate,
     resume: bool,
 ) -> Result<()> {
-    let token = std::env::var("ORATS_API_KEY")
-        .context("ORATS_API_KEY environment variable not set")?;
+    let token =
+        std::env::var("ORATS_API_KEY").context("ORATS_API_KEY environment variable not set")?;
 
     let mut client = ORATSClient::new(token);
 
@@ -440,7 +418,9 @@ async fn cmd_download(
 
         // Initialize completed dates
         if !progress.completed_dates.contains_key(*ticker) {
-            progress.completed_dates.insert(ticker_str.clone(), Vec::new());
+            progress
+                .completed_dates
+                .insert(ticker_str.clone(), Vec::new());
         }
 
         let completed_set: HashSet<String> = progress
@@ -455,7 +435,9 @@ async fn cmd_download(
         let pb = ProgressBar::new(total_days as u64);
         pb.set_style(
             ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} {msg}")?
+                .template(
+                    "{spinner:.green} [{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} {msg}",
+                )?
                 .progress_chars("=>-"),
         );
         pb.set_message(format!("{}", ticker));
@@ -473,15 +455,28 @@ async fn cmd_download(
 
             // Download data with retries
             let mut records: Option<Vec<RawStrikeRecord>> = None;
+            let mut is_no_data = false;
+
             for attempt in 0..3 {
                 match client.get_strikes_history(ticker, trade_date).await {
                     Ok(r) => {
                         records = Some(r);
                         break;
                     }
+                    Err(ORATSError::NoDataForDate) => {
+                        // 404 = no data for this date (holiday, before ticker existed)
+                        // This is expected, not an error - mark as completed
+                        is_no_data = true;
+                        break;
+                    }
+                    Err(ORATSError::RateLimitExceeded) => {
+                        // Wait longer for rate limit
+                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    }
                     Err(e) => {
                         if attempt < 2 {
-                            tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(attempt))).await;
+                            tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(attempt)))
+                                .await;
                         } else {
                             progress.errors.push(DownloadError {
                                 ticker: ticker_str.clone(),
@@ -494,17 +489,25 @@ async fn cmd_download(
                 }
             }
 
-            if let Some(recs) = records {
+            // Process records if we got data
+            let got_data = if let Some(ref recs) = records {
                 if !recs.is_empty() {
-                    // Add to buffer
                     let year = trade_date.year();
                     let key = (ticker_str.clone(), year);
-                    write_buffer.entry(key).or_default().extend(recs.iter().cloned());
+                    write_buffer
+                        .entry(key)
+                        .or_default()
+                        .extend(recs.iter().cloned());
                     buffer_rows += recs.len() * 2; // calls + puts
                     progress.total_rows_downloaded += recs.len() as u64 * 2;
                 }
+                true
+            } else {
+                false
+            };
 
-                // Mark as completed
+            // Mark as completed (whether we got data, no data, or 404)
+            if got_data || is_no_data {
                 progress
                     .completed_dates
                     .get_mut(*ticker)
@@ -523,14 +526,31 @@ async fn cmd_download(
                     save_to_parquet(&data_dir, &t, y, df)?;
                 }
                 buffer_rows = 0;
+                // Save progress after flush
+                progress.last_updated = Utc::now().to_rfc3339();
+                progress.save(&progress_file)?;
             }
 
-            // Save progress periodically
-            if progress.total_requests_made % 100 == 0 {
+            // Save progress every 50 requests
+            if progress.total_requests_made % 50 == 0 {
                 progress.last_updated = Utc::now().to_rfc3339();
                 progress.save(&progress_file)?;
             }
         }
+
+        // Flush buffer after each ticker completes
+        if !write_buffer.is_empty() {
+            pb.set_message(format!("Flushing {} rows for {}...", buffer_rows, ticker));
+            for ((t, y), recs) in write_buffer.drain() {
+                let df = records_to_dataframe(&recs)?;
+                save_to_parquet(&data_dir, &t, y, df)?;
+            }
+            buffer_rows = 0;
+        }
+
+        // Save progress after each ticker
+        progress.last_updated = Utc::now().to_rfc3339();
+        progress.save(&progress_file)?;
 
         pb.finish_with_message(format!("{} complete", ticker));
     }
@@ -552,7 +572,10 @@ async fn cmd_download(
     println!("\nDownload Complete!");
     println!("  Total requests: {}", progress.total_requests_made);
     println!("  Total rows: {}", progress.total_rows_downloaded);
-    println!("  Elapsed time: {:.1} minutes", elapsed.as_secs_f64() / 60.0);
+    println!(
+        "  Elapsed time: {:.1} minutes",
+        elapsed.as_secs_f64() / 60.0
+    );
     println!("  Errors: {}", progress.errors.len());
 
     Ok(())
@@ -570,7 +593,12 @@ async fn cmd_validate(data_dir: PathBuf, tickers: Vec<&str>) -> Result<()> {
 
         let parquet_files: Vec<_> = fs::read_dir(&ticker_dir)?
             .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().map(|x| x == "parquet").unwrap_or(false))
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .map(|x| x == "parquet")
+                    .unwrap_or(false)
+            })
             .collect();
 
         let mut total_rows = 0u64;
@@ -578,8 +606,7 @@ async fn cmd_validate(data_dir: PathBuf, tickers: Vec<&str>) -> Result<()> {
 
         for entry in &parquet_files {
             let path = entry.path();
-            let df = LazyFrame::scan_parquet(&path, ScanArgsParquet::default())?
-                .collect()?;
+            let df = LazyFrame::scan_parquet(&path, ScanArgsParquet::default())?.collect()?;
 
             total_rows += df.height() as u64;
 
@@ -642,8 +669,9 @@ async fn main() -> Result<()> {
             let start_date = NaiveDate::parse_from_str(&start, "%Y-%m-%d")
                 .context("Invalid start date format")?;
             let end_date = match end {
-                Some(e) => NaiveDate::parse_from_str(&e, "%Y-%m-%d")
-                    .context("Invalid end date format")?,
+                Some(e) => {
+                    NaiveDate::parse_from_str(&e, "%Y-%m-%d").context("Invalid end date format")?
+                }
                 None => Utc::now().date_naive(),
             };
 

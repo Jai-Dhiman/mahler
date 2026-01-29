@@ -1,9 +1,3 @@
-//! Core data types for options backtesting.
-//!
-//! These types represent the fundamental data structures used throughout
-//! the backtester, designed to match ORATS data format while being
-//! efficient for Rust processing.
-
 use chrono::NaiveDate;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};

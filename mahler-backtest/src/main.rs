@@ -1,10 +1,3 @@
-//! Mahler Backtest - Options Backtesting CLI
-//!
-//! High-performance backtesting engine for credit spread strategies.
-//!
-//! # Usage
-//!
-//! ```bash
 //! # Run a single backtest
 //! mahler-backtest run --config config/default.toml --data data/orats
 //!
@@ -13,7 +6,6 @@
 //!
 //! # Validate parameters on test data
 //! mahler-backtest validate --params results/best_params.toml --data data/orats
-//! ```
 
 use clap::{Parser, Subcommand};
 
@@ -76,7 +68,11 @@ fn main() {
             println!("  Data: {}", data);
             println!("\nNot yet implemented. Use 'orats-download' to download data first.");
         }
-        Commands::Optimize { config, data, output } => {
+        Commands::Optimize {
+            config,
+            data,
+            output,
+        } => {
             println!("Running walk-forward optimization...");
             println!("  Config: {}", config);
             println!("  Data: {}", data);

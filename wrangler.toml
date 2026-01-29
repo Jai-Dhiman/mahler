@@ -56,6 +56,7 @@ binding = "AI"
 [vars]
 ENVIRONMENT = "paper"
 LOG_LEVEL = "INFO"
+AUTO_APPROVE_TRADES = "true"  # V2: Enable autonomous execution (no manual approval)
 
 # Multi-Agent System Configuration
 MULTI_AGENT_DEBATE_ROUNDS = "2"  # Number of debate rounds between bull/bear
