@@ -9,7 +9,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
-from core.analysis.greeks import calculate_greeks, days_to_expiry, years_to_expiry
+from core.analysis.greeks import days_to_expiry, years_to_expiry
+from core.analysis.greeks_vollib import calculate_greeks_vollib
 from core.analysis.iv_rank import IVMetrics
 from core.broker.types import OptionContract, OptionsChain
 from core.types import CreditSpread, Greeks, SpreadType
@@ -415,12 +416,15 @@ class OptionsScreener:
         iv: float,
         option_type: str,
     ) -> float:
-        """Get delta for a contract (from broker or calculated)."""
+        """Get delta for a contract (from broker or calculated).
+
+        Uses vollib for accurate Greeks calculation when broker data unavailable.
+        """
         if contract.delta is not None:
             return contract.delta
 
-        # Calculate if not provided
-        greeks = calculate_greeks(
+        # Calculate using vollib if not provided by broker
+        greeks = calculate_greeks_vollib(
             spot=spot,
             strike=contract.strike,
             time_to_expiry=tte,

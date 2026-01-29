@@ -259,10 +259,13 @@ def calculate_extended_greeks(
 ) -> ExtendedGreeksResult:
     """Calculate all first and second-order Greeks for an option.
 
-    This combines calculate_greeks() and calculate_second_order_greeks()
-    into a single result for convenience.
+    Uses vollib for first-order Greeks (delta, gamma, theta, vega, rho)
+    and custom implementation for second-order Greeks (vanna, volga, charm)
+    which vollib does not provide.
     """
-    first_order = calculate_greeks(
+    from core.analysis.greeks_vollib import calculate_greeks_vollib
+
+    first_order = calculate_greeks_vollib(
         spot, strike, time_to_expiry, volatility, risk_free_rate, option_type
     )
     second_order = calculate_second_order_greeks(

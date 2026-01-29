@@ -5,23 +5,29 @@ Provides VIX-weighted risk assessment from three perspectives:
 - Neutral: Uses 75% of limits
 - Conservative: Uses 50% of limits
 
+Two modes of operation:
+1. Weighted Voting (default): Fast, deterministic VIX-based weighting
+2. Agent-Based Deliberation: LLM-powered debate between risk perspectives
+
 The weighted recommendation varies by market conditions:
 - VIX > 30: Conservative-heavy weighting (0.1, 0.3, 0.6)
 - VIX > 20: Neutral-heavy weighting (0.2, 0.5, 0.3)
 - VIX <= 20: Balanced weighting (0.3, 0.5, 0.2)
 
-This approach provides more nuanced position sizing than a single
-perspective, helping avoid overconfidence in calm markets and
-excessive caution in volatile markets.
+Agent-based deliberation is inspired by TradingAgents paper:
+"Three risk perspectives (aggressive, neutral, conservative) monitor
+portfolio exposure and adjust strategies through natural language debate."
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
+    from core.ai.claude import ClaudeClient
     from core.risk.position_sizer import PositionSizer, PositionSizeResult
     from core.types import CreditSpread, Position
 
@@ -348,3 +354,529 @@ class ThreePerspectiveRiskManager:
             return False
 
         return result.conservative.recommendation == "skip"
+
+
+# =============================================================================
+# Agent-Based Risk Deliberation System
+# =============================================================================
+
+# Prompts for risk perspective agents
+
+AGGRESSIVE_RISK_SYSTEM = """You are an aggressive risk assessor for an options trading system. Your perspective prioritizes opportunity over caution.
+
+Your role:
+1. Argue for larger position sizes when opportunity is good
+2. Point out when risk is overstated or manageable
+3. Highlight favorable risk/reward setups
+4. Push back against excessive caution that limits upside
+
+Key principles:
+- Credit spreads have defined risk - max loss is known
+- Premium selling works best with size when conditions are right
+- Missing good opportunities has a cost too
+- You can accept higher heat when thesis is strong
+
+Be specific and quantitative. Cite the actual numbers."""
+
+AGGRESSIVE_RISK_USER = """Assess this trade from an AGGRESSIVE risk perspective:
+
+**Trade:**
+- Underlying: {underlying}
+- Strategy: {spread_type}
+- Credit: ${credit:.2f} | Max Loss: ${max_loss:.2f}
+- Expiration: {expiration} ({dte} DTE)
+
+**Current Portfolio:**
+- Equity: ${equity:.2f}
+- Portfolio Heat: {portfolio_heat:.1%}
+- Daily P/L: ${daily_pnl:.2f}
+- Position Count: {position_count}
+
+**Risk Parameters:**
+- Max Risk Per Trade: 2% (${max_risk:.2f})
+- Position Sizer Recommendation: {base_contracts} contracts
+
+**Market Context:**
+- VIX: {vix:.1f}
+- Regime: {regime}
+
+Argue for the most aggressive reasonable position size.
+
+Respond in JSON:
+{{
+    "recommended_contracts": 1-10,
+    "rationale": "Why this size is appropriate",
+    "key_arguments": ["argument 1", "argument 2"],
+    "acknowledged_risks": ["risk 1", "risk 2"],
+    "conviction": 0.0-1.0
+}}"""
+
+NEUTRAL_RISK_SYSTEM = """You are a neutral risk assessor for an options trading system. Your perspective balances opportunity and caution.
+
+Your role:
+1. Weigh risk and reward objectively
+2. Consider both upside potential and downside risk
+3. Recommend balanced position sizes
+4. Neither overly aggressive nor excessively conservative
+
+Key principles:
+- Size should match conviction level
+- Follow standard risk management (2% rule, 10% heat)
+- Account for current portfolio exposure
+- Consider market conditions (VIX regime)
+
+Be specific and quantitative. Cite the actual numbers."""
+
+NEUTRAL_RISK_USER = """Assess this trade from a NEUTRAL risk perspective:
+
+**Trade:**
+- Underlying: {underlying}
+- Strategy: {spread_type}
+- Credit: ${credit:.2f} | Max Loss: ${max_loss:.2f}
+- Expiration: {expiration} ({dte} DTE)
+
+**Current Portfolio:**
+- Equity: ${equity:.2f}
+- Portfolio Heat: {portfolio_heat:.1%}
+- Daily P/L: ${daily_pnl:.2f}
+- Position Count: {position_count}
+
+**Risk Parameters:**
+- Max Risk Per Trade: 2% (${max_risk:.2f})
+- Position Sizer Recommendation: {base_contracts} contracts
+
+**Market Context:**
+- VIX: {vix:.1f}
+- Regime: {regime}
+
+Provide a balanced risk assessment.
+
+Respond in JSON:
+{{
+    "recommended_contracts": 1-10,
+    "rationale": "Why this size is appropriate",
+    "key_arguments": ["argument 1", "argument 2"],
+    "acknowledged_risks": ["risk 1", "risk 2"],
+    "conviction": 0.0-1.0
+}}"""
+
+CONSERVATIVE_RISK_SYSTEM = """You are a conservative risk assessor for an options trading system. Your perspective prioritizes capital preservation.
+
+Your role:
+1. Argue for smaller position sizes to limit risk
+2. Highlight risks that others might overlook
+3. Push back against excessive aggression
+4. Prioritize survival over profit maximization
+
+Key principles:
+- Capital preservation is paramount
+- Avoid ruin at all costs
+- Better to miss opportunities than suffer large losses
+- Size down when uncertain
+
+Be specific and quantitative. Cite the actual numbers."""
+
+CONSERVATIVE_RISK_USER = """Assess this trade from a CONSERVATIVE risk perspective:
+
+**Trade:**
+- Underlying: {underlying}
+- Strategy: {spread_type}
+- Credit: ${credit:.2f} | Max Loss: ${max_loss:.2f}
+- Expiration: {expiration} ({dte} DTE)
+
+**Current Portfolio:**
+- Equity: ${equity:.2f}
+- Portfolio Heat: {portfolio_heat:.1%}
+- Daily P/L: ${daily_pnl:.2f}
+- Position Count: {position_count}
+
+**Risk Parameters:**
+- Max Risk Per Trade: 2% (${max_risk:.2f})
+- Position Sizer Recommendation: {base_contracts} contracts
+
+**Market Context:**
+- VIX: {vix:.1f}
+- Regime: {regime}
+
+Argue for the most conservative reasonable position size.
+
+Respond in JSON:
+{{
+    "recommended_contracts": 0-5,
+    "rationale": "Why this size is appropriate",
+    "key_arguments": ["argument 1", "argument 2"],
+    "acknowledged_risks": ["risk 1", "risk 2"],
+    "conviction": 0.0-1.0
+}}"""
+
+RISK_FACILITATOR_SYSTEM = """You are a risk deliberation facilitator synthesizing three risk perspectives into a final recommendation.
+
+You receive assessments from:
+1. Aggressive perspective - argues for larger size
+2. Neutral perspective - balanced view
+3. Conservative perspective - argues for smaller size
+
+Your role:
+1. Weigh the arguments from each perspective
+2. Consider market conditions (VIX level)
+3. Determine the most appropriate position size
+4. Explain why you weighted perspectives as you did
+
+Decision framework:
+- High VIX (>30): Weight conservative more heavily
+- Normal VIX (20-30): Weight neutral more heavily
+- Low VIX (<20): Can weight aggressive slightly more
+
+Be decisive. Pick a final number and justify it."""
+
+RISK_FACILITATOR_USER = """Synthesize these risk assessments into a final recommendation:
+
+**Trade Summary:**
+- Underlying: {underlying}
+- Strategy: {spread_type}
+- Credit: ${credit:.2f} | Max Loss: ${max_loss:.2f}
+- DTE: {dte}
+
+**Aggressive Assessment:**
+- Contracts: {aggressive_contracts}
+- Rationale: {aggressive_rationale}
+- Key Arguments: {aggressive_arguments}
+- Conviction: {aggressive_conviction:.0%}
+
+**Neutral Assessment:**
+- Contracts: {neutral_contracts}
+- Rationale: {neutral_rationale}
+- Key Arguments: {neutral_arguments}
+- Conviction: {neutral_conviction:.0%}
+
+**Conservative Assessment:**
+- Contracts: {conservative_contracts}
+- Rationale: {conservative_rationale}
+- Key Arguments: {conservative_arguments}
+- Conviction: {conservative_conviction:.0%}
+
+**Market Context:**
+- VIX: {vix:.1f}
+- Portfolio Heat: {portfolio_heat:.1%}
+
+Synthesize into a final recommendation.
+
+Respond in JSON:
+{{
+    "final_contracts": 0-10,
+    "prevailing_perspective": "aggressive|neutral|conservative",
+    "weighting_rationale": "Why you weighted perspectives this way",
+    "key_factors": ["factor 1", "factor 2"],
+    "concerns": ["concern 1", "concern 2"],
+    "confidence": 0.0-1.0
+}}"""
+
+
+@dataclass
+class RiskAgentAssessment:
+    """Assessment from a single risk perspective agent."""
+
+    perspective: RiskPerspective
+    recommended_contracts: int
+    rationale: str
+    key_arguments: list[str]
+    acknowledged_risks: list[str]
+    conviction: float
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dictionary."""
+        return {
+            "perspective": self.perspective.value,
+            "recommended_contracts": self.recommended_contracts,
+            "rationale": self.rationale,
+            "key_arguments": self.key_arguments,
+            "acknowledged_risks": self.acknowledged_risks,
+            "conviction": self.conviction,
+        }
+
+
+@dataclass
+class RiskDeliberationResult:
+    """Result of agent-based risk deliberation."""
+
+    aggressive: RiskAgentAssessment
+    neutral: RiskAgentAssessment
+    conservative: RiskAgentAssessment
+    final_contracts: int
+    prevailing_perspective: str
+    weighting_rationale: str
+    key_factors: list[str]
+    concerns: list[str]
+    confidence: float
+    vix_at_deliberation: float
+    rounds_conducted: int = 1
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dictionary."""
+        return {
+            "aggressive": self.aggressive.to_dict(),
+            "neutral": self.neutral.to_dict(),
+            "conservative": self.conservative.to_dict(),
+            "final_contracts": self.final_contracts,
+            "prevailing_perspective": self.prevailing_perspective,
+            "weighting_rationale": self.weighting_rationale,
+            "key_factors": self.key_factors,
+            "concerns": self.concerns,
+            "confidence": self.confidence,
+            "vix_at_deliberation": self.vix_at_deliberation,
+            "rounds_conducted": self.rounds_conducted,
+        }
+
+    @property
+    def recommendation(self) -> Literal["enter", "skip", "reduce_size"]:
+        """Get recommendation based on final contracts."""
+        if self.final_contracts == 0:
+            return "skip"
+        elif self.final_contracts < self.aggressive.recommended_contracts:
+            return "reduce_size"
+        return "enter"
+
+
+class RiskDeliberationManager:
+    """Manages LLM-powered risk deliberation between three perspectives.
+
+    This is an alternative to the weighted-voting ThreePerspectiveRiskManager.
+    It uses actual LLM agents to debate and reach consensus on position sizing.
+
+    Inspired by TradingAgents paper's risk deliberation approach.
+    """
+
+    def __init__(
+        self,
+        claude: ClaudeClient,
+        sizer: PositionSizer,
+        max_rounds: int = 2,
+    ):
+        """Initialize the risk deliberation manager.
+
+        Args:
+            claude: Claude client for LLM calls
+            sizer: Position sizer for base calculations
+            max_rounds: Maximum deliberation rounds (default 2)
+        """
+        self.claude = claude
+        self.sizer = sizer
+        self.max_rounds = max_rounds
+
+    async def deliberate(
+        self,
+        spread: CreditSpread,
+        account_equity: float,
+        current_positions: list[Position],
+        current_vix: float,
+        market_regime: str | None = None,
+        daily_pnl: float = 0.0,
+    ) -> RiskDeliberationResult:
+        """Run agent-based risk deliberation.
+
+        Args:
+            spread: The credit spread being considered
+            account_equity: Current account equity
+            current_positions: List of open positions
+            current_vix: Current VIX level
+            market_regime: Current market regime
+            daily_pnl: Today's P/L
+
+        Returns:
+            RiskDeliberationResult with final recommendation
+        """
+        # Get base position sizing as starting point
+        base_result = self.sizer.calculate_size(
+            spread=spread,
+            account_equity=account_equity,
+            current_positions=current_positions,
+            current_vix=None,  # Don't apply VIX at base level
+        )
+
+        # Calculate context values
+        portfolio_heat = self._calculate_portfolio_heat(current_positions, account_equity)
+        max_risk = account_equity * 0.02
+        dte = self._calculate_dte(spread.expiration)
+
+        context = {
+            "underlying": spread.underlying,
+            "spread_type": spread.spread_type.value.replace("_", " ").title(),
+            "credit": spread.credit,
+            "max_loss": spread.max_loss / 100,
+            "expiration": spread.expiration,
+            "dte": dte,
+            "equity": account_equity,
+            "portfolio_heat": portfolio_heat,
+            "daily_pnl": daily_pnl,
+            "position_count": len(current_positions),
+            "max_risk": max_risk,
+            "base_contracts": base_result.contracts,
+            "vix": current_vix,
+            "regime": market_regime or "unknown",
+        }
+
+        # Run all three perspective assessments in parallel conceptually
+        # (In practice, we run them sequentially for simplicity)
+        aggressive = await self._get_aggressive_assessment(context)
+        neutral = await self._get_neutral_assessment(context)
+        conservative = await self._get_conservative_assessment(context)
+
+        # Facilitator synthesizes
+        final = await self._facilitate_deliberation(
+            aggressive=aggressive,
+            neutral=neutral,
+            conservative=conservative,
+            context=context,
+        )
+
+        return RiskDeliberationResult(
+            aggressive=aggressive,
+            neutral=neutral,
+            conservative=conservative,
+            final_contracts=final["final_contracts"],
+            prevailing_perspective=final["prevailing_perspective"],
+            weighting_rationale=final["weighting_rationale"],
+            key_factors=final["key_factors"],
+            concerns=final["concerns"],
+            confidence=final["confidence"],
+            vix_at_deliberation=current_vix,
+            rounds_conducted=1,
+        )
+
+    async def _get_aggressive_assessment(
+        self, context: dict[str, Any]
+    ) -> RiskAgentAssessment:
+        """Get aggressive perspective assessment."""
+        prompt = AGGRESSIVE_RISK_USER.format(**context)
+
+        response = await self.claude._request(
+            [{"role": "user", "content": prompt}],
+            AGGRESSIVE_RISK_SYSTEM,
+        )
+
+        data = self.claude._parse_json_response(response)
+
+        return RiskAgentAssessment(
+            perspective=RiskPerspective.AGGRESSIVE,
+            recommended_contracts=data.get("recommended_contracts", context["base_contracts"]),
+            rationale=data.get("rationale", ""),
+            key_arguments=data.get("key_arguments", []),
+            acknowledged_risks=data.get("acknowledged_risks", []),
+            conviction=data.get("conviction", 0.5),
+        )
+
+    async def _get_neutral_assessment(
+        self, context: dict[str, Any]
+    ) -> RiskAgentAssessment:
+        """Get neutral perspective assessment."""
+        prompt = NEUTRAL_RISK_USER.format(**context)
+
+        response = await self.claude._request(
+            [{"role": "user", "content": prompt}],
+            NEUTRAL_RISK_SYSTEM,
+        )
+
+        data = self.claude._parse_json_response(response)
+
+        return RiskAgentAssessment(
+            perspective=RiskPerspective.NEUTRAL,
+            recommended_contracts=data.get("recommended_contracts", context["base_contracts"]),
+            rationale=data.get("rationale", ""),
+            key_arguments=data.get("key_arguments", []),
+            acknowledged_risks=data.get("acknowledged_risks", []),
+            conviction=data.get("conviction", 0.5),
+        )
+
+    async def _get_conservative_assessment(
+        self, context: dict[str, Any]
+    ) -> RiskAgentAssessment:
+        """Get conservative perspective assessment."""
+        prompt = CONSERVATIVE_RISK_USER.format(**context)
+
+        response = await self.claude._request(
+            [{"role": "user", "content": prompt}],
+            CONSERVATIVE_RISK_SYSTEM,
+        )
+
+        data = self.claude._parse_json_response(response)
+
+        return RiskAgentAssessment(
+            perspective=RiskPerspective.CONSERVATIVE,
+            recommended_contracts=data.get("recommended_contracts", max(0, context["base_contracts"] // 2)),
+            rationale=data.get("rationale", ""),
+            key_arguments=data.get("key_arguments", []),
+            acknowledged_risks=data.get("acknowledged_risks", []),
+            conviction=data.get("conviction", 0.5),
+        )
+
+    async def _facilitate_deliberation(
+        self,
+        aggressive: RiskAgentAssessment,
+        neutral: RiskAgentAssessment,
+        conservative: RiskAgentAssessment,
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Facilitator synthesizes the three perspectives."""
+        prompt = RISK_FACILITATOR_USER.format(
+            underlying=context["underlying"],
+            spread_type=context["spread_type"],
+            credit=context["credit"],
+            max_loss=context["max_loss"],
+            dte=context["dte"],
+            aggressive_contracts=aggressive.recommended_contracts,
+            aggressive_rationale=aggressive.rationale,
+            aggressive_arguments=", ".join(aggressive.key_arguments[:2]),
+            aggressive_conviction=aggressive.conviction,
+            neutral_contracts=neutral.recommended_contracts,
+            neutral_rationale=neutral.rationale,
+            neutral_arguments=", ".join(neutral.key_arguments[:2]),
+            neutral_conviction=neutral.conviction,
+            conservative_contracts=conservative.recommended_contracts,
+            conservative_rationale=conservative.rationale,
+            conservative_arguments=", ".join(conservative.key_arguments[:2]),
+            conservative_conviction=conservative.conviction,
+            vix=context["vix"],
+            portfolio_heat=context["portfolio_heat"],
+        )
+
+        response = await self.claude._request(
+            [{"role": "user", "content": prompt}],
+            RISK_FACILITATOR_SYSTEM,
+        )
+
+        data = self.claude._parse_json_response(response)
+
+        # Apply hard constraints
+        final_contracts = data.get("final_contracts", neutral.recommended_contracts)
+
+        # Never exceed aggressive recommendation
+        final_contracts = min(final_contracts, aggressive.recommended_contracts)
+
+        # Never go below conservative (unless conservative is 0)
+        if conservative.recommended_contracts > 0:
+            final_contracts = max(final_contracts, conservative.recommended_contracts)
+
+        data["final_contracts"] = final_contracts
+
+        return data
+
+    def _calculate_portfolio_heat(
+        self,
+        positions: list[Position],
+        account_equity: float,
+    ) -> float:
+        """Calculate portfolio heat as percentage of equity."""
+        if not positions or account_equity <= 0:
+            return 0.0
+
+        total_risk = sum(
+            getattr(p, "max_loss", 0) * getattr(p, "contracts", 1)
+            for p in positions
+        )
+
+        return total_risk / account_equity
+
+    def _calculate_dte(self, expiration: str) -> int:
+        """Calculate days to expiration."""
+        exp_date = datetime.strptime(expiration, "%Y-%m-%d")
+        return (exp_date - datetime.now()).days

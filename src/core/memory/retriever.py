@@ -2,17 +2,31 @@
 
 The retriever provides a unified interface for retrieving relevant
 context from both episodic (past trades) and semantic (rules) memory.
+
+Implements FinMem enhancements:
+- Composite scoring (gamma = S_Recency + S_Relevancy + S_Importance)
+- Adaptive cognitive span based on VIX
+- Memory access tracking for consolidation
+
+Reference: FinMem paper (https://arxiv.org/abs/2311.13743)
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from core.memory.vectorize import EpisodicMemoryStore
+    from core.memory.vectorize import EpisodicMemoryStore, SimilarTradeResult
+
+from core.memory.consolidation import MemoryConsolidator
+from core.memory.scoring import MemoryScorer
+from core.memory.types import CognitiveSpanConfig
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -24,6 +38,7 @@ class SemanticRule:
     rule_type: str  # "entry", "exit", "sizing", "regime"
     source: str  # "initial", "learned", "validated"
     applies_to_agent: str  # "all" or specific agent_id
+    target_agents: str  # Comma-separated list or "all" for selective propagation
     supporting_trades: int
     opposing_trades: int
     p_value: float | None
@@ -39,6 +54,7 @@ class SemanticRule:
             "rule_type": self.rule_type,
             "source": self.source,
             "applies_to_agent": self.applies_to_agent,
+            "target_agents": self.target_agents,
             "supporting_trades": self.supporting_trades,
             "opposing_trades": self.opposing_trades,
             "p_value": self.p_value,
@@ -56,6 +72,7 @@ class SemanticRule:
             rule_type=data["rule_type"],
             source=data["source"],
             applies_to_agent=data.get("applies_to_agent", "all"),
+            target_agents=data.get("target_agents", "all"),
             supporting_trades=data.get("supporting_trades", 0),
             opposing_trades=data.get("opposing_trades", 0),
             p_value=data.get("p_value"),
@@ -63,6 +80,19 @@ class SemanticRule:
             conditions=data.get("conditions"),
             is_active=data.get("is_active", True),
         )
+
+    def applies_to_target(self, agent_id: str) -> bool:
+        """Check if this rule targets a specific agent.
+
+        Used for selective knowledge propagation per FINCON paper:
+        insights flow hierarchically and only to relevant agents.
+        """
+        if self.target_agents == "all":
+            return True
+
+        # Parse comma-separated list
+        target_list = [t.strip().lower() for t in self.target_agents.split(",")]
+        return agent_id.lower() in target_list
 
     def applies_to(self, regime: str | None = None, iv_rank: float | None = None) -> bool:
         """Check if this rule applies given current conditions."""
@@ -127,6 +157,11 @@ class MemoryRetriever:
     - Semantic memory: Validated rules from D1
 
     Provides unified context for agent decision-making.
+
+    FinMem enhancements:
+    - Uses composite scoring (gamma) to rank memories
+    - Adapts cognitive span (K) based on VIX volatility
+    - Tracks memory access for consolidation/promotion
     """
 
     def __init__(self, d1_binding: Any, episodic_store: EpisodicMemoryStore | None = None):
@@ -139,6 +174,11 @@ class MemoryRetriever:
         self.db = d1_binding
         self.episodic_store = episodic_store
 
+        # FinMem components
+        self.scorer = MemoryScorer()
+        self.consolidator = MemoryConsolidator(d1_binding)
+        self.cognitive_config = CognitiveSpanConfig()
+
     async def retrieve_context(
         self,
         underlying: str,
@@ -149,6 +189,13 @@ class MemoryRetriever:
         agent_id: str | None = None,
     ) -> RetrievedContext:
         """Retrieve relevant context for a trade decision.
+
+        Uses FinMem methodology:
+        1. Determine cognitive span K based on VIX
+        2. Over-fetch from episodic store (K * 2)
+        3. Apply composite scoring to results
+        4. Sort by composite score, take top K
+        5. Track access for memory consolidation
 
         Args:
             underlying: The underlying symbol
@@ -161,22 +208,37 @@ class MemoryRetriever:
         Returns:
             RetrievedContext with similar trades and applicable rules
         """
+        # Get cognitive span K based on VIX
+        k = self._get_cognitive_span(vix)
+        logger.debug(f"Cognitive span K={k} for VIX={vix}")
+
         # Get similar trades from episodic memory
         similar_trades = []
         trade_lessons = []
 
         if self.episodic_store:
+            # Over-fetch to allow for composite scoring and re-ranking
+            # Use metadata filtering for market_regime and spread_type
             similar_results = await self.episodic_store.find_similar(
                 underlying=underlying,
                 spread_type=spread_type,
                 market_regime=market_regime,
                 iv_rank=iv_rank,
                 vix_at_entry=vix,
-                top_k=5,
+                top_k=k * 2,  # Over-fetch for re-ranking
+                filter_spread_type=True,  # Use Vectorize metadata filter
             )
 
-            for result in similar_results:
+            # Apply composite scoring and re-rank
+            scored_results = await self._score_and_rank_results(similar_results)
+
+            # Take top K after scoring
+            for result, scores in scored_results[:k]:
                 memory = result.memory
+
+                # Track memory access for consolidation
+                await self._on_memory_accessed(memory.id)
+
                 trade_summary = {
                     "underlying": memory.underlying,
                     "spread_type": memory.spread_type,
@@ -185,6 +247,12 @@ class MemoryRetriever:
                     "iv_rank": memory.iv_rank,
                     "similarity_score": result.similarity_score,
                     "match_reasons": result.match_reasons,
+                    # FinMem scores
+                    "composite_score": scores.composite,
+                    "recency_score": scores.recency,
+                    "importance_score": scores.importance,
+                    "memory_layer": memory.memory_layer,
+                    "is_critical": memory.critical_event,
                 }
 
                 # Add outcome if available
@@ -262,6 +330,7 @@ class MemoryRetriever:
                 rule_type=row["rule_type"],
                 source=row["source"],
                 applies_to_agent=row.get("applies_to_agent", "all"),
+                target_agents=row.get("target_agents", "all"),
                 supporting_trades=row.get("supporting_trades", 0),
                 opposing_trades=row.get("opposing_trades", 0),
                 p_value=row.get("p_value"),
@@ -272,12 +341,80 @@ class MemoryRetriever:
 
         return rules
 
+    async def get_rules_for_agent(
+        self,
+        agent_id: str,
+        rule_type: str | None = None,
+        market_regime: str | None = None,
+        iv_rank: float | None = None,
+    ) -> list[SemanticRule]:
+        """Get rules applicable to a specific agent with filtering.
+
+        This implements selective knowledge propagation from FINCON paper:
+        "Selectively propagates insights back to relevant agents
+        rather than broadcasting system-wide."
+
+        Args:
+            agent_id: ID of the agent requesting rules
+            rule_type: Optional filter by rule type
+            market_regime: Current market regime for condition filtering
+            iv_rank: Current IV rank for condition filtering
+
+        Returns:
+            List of SemanticRule objects applicable to this agent
+        """
+        # Build query with target_agents filtering
+        query = """
+            SELECT * FROM semantic_rules
+            WHERE is_active = 1
+              AND (target_agents = 'all' OR target_agents LIKE ?)
+        """
+        params = [f"%{agent_id}%"]
+
+        if rule_type:
+            query += " AND rule_type = ?"
+            params.append(rule_type)
+
+        query += " ORDER BY supporting_trades DESC"
+
+        rows = await self.db.prepare(query).bind(*params).all()
+
+        rules = []
+        for row in rows.results:
+            rule = SemanticRule(
+                id=row["id"],
+                rule_text=row["rule_text"],
+                rule_type=row["rule_type"],
+                source=row["source"],
+                applies_to_agent=row.get("applies_to_agent", "all"),
+                target_agents=row.get("target_agents", "all"),
+                supporting_trades=row.get("supporting_trades", 0),
+                opposing_trades=row.get("opposing_trades", 0),
+                p_value=row.get("p_value"),
+                effect_size=row.get("effect_size"),
+                conditions=json.loads(row.get("conditions")) if row.get("conditions") else None,
+                is_active=bool(row.get("is_active", 1)),
+            )
+
+            # Double-check target agent matching (for precise filtering)
+            if not rule.applies_to_target(agent_id):
+                continue
+
+            # Check condition filtering
+            if not rule.applies_to(regime=market_regime, iv_rank=iv_rank):
+                continue
+
+            rules.append(rule)
+
+        return rules
+
     async def add_rule(
         self,
         rule_text: str,
         rule_type: str,
         source: str = "learned",
         applies_to_agent: str = "all",
+        target_agents: str = "all",
         conditions: dict | None = None,
     ) -> str:
         """Add a new rule to semantic memory.
@@ -286,7 +423,8 @@ class MemoryRetriever:
             rule_text: The rule text
             rule_type: Type of rule (entry, exit, sizing, regime)
             source: Source of the rule (initial, learned, validated)
-            applies_to_agent: Which agent(s) this applies to
+            applies_to_agent: Which agent(s) this applies to (legacy field)
+            target_agents: Comma-separated list of target agents for propagation
             conditions: Optional conditions for rule application
 
         Returns:
@@ -297,18 +435,39 @@ class MemoryRetriever:
 
         await self.db.prepare("""
             INSERT INTO semantic_rules (
-                id, rule_text, rule_type, source, applies_to_agent, conditions
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                id, rule_text, rule_type, source, applies_to_agent, target_agents, conditions
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
         """).bind(
             rule_id,
             rule_text,
             rule_type,
             source,
             applies_to_agent,
+            target_agents,
             json.dumps(conditions) if conditions else None,
         ).run()
 
         return rule_id
+
+    async def update_rule_target_agents(
+        self,
+        rule_id: str,
+        target_agents: str,
+    ) -> None:
+        """Update the target agents for a rule.
+
+        Used for selective knowledge propagation per FINCON paper.
+
+        Args:
+            rule_id: ID of the rule
+            target_agents: Comma-separated list or "all"
+        """
+        await self.db.prepare("""
+            UPDATE semantic_rules
+            SET target_agents = ?,
+                updated_at = datetime('now')
+            WHERE id = ?
+        """).bind(target_agents, rule_id).run()
 
     async def update_rule_stats(
         self,
@@ -393,3 +552,99 @@ class MemoryRetriever:
             parts.append(f"Current regime: {market_regime.replace('_', ' ')}")
 
         return "; ".join(parts) if parts else "No relevant context found"
+
+    # FinMem helper methods
+
+    def _get_cognitive_span(self, vix: float | None) -> int:
+        """Get cognitive span K based on VIX level.
+
+        From FinMem: adjusts how many memories to retrieve based on
+        market volatility:
+        - High VIX (>25): More context needed, K=10
+        - Normal VIX (15-25): Default K=5
+        - Low VIX (<15): Less noise, K=3
+
+        Args:
+            vix: Current VIX level
+
+        Returns:
+            Number of memories to retrieve (K)
+        """
+        return self.cognitive_config.get_k(vix)
+
+    async def _score_and_rank_results(
+        self,
+        results: list[SimilarTradeResult],
+    ) -> list[tuple[SimilarTradeResult, Any]]:
+        """Apply composite scoring and rank results.
+
+        gamma = S_Recency + S_Relevancy + S_Importance
+
+        Args:
+            results: Similar trade results from vector search
+
+        Returns:
+            List of (result, scores) tuples sorted by composite score
+        """
+        from core.memory.types import MemoryScores
+
+        scored = []
+        for result in results:
+            memory = result.memory
+
+            scores = self.scorer.score_memory(
+                entry_date=memory.entry_date,
+                layer=memory.memory_layer,
+                similarity_score=result.similarity_score,
+                pnl_percent=memory.pnl_percent,
+                is_critical=memory.critical_event,
+            )
+
+            scored.append((result, scores))
+
+        # Sort by composite score descending
+        scored.sort(key=lambda x: x[1].composite, reverse=True)
+
+        return scored
+
+    async def _on_memory_accessed(self, memory_id: str) -> None:
+        """Handle memory access event.
+
+        Increments access count and checks for promotion.
+
+        Args:
+            memory_id: ID of the accessed memory
+        """
+        new_layer = await self.consolidator.increment_access_count(memory_id)
+        if new_layer:
+            logger.info(f"Memory {memory_id} promoted to {new_layer.value}")
+
+    def _recency_score(self, memory: Any) -> float:
+        """Calculate recency score for a memory.
+
+        Uses MemoryScorer with layer-specific decay.
+
+        Args:
+            memory: EpisodicMemoryRecord
+
+        Returns:
+            Recency score between 0 and 1
+        """
+        return self.scorer.calculate_recency_score(
+            entry_date=memory.entry_date,
+            layer=memory.memory_layer,
+        )
+
+    def _importance_score(self, memory: Any) -> float:
+        """Calculate importance score for a memory.
+
+        Args:
+            memory: EpisodicMemoryRecord
+
+        Returns:
+            Importance score (0+)
+        """
+        return self.scorer.calculate_importance_score(
+            pnl_percent=memory.pnl_percent,
+            is_critical=memory.critical_event,
+        )

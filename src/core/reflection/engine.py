@@ -6,6 +6,7 @@ The reflection engine:
 3. Extracts candidate rules
 4. Validates rules statistically
 5. Promotes validated rules to semantic memory
+6. V2: Generates per-agent reflections (TradingGroup paper)
 """
 
 from __future__ import annotations
@@ -18,8 +19,10 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from core.ai.claude import ClaudeClient
+    from core.learning.cvrf import CVRFTracker
     from core.memory.retriever import MemoryRetriever
     from core.memory.vectorize import EpisodicMemoryStore
+    from core.reflection.agent_reflector import AgentReflectorManager, AgentReflection, ReflectorType
 
 
 @dataclass
@@ -170,6 +173,7 @@ class SelfReflectionEngine:
         claude: ClaudeClient,
         memory_retriever: MemoryRetriever,
         episodic_store: EpisodicMemoryStore | None = None,
+        cvrf_tracker: CVRFTracker | None = None,
     ):
         """Initialize the reflection engine.
 
@@ -177,10 +181,13 @@ class SelfReflectionEngine:
             claude: Claude client for generating reflections
             memory_retriever: Memory retriever for rule management
             episodic_store: Optional episodic store for updating memories
+            cvrf_tracker: Optional CVRF tracker for adaptive learning rate
         """
         self.claude = claude
         self.retriever = memory_retriever
         self.episodic = episodic_store
+        self.cvrf_tracker = cvrf_tracker
+        self._base_learning_rate = 1.0
 
     async def generate_reflection(
         self,
@@ -352,6 +359,9 @@ class SelfReflectionEngine:
 
         Uses a simple binomial test to check if the rule's success rate
         is significantly better than random (50%).
+
+        CVRF Integration: The validation threshold is adjusted based on
+        decision stability (tau). Unstable periods require stronger evidence.
         """
         row = await self.retriever.db.prepare("""
             SELECT * FROM semantic_rules WHERE id = ?
@@ -385,7 +395,44 @@ class SelfReflectionEngine:
         # h = 2 * arcsin(sqrt(p1)) - 2 * arcsin(sqrt(p2))
         effect_size = 2 * math.asin(math.sqrt(success_rate)) - 2 * math.asin(math.sqrt(0.5))
 
-        await self.retriever.validate_rule(rule_id, p_value, effect_size)
+        # CVRF adjustment: Weight effect size by learning rate
+        # During unstable periods, rules need larger effect sizes to be promoted
+        adjusted_effect_size = effect_size * self._get_cvrf_learning_rate()
+
+        await self.retriever.validate_rule(rule_id, p_value, adjusted_effect_size)
+
+    def _get_cvrf_learning_rate(self) -> float:
+        """Get current learning rate from CVRF tracker.
+
+        Returns base rate if no tracker or insufficient data.
+        """
+        if self.cvrf_tracker is None:
+            return self._base_learning_rate
+
+        return self.cvrf_tracker.get_adaptive_rate(self._base_learning_rate)
+
+    def set_cvrf_tracker(self, tracker: CVRFTracker) -> None:
+        """Set or update the CVRF tracker."""
+        self.cvrf_tracker = tracker
+
+    def get_cvrf_stats(self) -> dict:
+        """Get current CVRF statistics."""
+        if self.cvrf_tracker is None:
+            return {
+                "enabled": False,
+                "latest_tau": None,
+                "stability_trend": "not_tracked",
+                "learning_rate": self._base_learning_rate,
+            }
+
+        latest_tau = self.cvrf_tracker.latest_tau
+
+        return {
+            "enabled": True,
+            "latest_tau": latest_tau.to_dict() if latest_tau else None,
+            "stability_trend": self.cvrf_tracker.stability_trend,
+            "learning_rate": self.cvrf_tracker.get_adaptive_rate(self._base_learning_rate),
+        }
 
     def _extract_conditions(self, reflection: TradeReflection, outcome: TradeOutcome) -> dict | None:
         """Extract conditions for rule application from context."""
@@ -430,3 +477,134 @@ class SelfReflectionEngine:
             "with_reflections": rows["with_reflections"] if rows else 0,
             "rules_by_source": rule_stats,
         }
+
+    async def generate_all_agent_reflections(
+        self,
+        lookback_days: int = 30,
+    ) -> dict[str, Any]:
+        """Generate reflections from all per-agent reflectors.
+
+        This implements the TradingGroup paper's per-agent self-reflection:
+        each agent type (forecasting, style, decision) reflects on its
+        specific contributions to trading outcomes.
+
+        Args:
+            lookback_days: Number of days to analyze
+
+        Returns:
+            Dictionary with reflections from each agent type
+        """
+        from core.reflection.agent_reflector import AgentReflectorManager, ReflectorType
+
+        # Initialize the reflector manager
+        reflector_manager = AgentReflectorManager(
+            claude=self.claude,
+            d1_binding=self.retriever.db,
+        )
+
+        # Get recent trades with outcomes for analysis
+        trades = await self._get_trades_for_reflection(lookback_days)
+
+        if not trades:
+            return {
+                "status": "no_data",
+                "message": f"No completed trades in the past {lookback_days} days",
+                "reflections": {},
+            }
+
+        # Generate all reflections
+        reflections = await reflector_manager.generate_all_reflections(
+            trades=trades,
+            lookback_days=lookback_days,
+        )
+
+        return {
+            "status": "success",
+            "trade_count": len(trades),
+            "lookback_days": lookback_days,
+            "reflections": {
+                rtype.value: refl.to_dict() for rtype, refl in reflections.items()
+            },
+        }
+
+    async def _get_trades_for_reflection(
+        self,
+        lookback_days: int,
+    ) -> list[dict]:
+        """Get trades with outcomes for reflection analysis.
+
+        Args:
+            lookback_days: Number of days to look back
+
+        Returns:
+            List of trade dictionaries with outcome data
+        """
+        from datetime import timedelta
+
+        cutoff_date = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+
+        # Query trades with outcomes
+        rows = await self.retriever.db.prepare("""
+            SELECT
+                t.id as trade_id,
+                t.underlying,
+                t.spread_type,
+                t.entry_date,
+                t.exit_date,
+                t.entry_credit,
+                t.exit_debit,
+                t.realized_pnl,
+                t.exit_reason,
+                t.iv_rank_at_exit,
+                t.dte_at_exit,
+                tt.market_regime as regime,
+                tt.vix_at_entry as vix,
+                tt.three_perspective_result
+            FROM trades t
+            LEFT JOIN trade_trajectories tt ON t.id = tt.trade_id
+            WHERE t.exit_date IS NOT NULL
+              AND t.entry_date >= ?
+            ORDER BY t.exit_date DESC
+            LIMIT 50
+        """).bind(cutoff_date).all()
+
+        trades = []
+        for row in rows.results:
+            pnl_percent = 0.0
+            if row.get("entry_credit") and row["entry_credit"] > 0:
+                pnl_percent = (
+                    (row["entry_credit"] - (row.get("exit_debit") or 0))
+                    / row["entry_credit"]
+                )
+
+            # Extract trading style from three_perspective_result if available
+            trading_style = "neutral"
+            confidence = 0.5
+            if row.get("three_perspective_result"):
+                try:
+                    tpr = json.loads(row["three_perspective_result"])
+                    # Get prevailing perspective as style
+                    trading_style = tpr.get("prevailing_perspective", "neutral")
+                    confidence = tpr.get("confidence", 0.5)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            trades.append({
+                "trade_id": row["trade_id"],
+                "underlying": row.get("underlying"),
+                "spread_type": row.get("spread_type"),
+                "entry_date": row.get("entry_date"),
+                "exit_date": row.get("exit_date"),
+                "entry_credit": row.get("entry_credit"),
+                "exit_debit": row.get("exit_debit"),
+                "pnl_percent": pnl_percent,
+                "exit_reason": row.get("exit_reason"),
+                "trading_style": trading_style,
+                "vix": row.get("vix"),
+                "regime": row.get("regime"),
+                "confidence": confidence,
+                "iv_rank": row.get("iv_rank_at_exit"),
+                "dte": row.get("dte_at_exit"),
+            })
+
+        return trades

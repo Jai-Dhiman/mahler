@@ -49,7 +49,8 @@ class ExitParameterOptimizer:
     """
 
     # Parameter bounds
-    PROFIT_TARGET_BOUNDS = (0.05, 0.50)  # 5% to 50%
+    # Option Alpha research: 75% target has Sharpe 0.83 vs 0.77 for 50%
+    PROFIT_TARGET_BOUNDS = (0.05, 0.90)  # 5% to 90% (includes 75% from research)
     STOP_LOSS_BOUNDS = (0.02, 0.30)  # 2% to 30%
     TIME_EXIT_BOUNDS = (7, 45)  # 7 to 45 DTE
 

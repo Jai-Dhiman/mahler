@@ -1,6 +1,27 @@
 """Prompt templates for Claude AI analysis - V2 Multi-Agent System."""
 
 # =============================================================================
+# ReAct Reasoning Format
+# =============================================================================
+
+REACT_INSTRUCTION = """
+Think step by step using this format:
+1. Observation: What data am I seeing? What are the key metrics?
+2. Thought: What does this mean for the trade? How do I interpret the data?
+3. Action: What should I recommend based on my analysis?
+4. Reasoning: Why is this the right action? What's the key logic?
+
+Include these fields in your JSON response under "reasoning_trace"."""
+
+REACT_JSON_SCHEMA = """
+"reasoning_trace": {{
+    "observation": "Key data points I'm seeing",
+    "thought": "My interpretation and analysis",
+    "action": "My recommendation",
+    "reasoning": "Why this is the right call"
+}}"""
+
+# =============================================================================
 # V2 Multi-Agent Prompts
 # =============================================================================
 
@@ -349,5 +370,11 @@ Respond in this exact JSON format:
     "recommendation": "enter|skip|reduce_size",
     "position_size_multiplier": 0.0-1.0,
     "thesis": "Final synthesis and recommendation rationale",
-    "confidence": 0.0-1.0
+    "confidence": 0.0-1.0,
+    "reasoning_trace": {{
+        "observation": "Summary of debate arguments and analyst signals",
+        "thought": "How I weighed the competing perspectives",
+        "action": "My final recommendation",
+        "reasoning": "Why this is the right call"
+    }}
 }}"""

@@ -323,7 +323,7 @@ Example:
 
 #### 4.2.2 Backtesting Parameters
 
-Based on [Option Alpha backtesting research](https://optionalpha.com/blog/spy-put-credit-spread-backtest):
+Based on [Option Alpha backtesting research](https://optionalpha.com/blog/spy-put-credit-spread-backtest) and [ORATS backtester methodology](https://docs.orats.io/backtest-api-guide/backtester-methodology.html):
 
 ```python
 @dataclass
@@ -344,10 +344,27 @@ class BacktestConfig:
     max_risk_per_trade_pct: float = 2.0
     max_portfolio_risk_pct: float = 10.0
 
-    # Slippage (from ORATS methodology)
-    slippage_pct: float = 0.10  # 10% of bid-ask spread
+    # Slippage by number of legs (ORATS methodology)
+    # Fill Price = Bid + (Ask - Bid) * slippage_pct (for buys)
+    # Fill Price = Ask - (Ask - Bid) * slippage_pct (for sells)
+    slippage_by_legs: dict[int, float] = field(default_factory=lambda: {
+        1: 0.75,  # 75% for single leg
+        2: 0.66,  # 66% for 2-leg spreads (credit spreads)
+        3: 0.56,  # 56% for 3-leg
+        4: 0.53,  # 53% for 4-leg (iron condors)
+    })
+
+    # Commission structure (Alpaca-based)
+    # Entry: $1.00 per contract per leg
+    # Exit: $0 if expired OTM, else $1.00 per contract per leg
     commission_per_contract: float = 1.00
 ```
+
+**Slippage Methodology Notes:**
+- ORATS uses leg-based slippage percentages, not a fixed 10%
+- More complex trades (more legs) get better fills due to market maker efficiency
+- For 2-leg credit spreads: 66% slippage means fill at 66% of the way from favorable to unfavorable price
+- Example: Selling a spread with $0.50 bid and $0.60 ask fills at ~$0.53 (not mid of $0.55)
 
 #### 4.2.3 Performance Metrics
 

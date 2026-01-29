@@ -28,7 +28,10 @@ if TYPE_CHECKING:
 
 @dataclass
 class TradeTrajectory:
-    """Complete trajectory for a trade decision."""
+    """Complete trajectory for a trade decision.
+
+    V2: Added raw_cot_traces and hit_score for TradingGroup paper requirements.
+    """
 
     # Trade identification
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -57,6 +60,10 @@ class TradeTrajectory:
     # Three-perspective assessment (V2)
     three_perspective_result: dict | None = None
 
+    # V2: Chain-of-Thought traces from extended thinking
+    # Maps agent_id -> raw thinking content
+    raw_cot_traces: dict | None = None
+
     # Outcome (filled after trade closes)
     actual_pnl: float | None = None
     actual_pnl_percent: float | None = None
@@ -66,6 +73,9 @@ class TradeTrajectory:
     # Labels (filled by data synthesis)
     reward_label: str | None = None
     reward_score: float | None = None
+
+    # V2: Hit-score for forecasting accuracy
+    hit_score: float | None = None
 
     # Linked trade ID (if trade was executed)
     trade_id: str | None = None
@@ -90,12 +100,14 @@ class TradeTrajectory:
             "synthesis_output": json.dumps(self.synthesis_output) if self.synthesis_output else None,
             "decision_output": json.dumps(self.decision_output) if self.decision_output else None,
             "three_perspective_result": json.dumps(self.three_perspective_result) if self.three_perspective_result else None,
+            "raw_cot_traces": json.dumps(self.raw_cot_traces) if self.raw_cot_traces else None,
             "actual_pnl": self.actual_pnl,
             "actual_pnl_percent": self.actual_pnl_percent,
             "exit_reason": self.exit_reason,
             "days_held": self.days_held,
             "reward_label": self.reward_label,
             "reward_score": self.reward_score,
+            "hit_score": self.hit_score,
             "trade_id": self.trade_id,
         }
 
@@ -120,12 +132,14 @@ class TradeTrajectory:
             synthesis_output=json.loads(data.get("synthesis_output")) if data.get("synthesis_output") else None,
             decision_output=json.loads(data.get("decision_output")) if data.get("decision_output") else None,
             three_perspective_result=json.loads(data.get("three_perspective_result")) if data.get("three_perspective_result") else None,
+            raw_cot_traces=json.loads(data.get("raw_cot_traces")) if data.get("raw_cot_traces") else None,
             actual_pnl=data.get("actual_pnl"),
             actual_pnl_percent=data.get("actual_pnl_percent"),
             exit_reason=data.get("exit_reason"),
             days_held=data.get("days_held"),
             reward_label=data.get("reward_label"),
             reward_score=data.get("reward_score"),
+            hit_score=data.get("hit_score"),
             trade_id=data.get("trade_id"),
         )
 

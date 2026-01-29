@@ -2,15 +2,22 @@
 
 Computes reward scores and labels for trajectories based on:
 - Actual P/L performance
-- Benchmark comparison (risk-free rate)
+- Benchmark comparison (weighted by beta)
 - Transaction costs
 - Time held
 
 This enables reinforcement learning style improvement by labeling
 past decisions as good/bad based on outcomes.
 
-Reward Formula:
-    reward = pnl_percent - benchmark_return - transaction_costs
+TradingGroup Paper Reward Formula (arXiv:2508.17565):
+    reward = pnl - beta * benchmark - gamma * costs
+
+Where:
+- beta = 0.2 (reduced benchmark penalty per TradingGroup paper)
+- gamma = 1.0 (full transaction cost penalty)
+
+Additionally implements Hit-Score for forecasting accuracy:
+    hit_score = sign_ok * tanh(|pct| / epsilon) * confidence
 
 Labels:
 - STRONG_POSITIVE: > 2% adjusted return
@@ -40,10 +47,24 @@ class RewardLabel(str, Enum):
 
 @dataclass
 class LabelingConfig:
-    """Configuration for reward calculation and labeling."""
+    """Configuration for reward calculation and labeling.
+
+    TradingGroup Paper Formula:
+        reward = pnl - beta * benchmark - gamma * costs
+
+    The beta coefficient was reduced from 1.0 to 0.2 per the TradingGroup
+    paper findings, which showed this weighting better captures strategy
+    quality for active trading systems.
+    """
 
     # Benchmark: Weekly risk-free rate (5% annual / 52 weeks)
     benchmark_weekly_rate: float = 0.001  # ~0.1% per week
+
+    # TradingGroup coefficients
+    # beta: Benchmark comparison weight (reduced from 1.0 to 0.2 per paper)
+    beta: float = 0.2  # TradingGroup: reduced benchmark penalty
+    # gamma: Transaction cost weight (keep at 1.0)
+    gamma: float = 1.0
 
     # Transaction costs per contract (round-trip: open + close)
     transaction_cost_per_contract: float = 1.50
@@ -56,6 +77,9 @@ class LabelingConfig:
 
     # Annualized benchmark rate (for reference)
     annualized_benchmark: float = 0.05  # 5%
+
+    # Hit-score epsilon for direction prediction accuracy
+    hit_score_epsilon: float = 0.01  # 1% normalization factor
 
     def get_benchmark_for_days(self, days: int) -> float:
         """Get benchmark return for a specific holding period.
@@ -134,6 +158,11 @@ class DataSynthesizer:
     ) -> RewardResult:
         """Compute reward score and label for a trade outcome.
 
+        TradingGroup Formula:
+            reward = pnl - beta * benchmark - gamma * costs
+
+        Where beta=0.2 (reduced from 1.0) and gamma=1.0.
+
         Args:
             pnl_percent: Realized P/L as percentage of entry credit
             entry_credit: Entry credit per spread
@@ -151,9 +180,14 @@ class DataSynthesizer:
         total_cost = self.config.transaction_cost_per_contract * contracts * 2  # Round-trip
         transaction_cost_pct = total_cost / total_credit if total_credit > 0 else 0
 
-        # Calculate adjusted return
-        # reward = actual_return - opportunity_cost - friction
-        adjusted_return = pnl_percent - benchmark_return - transaction_cost_pct
+        # TradingGroup Formula: reward = pnl - beta * benchmark - gamma * costs
+        # beta = 0.2 reduces benchmark penalty (per TradingGroup paper findings)
+        # gamma = 1.0 keeps full transaction cost penalty
+        adjusted_return = (
+            pnl_percent
+            - self.config.beta * benchmark_return
+            - self.config.gamma * transaction_cost_pct
+        )
 
         # Assign label based on thresholds
         if adjusted_return > self.config.strong_positive_threshold:
@@ -261,4 +295,80 @@ class DataSynthesizer:
         return {
             regime: sum(scores) / len(scores) if scores else 0.0
             for regime, scores in regime_rewards.items()
+        }
+
+
+def calculate_hit_score(
+    predicted_direction: str,
+    actual_pnl_percent: float,
+    confidence: float,
+    epsilon: float = 0.01,
+) -> float:
+    """Calculate hit-score for forecasting accuracy.
+
+    TradingGroup Hit-Score Formula:
+        hit_score = sign_ok * tanh(|pct| / epsilon) * confidence
+
+    Where:
+    - sign_ok: 1.0 if prediction direction matches actual, -1.0 otherwise
+    - tanh(|pct| / epsilon): Magnitude-weighted accuracy (saturates at large moves)
+    - confidence: Agent's stated confidence in the prediction
+
+    This rewards:
+    - Correct directional predictions
+    - Larger moves when direction is correct
+    - Higher confidence when correct (penalizes overconfidence when wrong)
+
+    Args:
+        predicted_direction: "bullish", "bearish", or "neutral"
+        actual_pnl_percent: Actual P/L as percentage (positive = profit)
+        confidence: Prediction confidence 0.0 to 1.0
+        epsilon: Normalization factor (default 1% = 0.01)
+
+    Returns:
+        Hit score from -1.0 to 1.0
+    """
+    import math
+
+    # Determine if prediction was directionally correct
+    actual_positive = actual_pnl_percent > 0
+    predicted_direction_lower = predicted_direction.lower()
+
+    if predicted_direction_lower == "neutral":
+        # Neutral predictions get partial credit based on small moves
+        sign_ok = 1.0 if abs(actual_pnl_percent) < epsilon else -0.5
+    elif predicted_direction_lower == "bullish":
+        sign_ok = 1.0 if actual_positive else -1.0
+    else:  # bearish
+        sign_ok = 1.0 if not actual_positive else -1.0
+
+    # Magnitude-weighted component using tanh for saturation
+    magnitude_weight = math.tanh(abs(actual_pnl_percent) / epsilon)
+
+    # Final hit score
+    hit_score = sign_ok * magnitude_weight * confidence
+
+    return hit_score
+
+
+@dataclass
+class HitScoreResult:
+    """Result of hit-score calculation for a forecast."""
+
+    hit_score: float
+    direction_correct: bool
+    magnitude_weight: float
+    confidence_used: float
+    predicted_direction: str
+    actual_pnl_percent: float
+
+    def to_dict(self) -> dict:
+        """Serialize to dictionary."""
+        return {
+            "hit_score": self.hit_score,
+            "direction_correct": self.direction_correct,
+            "magnitude_weight": self.magnitude_weight,
+            "confidence_used": self.confidence_used,
+            "predicted_direction": self.predicted_direction,
+            "actual_pnl_percent": self.actual_pnl_percent,
         }

@@ -17,7 +17,8 @@ from core.db.d1 import D1Client
 from core.db.kv import KVClient
 from core.notifications.discord import DiscordClient
 from core.risk.circuit_breaker import CircuitBreaker, RiskLevel
-from core.risk.validators import ExitValidator
+from core.risk.dynamic_exit import determine_trading_style, get_dynamic_thresholds
+from core.risk.validators import ExitValidator, TradingStyle
 from core.types import TradeStatus
 
 # Circuit breaker alert deduplication window (1 hour)
@@ -218,13 +219,49 @@ async def _run_position_monitor(env):
             # Calculate DTE for logging
             dte = days_to_expiry(trade.expiration)
 
-            # Check exit conditions with IV context
+            # V2: Fetch data for dynamic exit thresholds (TradingGroup paper)
+            # Get 15 days of bars for 10-day volatility calculation
+            historical_bars = await alpaca.get_historical_bars(
+                symbol=trade.underlying,
+                timeframe="1Day",
+                limit=15,
+            )
+
+            # Get VIX for trading style determination
+            vix_snapshot = await alpaca.get_vix_snapshot()
+            current_vix = vix_snapshot.get("vix") if vix_snapshot else None
+
+            # Get recent P&L for style adjustment
+            recent_pnl = daily_stats.get("realized_pnl", 0)
+            starting_eq = daily_stats.get("starting_equity", account.equity)
+            recent_pnl_percent = recent_pnl / starting_eq if starting_eq > 0 else 0
+
+            # Determine trading style and calculate dynamic thresholds
+            trading_style = determine_trading_style(
+                vix=current_vix,
+                recent_pnl_percent=recent_pnl_percent,
+                market_regime=None,  # Could fetch from KV if available
+            )
+
+            # Calculate 10-day volatility for dynamic exits
+            vol_10d = None
+            if historical_bars and len(historical_bars) >= 11:
+                dynamic_thresholds = get_dynamic_thresholds(historical_bars, trading_style)
+                vol_10d = dynamic_thresholds.sigma_d_10
+                print(
+                    f"Dynamic exit for {trade.underlying}: style={trading_style.value}, "
+                    f"sigma_d_10={vol_10d:.4f}, VIX={current_vix or 'N/A'}"
+                )
+
+            # Check exit conditions with dynamic thresholds (V2)
             should_exit, exit_reason, iv_rank = exit_validator.check_all_exit_conditions(
                 entry_credit=trade.entry_credit,
                 current_value=current_value,
                 expiration=trade.expiration,
                 current_iv=current_iv,
                 iv_history=iv_history,
+                trading_style=trading_style,
+                vol_10d=vol_10d,
             )
 
             if should_exit:

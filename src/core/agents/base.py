@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from core.ai.claude import ClaudeClient
+    from core.ai.router import LLMRouter
     from core.analysis.iv_rank import IVMetrics, MeanReversionResult, TermStructureResult
     from core.analysis.screener import MarketRegime
     from core.types import CreditSpread, PlaybookRule, PortfolioGreeks, Position
@@ -29,11 +30,55 @@ class MessageType(str, Enum):
 
 
 @dataclass
+class ReasoningTrace:
+    """ReAct-style reasoning trace for interpretability.
+
+    Inspired by TradingAgents' use of ReAct prompting for reasoning traces.
+    Captures the agent's thought process in a structured format.
+    """
+
+    observation: str  # What data am I seeing?
+    thought: str  # What does this mean for the trade?
+    action: str  # What should I recommend?
+    reasoning: str  # Why is this the right action?
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dictionary."""
+        return {
+            "observation": self.observation,
+            "thought": self.thought,
+            "action": self.action,
+            "reasoning": self.reasoning,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ReasoningTrace:
+        """Deserialize from dictionary."""
+        return cls(
+            observation=data.get("observation", ""),
+            thought=data.get("thought", ""),
+            action=data.get("action", ""),
+            reasoning=data.get("reasoning", ""),
+        )
+
+    def to_string(self) -> str:
+        """Format as human-readable string."""
+        return (
+            f"Observation: {self.observation}\n"
+            f"Thought: {self.thought}\n"
+            f"Action: {self.action}\n"
+            f"Reasoning: {self.reasoning}"
+        )
+
+
+@dataclass
 class AgentMessage:
     """A message produced by an agent.
 
     This is the standard communication format between agents in the pipeline.
     Each agent produces one or more messages that can be consumed by downstream agents.
+
+    V2: Added raw_thinking field for Chain-of-Thought capture per TradingGroup paper.
     """
 
     agent_id: str
@@ -42,6 +87,8 @@ class AgentMessage:
     content: str  # Human-readable analysis/argument
     structured_data: dict[str, Any] | None = None  # Machine-readable output
     confidence: float = 0.5  # 0.0 to 1.0
+    reasoning_trace: ReasoningTrace | None = None  # ReAct trace for interpretability
+    raw_thinking: str | None = None  # V2: Raw CoT from extended thinking
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary for storage/transmission."""
@@ -52,11 +99,17 @@ class AgentMessage:
             "content": self.content,
             "structured_data": self.structured_data,
             "confidence": self.confidence,
+            "reasoning_trace": self.reasoning_trace.to_dict() if self.reasoning_trace else None,
+            "raw_thinking": self.raw_thinking,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AgentMessage:
         """Deserialize from dictionary."""
+        reasoning_trace = None
+        if data.get("reasoning_trace"):
+            reasoning_trace = ReasoningTrace.from_dict(data["reasoning_trace"])
+
         return cls(
             agent_id=data["agent_id"],
             timestamp=datetime.fromisoformat(data["timestamp"]),
@@ -64,6 +117,8 @@ class AgentMessage:
             content=data["content"],
             structured_data=data.get("structured_data"),
             confidence=data.get("confidence", 0.5),
+            reasoning_trace=reasoning_trace,
+            raw_thinking=data.get("raw_thinking"),
         )
 
 
@@ -146,17 +201,36 @@ class BaseAgent(ABC):
     Each agent implements the analyze() method to process context and
     produce structured output. Agents are designed to be stateless -
     all necessary context is provided via AgentContext.
+
+    Supports two initialization modes:
+    1. Direct ClaudeClient: Traditional single-model approach
+    2. LLMRouter: Multi-model routing based on agent type
     """
 
-    def __init__(self, claude: ClaudeClient, agent_id: str | None = None):
+    def __init__(
+        self,
+        claude: ClaudeClient | None = None,
+        agent_id: str | None = None,
+        router: LLMRouter | None = None,
+    ):
         """Initialize the agent.
 
         Args:
-            claude: Claude API client for LLM calls
+            claude: Claude API client for LLM calls (optional if router provided)
             agent_id: Unique identifier for this agent instance
+            router: LLM router for multi-model support (optional)
         """
-        self.claude = claude
         self.agent_id = agent_id or self.__class__.__name__
+
+        # Support both direct client and router modes
+        if router is not None:
+            self.router = router
+            self.claude = router.get_client(self.agent_id)
+        elif claude is not None:
+            self.claude = claude
+            self.router = None
+        else:
+            raise ValueError("Either claude or router must be provided")
 
     @property
     @abstractmethod
@@ -188,8 +262,15 @@ class BaseAgent(ABC):
         content: str,
         structured_data: dict[str, Any] | None = None,
         confidence: float = 0.5,
+        reasoning_trace: ReasoningTrace | None = None,
     ) -> AgentMessage:
         """Helper to create a properly formatted AgentMessage."""
+        # Extract reasoning trace from structured data if present and not provided
+        if reasoning_trace is None and structured_data:
+            trace_data = structured_data.get("reasoning_trace")
+            if trace_data and isinstance(trace_data, dict):
+                reasoning_trace = ReasoningTrace.from_dict(trace_data)
+
         return AgentMessage(
             agent_id=self.agent_id,
             timestamp=datetime.now(),
@@ -197,7 +278,33 @@ class BaseAgent(ABC):
             content=content,
             structured_data=structured_data,
             confidence=confidence,
+            reasoning_trace=reasoning_trace,
         )
+
+    def _extract_reasoning_trace(
+        self,
+        structured_data: dict[str, Any] | None,
+    ) -> ReasoningTrace | None:
+        """Extract ReAct reasoning trace from structured data."""
+        if not structured_data:
+            return None
+
+        # Check for explicit trace field
+        if "reasoning_trace" in structured_data:
+            trace_data = structured_data["reasoning_trace"]
+            if isinstance(trace_data, dict):
+                return ReasoningTrace.from_dict(trace_data)
+
+        # Try to construct from observation/thought/action/reasoning fields
+        if all(k in structured_data for k in ["observation", "thought", "action", "reasoning"]):
+            return ReasoningTrace(
+                observation=structured_data["observation"],
+                thought=structured_data["thought"],
+                action=structured_data["action"],
+                reasoning=structured_data["reasoning"],
+            )
+
+        return None
 
 
 class AnalystAgent(BaseAgent):
