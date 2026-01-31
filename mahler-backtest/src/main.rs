@@ -105,6 +105,18 @@ enum Commands {
         /// Slippage model: "orats" (default, 66% for 2-leg), "pessimistic" (100%), "zero" (50%), or a percentage (e.g., "75" for 75%)
         #[arg(long, default_value = "orats")]
         slippage: String,
+
+        /// Enable scaled position sizing (calculates contracts based on risk)
+        #[arg(long)]
+        use_scaled_sizing: bool,
+
+        /// Maximum exposure to equity-correlated assets (SPY/QQQ/IWM) as %
+        #[arg(long, default_value = "50.0")]
+        max_correlated_exposure: f64,
+
+        /// Maximum single position risk as % of equity (e.g., 5.0 = 5%)
+        #[arg(long, default_value = "5.0")]
+        max_single_position: f64,
     },
 
     /// Run walk-forward parameter optimization
@@ -192,6 +204,9 @@ fn main() {
             max_risk_per_trade,
             max_portfolio_risk,
             slippage,
+            use_scaled_sizing,
+            max_correlated_exposure,
+            max_single_position,
         } => {
             run_backtest(
                 &ticker,
@@ -209,6 +224,9 @@ fn main() {
                 max_risk_per_trade,
                 max_portfolio_risk,
                 &slippage,
+                use_scaled_sizing,
+                max_correlated_exposure,
+                max_single_position,
             );
         }
         Commands::Optimize {
@@ -260,6 +278,9 @@ fn run_backtest(
     max_risk_per_trade: f64,
     max_portfolio_risk: f64,
     slippage_arg: &str,
+    use_scaled_sizing: bool,
+    max_correlated_exposure: f64,
+    max_single_position: f64,
 ) {
     info!("Running backtest for {}", ticker);
 
@@ -297,6 +318,9 @@ fn run_backtest(
         max_risk_per_trade_pct: max_risk_per_trade,
         max_portfolio_risk_pct: max_portfolio_risk,
         slippage,
+        use_scaled_position_sizing: use_scaled_sizing,
+        max_correlated_exposure_pct: max_correlated_exposure,
+        max_single_position_pct: max_single_position,
         ..Default::default()
     };
 

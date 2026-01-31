@@ -11,4 +11,4 @@ pub mod position_sizer;
 
 pub use circuit_breakers::{CircuitBreaker, CircuitBreakerConfig, CircuitBreakerStatus};
 pub use portfolio_greeks::{PortfolioGreeks, PortfolioGreeksConfig};
-pub use position_sizer::{PositionSizer, PositionSizerConfig, SizingResult};
+pub use position_sizer::{PortfolioState, PositionSizer, PositionSizerConfig, SizingResult};

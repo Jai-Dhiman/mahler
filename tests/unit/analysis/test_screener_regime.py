@@ -251,7 +251,7 @@ class TestScreenerWithRegime:
         - volume >= 10, open_interest >= 100
         - bid > 0, ask > 0
         - bid-ask spread <= 8% of mid (tightened from 10%)
-        - short strike delta in 0.20-0.30 range
+        - short strike delta in 0.05-0.15 range
         - credit >= 25% of width
         - width >= 2.0 (minimum spread width)
         """
@@ -272,7 +272,7 @@ class TestScreenerWithRegime:
                 last=2.05,
                 volume=500,  # Above min 10
                 open_interest=2000,  # Above min 100
-                delta=-0.25,  # In 0.20-0.30 range
+                delta=-0.10,  # In 0.05-0.15 range
                 gamma=0.02,
                 theta=-0.03,
                 vega=0.15,
@@ -308,7 +308,7 @@ class TestScreenerWithRegime:
                 last=1.44,
                 volume=300,
                 open_interest=1200,
-                delta=-0.22,  # Also in 0.20-0.30 range
+                delta=-0.12,  # Also in 0.05-0.15 range
                 gamma=0.018,
                 theta=-0.025,
                 vega=0.13,

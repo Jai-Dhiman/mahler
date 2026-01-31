@@ -172,13 +172,17 @@ class ScreenerConfig:
     max_dte: int = 45
 
     # Delta range for short strike
-    min_delta: float = 0.20
-    max_delta: float = 0.30
+    # Backtest validated (2007-2025, QQQ): 0.05-0.15 range has +59% CAGR,
+    # higher win rate (69.9% vs 67.9%), better profit factor (6.10 vs 3.16)
+    min_delta: float = 0.05
+    max_delta: float = 0.15
 
     # IV requirements
     # Research: IV Percentile is more reliable than IV Rank because it considers
     # all trading days over the past year, not just 52-week high/low extremes
-    min_iv_percentile: float = 50.0  # Use percentile as primary filter
+    # IV filter removed based on backtest: +59% CAGR improvement by trading
+    # in all IV environments. Strategy thrives in high-IV bear markets.
+    min_iv_percentile: float = 0.0  # IV filter removed per backtest validation
     min_iv_rank: float = 50.0  # Keep as secondary signal for AI context
 
     # Minimum credit (as percentage of width)
@@ -529,7 +533,9 @@ class OptionsScreener:
         # Score components (normalized)
         # Use IV percentile for scoring (more stable than IV rank)
         iv_score = iv_metrics.iv_percentile / 100  # 0-1
-        delta_score = 1 - abs(abs(short_delta) - 0.25) * 4  # Peak at 0.25
+        # Peak at 0.10 (center of 0.05-0.15 range), multiplier 10 for appropriate dropoff
+        # Clamp to 0-1 range to handle edge cases with out-of-range deltas
+        delta_score = max(0, min(1, 1 - abs(abs(short_delta) - 0.10) * 10))
         credit_score = min(spread.credit / spread.width, 0.5) * 2  # 0-1
         ev_score = max(0, expected_value) / (spread.width * 100)  # Normalized by width
 

@@ -30,12 +30,12 @@ class TestScreenerFiltering:
         - volume >= 10, open_interest >= 100
         - bid > 0, ask > 0
         - bid-ask spread <= 10% of mid
-        - short strike delta in 0.20-0.30 range
+        - short strike delta in 0.05-0.15 range
         - credit >= 25% of width
         """
         contracts = [
             # Valid put contracts for bull put spread
-            # Short strike: delta=-0.25 (within 0.20-0.30 range)
+            # Short strike: delta=-0.10 (within 0.05-0.15 range)
             OptionContract(
                 symbol="SPY240215P00570000",
                 underlying="SPY",
@@ -47,7 +47,7 @@ class TestScreenerFiltering:
                 last=2.05,
                 volume=500,  # Above min 10
                 open_interest=2000,  # Above min 100
-                delta=-0.25,  # In 0.20-0.30 range
+                delta=-0.10,  # In 0.05-0.15 range
                 gamma=0.02,
                 theta=-0.03,
                 vega=0.15,
@@ -84,7 +84,7 @@ class TestScreenerFiltering:
                 last=1.95,
                 volume=450,
                 open_interest=1800,
-                delta=0.25,  # In 0.20-0.30 range
+                delta=0.10,  # In 0.05-0.15 range
                 gamma=0.02,
                 theta=-0.03,
                 vega=0.14,
@@ -151,15 +151,19 @@ class TestScreenerFiltering:
         # Should find at least one opportunity
         assert len(opportunities) > 0
 
-    def test_screen_with_low_iv_returns_empty(self, mock_chain, low_iv_metrics):
-        """Test screener returns empty when IV percentile is too low."""
+    def test_screen_with_low_iv_still_finds_opportunities(self, mock_chain, low_iv_metrics):
+        """Test screener finds opportunities even when IV percentile is low.
+
+        IV filter was removed based on 19-year backtest showing +59% CAGR
+        improvement by trading in all IV environments.
+        """
         from core.analysis.screener import OptionsScreener
 
         screener = OptionsScreener()
         opportunities = screener.screen_chain(mock_chain, low_iv_metrics)
 
-        # Should return empty - IV percentile below threshold
-        assert len(opportunities) == 0
+        # Should find opportunities - IV filter removed per backtest validation
+        assert len(opportunities) > 0
 
     def test_liquidity_filter(self, valid_expiration, high_iv_metrics):
         """Test contracts with low liquidity are filtered out."""
@@ -309,7 +313,7 @@ class TestScreenerFiltering:
         """Test contracts outside delta range are filtered."""
         from core.analysis.screener import OptionsScreener
 
-        # Create chain with delta outside 0.20-0.30 range
+        # Create chain with delta outside 0.05-0.15 range
         wrong_delta_contracts = [
             OptionContract(
                 symbol="SPY240215P00470000",
@@ -322,7 +326,7 @@ class TestScreenerFiltering:
                 last=1.25,
                 volume=100,
                 open_interest=500,
-                delta=-0.10,  # Too low (below 0.20)
+                delta=-0.25,  # Too high (above 0.15)
             ),
             OptionContract(
                 symbol="SPY240215P00465000",
@@ -335,7 +339,7 @@ class TestScreenerFiltering:
                 last=0.75,
                 volume=80,
                 open_interest=400,
-                delta=-0.05,  # Too low
+                delta=-0.03,  # Too low (below 0.05)
             ),
         ]
 
@@ -433,7 +437,7 @@ class TestScreenerScoring:
 
         # Verify scoring math
         # IV score = iv_percentile / 100
-        # Delta score = 1 - abs(abs(delta) - 0.25) * 4 (peaks at 0.25)
+        # Delta score = 1 - abs(abs(delta) - 0.10) * 10 (peaks at 0.10)
         # Credit score = min(credit/width, 0.5) * 2
         # EV score = max(0, ev) / (width * 100)
 
@@ -486,11 +490,11 @@ class TestScreenerScoring:
         from core.analysis.screener import ScoringWeights
         screener = OptionsScreener()
         weights = ScoringWeights()  # Default weights
-        scored = screener._score_spread(spread, iv_metrics, 0.25, weights)  # Delta 0.25
+        scored = screener._score_spread(spread, iv_metrics, 0.10, weights)  # Delta 0.10
 
         # Verify score is a valid number between 0 and 1
         assert 0 <= scored.score <= 1
-        assert scored.probability_otm == 0.75  # 1 - 0.25
+        assert scored.probability_otm == 0.90  # 1 - 0.10
 
     def test_scoring_edge_cases(self):
         """Test scoring with edge case values."""

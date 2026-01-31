@@ -17,7 +17,9 @@ use serde::{Deserialize, Serialize};
 use crate::analytics::{IVTermStructureAnalyzer, SpreadScreener, SpreadScreenerConfig};
 use crate::data::{DataLoader, LoaderError, OptionsSnapshot};
 use crate::regime::{DailyMarketData, MarketRegime, RegimeClassifier, RegimeClassifierConfig};
-use crate::risk::{CircuitBreaker, CircuitBreakerConfig, CircuitBreakerStatus};
+use crate::risk::{
+    CircuitBreaker, CircuitBreakerConfig, PortfolioState, PositionSizer, PositionSizerConfig,
+};
 
 use super::commission::CommissionModel;
 use super::slippage::SlippageModel;
@@ -88,6 +90,26 @@ pub struct BacktestConfig {
     /// Circuit breaker configuration.
     #[serde(default)]
     pub circuit_breaker_config: CircuitBreakerConfig,
+
+    /// Enable scaled position sizing (vs hardcoded 1 contract).
+    #[serde(default)]
+    pub use_scaled_position_sizing: bool,
+
+    /// Maximum exposure to equity-correlated assets (SPY/QQQ/IWM) as %.
+    #[serde(default = "default_correlated_exposure")]
+    pub max_correlated_exposure_pct: f64,
+
+    /// Maximum single position risk as % of equity.
+    #[serde(default = "default_single_position")]
+    pub max_single_position_pct: f64,
+}
+
+fn default_correlated_exposure() -> f64 {
+    50.0
+}
+
+fn default_single_position() -> f64 {
+    5.0
 }
 
 fn default_true() -> bool {
@@ -116,6 +138,9 @@ impl Default for BacktestConfig {
             use_regime_sizing: true,
             use_circuit_breakers: true,
             circuit_breaker_config: CircuitBreakerConfig::default(),
+            use_scaled_position_sizing: false,
+            max_correlated_exposure_pct: 50.0,
+            max_single_position_pct: 5.0,
         }
     }
 }
@@ -322,6 +347,7 @@ pub struct BacktestEngine {
     iv_analyzer: IVTermStructureAnalyzer,
     regime_classifier: RegimeClassifier,
     circuit_breaker: CircuitBreaker,
+    position_sizer: PositionSizer,
     current_regime: MarketRegime,
     current_iv_percentile: Option<f64>,
     // Tracking
@@ -335,6 +361,13 @@ impl BacktestEngine {
     pub fn new(config: BacktestConfig, data_dir: &str) -> Self {
         let equity = config.initial_equity;
         let circuit_breaker_config = config.circuit_breaker_config.clone();
+        let position_sizer_config = PositionSizerConfig {
+            max_risk_per_trade_pct: config.max_risk_per_trade_pct,
+            max_portfolio_risk_pct: config.max_portfolio_risk_pct,
+            max_single_position_pct: config.max_single_position_pct,
+            max_equity_correlation_pct: config.max_correlated_exposure_pct,
+            ..Default::default()
+        };
         Self {
             config,
             loader: DataLoader::new(data_dir),
@@ -349,6 +382,7 @@ impl BacktestEngine {
             iv_analyzer: IVTermStructureAnalyzer::new(),
             regime_classifier: RegimeClassifier::new(RegimeClassifierConfig::default()),
             circuit_breaker: CircuitBreaker::new(circuit_breaker_config, equity),
+            position_sizer: PositionSizer::new(position_sizer_config),
             current_regime: MarketRegime::Unknown,
             current_iv_percentile: None,
             circuit_breaker_halts: 0,
@@ -394,6 +428,13 @@ impl BacktestEngine {
             self.config.circuit_breaker_config.clone(),
             self.config.initial_equity,
         );
+        self.position_sizer = PositionSizer::new(PositionSizerConfig {
+            max_risk_per_trade_pct: self.config.max_risk_per_trade_pct,
+            max_portfolio_risk_pct: self.config.max_portfolio_risk_pct,
+            max_single_position_pct: self.config.max_single_position_pct,
+            max_equity_correlation_pct: self.config.max_correlated_exposure_pct,
+            ..Default::default()
+        });
         self.current_regime = MarketRegime::Unknown;
         self.current_iv_percentile = None;
         self.circuit_breaker_halts = 0;
@@ -415,6 +456,13 @@ impl BacktestEngine {
     pub fn new_in_memory(config: BacktestConfig) -> Self {
         let equity = config.initial_equity;
         let circuit_breaker_config = config.circuit_breaker_config.clone();
+        let position_sizer_config = PositionSizerConfig {
+            max_risk_per_trade_pct: config.max_risk_per_trade_pct,
+            max_portfolio_risk_pct: config.max_portfolio_risk_pct,
+            max_single_position_pct: config.max_single_position_pct,
+            max_equity_correlation_pct: config.max_correlated_exposure_pct,
+            ..Default::default()
+        };
         Self {
             config,
             loader: DataLoader::new(""), // Unused for in-memory
@@ -429,6 +477,7 @@ impl BacktestEngine {
             iv_analyzer: IVTermStructureAnalyzer::new(),
             regime_classifier: RegimeClassifier::new(RegimeClassifierConfig::default()),
             circuit_breaker: CircuitBreaker::new(circuit_breaker_config, equity),
+            position_sizer: PositionSizer::new(position_sizer_config),
             current_regime: MarketRegime::Unknown,
             current_iv_percentile: None,
             circuit_breaker_halts: 0,
@@ -594,6 +643,21 @@ impl BacktestEngine {
         self.positions.retain(|p| p.is_open());
     }
 
+    /// Calculate current risk deployed in equity-correlated assets (SPY/QQQ/IWM).
+    fn equity_correlated_risk(&self) -> Decimal {
+        self.positions
+            .iter()
+            .filter(|p| p.is_open())
+            .filter(|p| {
+                matches!(
+                    p.ticker.to_uppercase().as_str(),
+                    "SPY" | "QQQ" | "IWM"
+                )
+            })
+            .map(|p| p.max_loss)
+            .sum()
+    }
+
     /// Screen for new trades and enter positions.
     /// Integrates: circuit breakers, IV percentile filter, regime position sizing
     fn screen_and_enter(&mut self, snapshot: &OptionsSnapshot) {
@@ -666,41 +730,76 @@ impl BacktestEngine {
         let candidates = screener.screen_put_spreads(snapshot, self.current_iv_percentile);
 
         if let Some(best) = screener.best_candidate(&candidates) {
-            // Check risk limits
-            let max_loss: f64 = best.max_loss.try_into().unwrap_or(0.0);
-            let equity: f64 = self.equity.try_into().unwrap_or(1.0);
-            let risk_pct = max_loss / equity * 100.0;
+            // === POSITION SIZING ===
+            let contracts = if self.config.use_scaled_position_sizing {
+                // Use PositionSizer for scaled sizing based on risk
+                let current_risk: Decimal = self
+                    .positions
+                    .iter()
+                    .filter(|p| p.is_open())
+                    .map(|p| p.max_loss)
+                    .sum();
 
-            if risk_pct > self.config.max_risk_per_trade_pct {
-                return;
-            }
+                let portfolio_state = PortfolioState {
+                    equity: self.equity,
+                    current_risk,
+                    equity_correlated_risk: self.equity_correlated_risk(),
+                    open_positions: self.positions.iter().filter(|p| p.is_open()).count(),
+                };
 
-            // Calculate total portfolio risk
-            let current_risk: f64 = self
-                .positions
-                .iter()
-                .filter(|p| p.is_open())
-                .map(|p| {
-                    let ml: f64 = p.max_loss.try_into().unwrap_or(0.0);
-                    ml
-                })
-                .sum();
+                let sizing = self
+                    .position_sizer
+                    .calculate(&portfolio_state, best.max_loss, &snapshot.ticker);
 
-            if (current_risk + max_loss) / equity * 100.0 > self.config.max_portfolio_risk_pct {
-                return;
-            }
-
-            // === REGIME-BASED POSITION SIZING (Production: 0.25x to 1.0x) ===
-            let mut contracts = 1;
-            if self.config.use_regime_sizing {
-                let multiplier = self.current_regime.position_size_multiplier();
-                if multiplier < 1.0 {
-                    self.regime_reductions += 1;
+                if !sizing.is_allowed() {
+                    return;
                 }
-                // For now, we use 1 contract minimum. In production, this would scale.
-                // A more sophisticated approach would adjust contracts based on multiplier.
-                contracts = if multiplier >= 0.5 { 1 } else { 1 }; // Minimum 1 contract
-            }
+
+                // Apply regime multiplier if enabled
+                let base_contracts = sizing.contracts;
+                if self.config.use_regime_sizing {
+                    let multiplier = self.current_regime.position_size_multiplier();
+                    if multiplier < 1.0 {
+                        self.regime_reductions += 1;
+                    }
+                    ((base_contracts as f64) * multiplier).ceil().max(1.0) as i32
+                } else {
+                    base_contracts
+                }
+            } else {
+                // Legacy: existing rejection logic + hardcoded 1 contract
+                let max_loss: f64 = best.max_loss.try_into().unwrap_or(0.0);
+                let equity: f64 = self.equity.try_into().unwrap_or(1.0);
+                let risk_pct = max_loss / equity * 100.0;
+
+                if risk_pct > self.config.max_risk_per_trade_pct {
+                    return;
+                }
+
+                // Calculate total portfolio risk
+                let current_risk: f64 = self
+                    .positions
+                    .iter()
+                    .filter(|p| p.is_open())
+                    .map(|p| {
+                        let ml: f64 = p.max_loss.try_into().unwrap_or(0.0);
+                        ml
+                    })
+                    .sum();
+
+                if (current_risk + max_loss) / equity * 100.0 > self.config.max_portfolio_risk_pct {
+                    return;
+                }
+
+                // Regime-based position sizing (legacy: always 1 contract)
+                if self.config.use_regime_sizing {
+                    let multiplier = self.current_regime.position_size_multiplier();
+                    if multiplier < 1.0 {
+                        self.regime_reductions += 1;
+                    }
+                }
+                1
+            };
 
             // Apply slippage to get fill prices (2-leg spread)
             let slippage = self.config.slippage.for_legs(2);

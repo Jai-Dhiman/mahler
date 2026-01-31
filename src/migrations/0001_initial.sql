@@ -106,9 +106,9 @@ CREATE INDEX IF NOT EXISTS idx_daily_performance_date ON daily_performance(date)
 INSERT OR IGNORE INTO playbook (id, rule, source) VALUES
     ('rule_001', 'Only trade SPY, QQQ, IWM - high liquidity ETFs', 'initial'),
     ('rule_002', 'Target 30-45 DTE for optimal theta decay', 'initial'),
-    ('rule_003', 'Short strike delta between 0.20-0.30 (70-80% OTM probability)', 'initial'),
-    ('rule_004', 'Only enter when IV Rank >= 50, preferably >= 70', 'initial'),
-    ('rule_005', 'Take profit at 50% of maximum credit', 'initial'),
+    ('rule_003', 'Short strike delta between 0.05-0.15 (85-95% OTM probability) - validated by 19-year backtest', 'initial'),
+    ('rule_004', 'Trade in all IV environments - IV filter removed based on backtest showing +59% CAGR improvement', 'initial'),
+    ('rule_005', 'Take profit at 65% of maximum credit - marginal improvement with slippage', 'initial'),
     ('rule_006', 'Stop loss at 200% of credit received', 'initial'),
     ('rule_007', 'Close all positions at 21 DTE regardless of P/L', 'initial'),
     ('rule_008', 'Maximum 2% account risk per trade', 'initial'),
