@@ -648,3 +648,332 @@ class DiscordClient:
             content="**Weekly Playbook Rule Validation**",
             embeds=[embed],
         )
+
+    # Strategy Monitoring Alerts
+
+    async def send_iv_environment_alert(
+        self,
+        iv_percentile: float,
+        vix_level: float,
+        alert_type: str,  # "low", "elevated", "crisis"
+        consecutive_days: int | None = None,
+        suggested_actions: list[str] | None = None,
+    ) -> str:
+        """Send IV environment alert.
+
+        Args:
+            iv_percentile: Current IV percentile (0-100)
+            vix_level: Current VIX level
+            alert_type: Type of alert ("low", "elevated", "crisis")
+            consecutive_days: Days below/above threshold (for low IV)
+            suggested_actions: List of recommended actions
+        """
+        if alert_type == "crisis":
+            color = 0xED4245  # Red
+            title = "High Volatility Spike"
+            description = (
+                f"IV at {iv_percentile:.0f}th percentile (VIX: {vix_level:.1f}). "
+                "Review position sizes and consider defensive adjustments."
+            )
+        elif alert_type == "low":
+            color = 0xF97316  # Orange
+            title = "Low IV Environment Detected"
+            description = (
+                f"IV below 30th percentile for {consecutive_days}+ consecutive days. "
+                "Consider pausing new entries or accepting lower premium."
+            )
+        else:  # elevated
+            color = 0x57F287  # Green
+            title = "Elevated IV Environment"
+            description = (
+                f"IV at {iv_percentile:.0f}th percentile. "
+                "Favorable conditions for premium selling."
+            )
+
+        fields = [
+            {"name": "IV Percentile", "value": f"{iv_percentile:.0f}%", "inline": True},
+            {"name": "VIX", "value": f"{vix_level:.1f}", "inline": True},
+        ]
+
+        if consecutive_days:
+            fields.append(
+                {"name": "Consecutive Days", "value": str(consecutive_days), "inline": True}
+            )
+
+        if suggested_actions:
+            actions_text = "\n".join(f"- {a}" for a in suggested_actions)
+            fields.append({"name": "Suggested Actions", "value": actions_text, "inline": False})
+
+        embed = {
+            "title": f"IV Environment: {title}",
+            "description": description,
+            "color": color,
+            "fields": fields,
+            "footer": {"text": "Ref: analysis/walkforward_findings_2026-01-30.log"},
+        }
+
+        return await self.send_message(
+            content=f"**IV Alert: {title}**",
+            embeds=[embed],
+        )
+
+    async def send_performance_alert(
+        self,
+        metric_name: str,
+        current_value: float,
+        expected_value: float,
+        window_trades: int,
+        recent_results: list[str] | None = None,
+        suggested_actions: list[str] | None = None,
+    ) -> str:
+        """Send performance deviation alert.
+
+        Args:
+            metric_name: Name of the metric ("win_rate", "profit_factor", "drawdown")
+            current_value: Current metric value
+            expected_value: Expected value from backtest
+            window_trades: Number of trades in evaluation window
+            recent_results: List of "W" or "L" for recent trades
+            suggested_actions: List of recommended actions
+        """
+        deviation = expected_value - current_value
+
+        if metric_name == "drawdown":
+            color = 0xED4245 if current_value >= 10 else 0xF97316
+            title = "Drawdown Alert"
+            description = (
+                f"Drawdown at {current_value:.1f}% exceeds historical max ({expected_value:.1f}%)."
+            )
+            deviation_str = f"+{abs(deviation):.1f}%"
+        elif metric_name == "win_rate":
+            color = 0xF97316  # Orange
+            title = "Win Rate Degradation"
+            description = (
+                f"Win rate at {current_value:.1f}% over last {window_trades} trades "
+                f"(expected: {expected_value:.0f}%)."
+            )
+            deviation_str = f"-{abs(deviation):.1f}%"
+        else:  # profit_factor
+            color = 0xF97316  # Orange
+            title = "Profit Factor Degradation"
+            description = (
+                f"Profit factor at {current_value:.2f} over last {window_trades} trades "
+                f"(expected: {expected_value:.1f})."
+            )
+            deviation_str = f"-{abs(deviation):.2f}"
+
+        fields = [
+            {"name": "Current", "value": f"{current_value:.2f}", "inline": True},
+            {"name": "Expected", "value": f"{expected_value:.2f}", "inline": True},
+            {"name": "Deviation", "value": deviation_str, "inline": True},
+            {"name": "Window", "value": f"{window_trades} trades", "inline": True},
+        ]
+
+        if recent_results:
+            results_str = " ".join(recent_results[:10])
+            fields.append({"name": "Recent Results", "value": results_str, "inline": False})
+
+        if suggested_actions:
+            actions_text = "\n".join(f"- {a}" for a in suggested_actions)
+            fields.append({"name": "Suggested Actions", "value": actions_text, "inline": False})
+
+        embed = {
+            "title": f"Performance Alert: {title}",
+            "description": description,
+            "color": color,
+            "fields": fields,
+            "footer": {"text": "Ref: analysis/walkforward_findings_2026-01-30.log"},
+        }
+
+        return await self.send_message(
+            content=f"**Performance Alert: {title}**",
+            embeds=[embed],
+        )
+
+    async def send_slippage_alert(
+        self,
+        avg_slippage: float,
+        worst_slippage: float | None,
+        expected_slippage: float,
+        lookback_trades: int,
+        is_critical: bool = False,
+    ) -> str:
+        """Send slippage quality alert.
+
+        Args:
+            avg_slippage: Average slippage percentage over lookback window
+            worst_slippage: Worst single fill slippage (optional)
+            expected_slippage: Expected slippage from ORATS (66% for 2-leg)
+            lookback_trades: Number of trades evaluated
+            is_critical: True if strategy-breaking slippage detected
+        """
+        color = 0xED4245 if is_critical else 0xF97316
+
+        if is_critical:
+            title = "Critical Slippage Detected"
+            description = (
+                f"Poor fill detected: {worst_slippage:.1f}% slippage. "
+                "Strategy profitability at risk (breaks at 85%)."
+            )
+        else:
+            title = "Fill Quality Degrading"
+            description = (
+                f"Average slippage at {avg_slippage:.1f}% over last {lookback_trades} trades "
+                f"(expected: {expected_slippage:.0f}%)."
+            )
+
+        fields = [
+            {"name": "Avg Slippage", "value": f"{avg_slippage:.1f}%", "inline": True},
+            {"name": "Expected", "value": f"{expected_slippage:.0f}%", "inline": True},
+        ]
+
+        if worst_slippage:
+            fields.append(
+                {"name": "Worst Fill", "value": f"{worst_slippage:.1f}%", "inline": True}
+            )
+
+        fields.append({"name": "Window", "value": f"{lookback_trades} trades", "inline": True})
+
+        suggested_actions = [
+            "Review execution timing",
+            "Consider wider bid-ask spread filters",
+            "Check liquidity conditions at entry time",
+        ]
+        actions_text = "\n".join(f"- {a}" for a in suggested_actions)
+        fields.append({"name": "Suggested Actions", "value": actions_text, "inline": False})
+
+        embed = {
+            "title": f"Slippage Alert: {title}",
+            "description": description,
+            "color": color,
+            "fields": fields,
+            "footer": {"text": "Strategy breaks at 85% slippage | Ref: walkforward_findings"},
+        }
+
+        return await self.send_message(
+            content=f"**Slippage Alert: {title}**",
+            embeds=[embed],
+        )
+
+    async def send_regime_change_alert(
+        self,
+        previous_regime: str,
+        current_regime: str,
+        vix_level: float,
+        size_multiplier: float | None = None,
+        is_crisis: bool = False,
+    ) -> str:
+        """Send market regime change alert.
+
+        Args:
+            previous_regime: Previous regime classification
+            current_regime: Current regime classification
+            vix_level: Current VIX level
+            size_multiplier: Position size multiplier (0.0-1.0)
+            is_crisis: True if entering/exiting crisis mode
+        """
+        if is_crisis and vix_level >= 50:
+            color = 0xED4245  # Red
+            title = "Crisis Regime Entered"
+            description = (
+                f"Market regime changed to {current_regime} (VIX: {vix_level:.1f}). "
+                "Position sizing reduced, new entries halted."
+            )
+        elif is_crisis:
+            color = 0x57F287  # Green
+            title = "Market Regime Normalized"
+            description = (
+                f"Market regime changed from {previous_regime} to {current_regime} "
+                f"(VIX: {vix_level:.1f}). Full position sizing resumed."
+            )
+        elif vix_level >= 40:
+            color = 0xF97316  # Orange
+            title = "High Volatility Regime"
+            description = (
+                f"Regime changed: {previous_regime} -> {current_regime} "
+                f"(VIX: {vix_level:.1f}). Significant reduction in position sizing."
+            )
+        else:
+            color = 0x5865F2  # Blurple
+            title = "Market Regime Changed"
+            description = (
+                f"Regime changed: {previous_regime} -> {current_regime} "
+                f"(VIX: {vix_level:.1f})."
+            )
+
+        fields = [
+            {"name": "Previous", "value": previous_regime, "inline": True},
+            {"name": "Current", "value": current_regime, "inline": True},
+            {"name": "VIX", "value": f"{vix_level:.1f}", "inline": True},
+        ]
+
+        if size_multiplier is not None:
+            fields.append(
+                {"name": "Size Multiplier", "value": f"{size_multiplier:.0%}", "inline": True}
+            )
+
+        embed = {
+            "title": f"Regime Alert: {title}",
+            "description": description,
+            "color": color,
+            "fields": fields,
+            "footer": {"text": "Ref: circuit_breaker.py | VIX thresholds: 20/30/40/50"},
+        }
+
+        return await self.send_message(
+            content=f"**Regime Change: {title}**",
+            embeds=[embed],
+        )
+
+    async def send_strategy_recommendation(
+        self,
+        title: str,
+        description: str,
+        iv_percentile: float,
+        win_rate: float | None,
+        vix_level: float,
+        suggested_actions: list[str],
+        severity: str = "warning",  # "info", "warning", "critical"
+    ) -> str:
+        """Send strategy switch recommendation.
+
+        Args:
+            title: Alert title
+            description: Detailed description of the situation
+            iv_percentile: Current IV percentile
+            win_rate: Rolling win rate (optional)
+            vix_level: Current VIX level
+            suggested_actions: List of recommended actions
+            severity: Alert severity level
+        """
+        colors = {
+            "info": 0x5865F2,  # Blurple
+            "warning": 0xF97316,  # Orange
+            "critical": 0xED4245,  # Red
+        }
+        color = colors.get(severity, 0xF97316)
+
+        fields = [
+            {"name": "IV Percentile", "value": f"{iv_percentile:.0f}%", "inline": True},
+            {"name": "VIX", "value": f"{vix_level:.1f}", "inline": True},
+        ]
+
+        if win_rate is not None:
+            fields.append({"name": "Win Rate", "value": f"{win_rate:.1f}%", "inline": True})
+
+        if suggested_actions:
+            actions_text = "\n".join(f"{i+1}. {a}" for i, a in enumerate(suggested_actions))
+            fields.append({"name": "Suggested Actions", "value": actions_text, "inline": False})
+
+        embed = {
+            "title": f"Strategy Recommendation: {title}",
+            "description": description,
+            "color": color,
+            "fields": fields,
+            "footer": {"text": "Ref: analysis/walkforward_findings_2026-01-30.log"},
+        }
+
+        return await self.send_message(
+            content=f"**Strategy Alert: {title}**",
+            embeds=[embed],
+        )

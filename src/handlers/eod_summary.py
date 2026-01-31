@@ -31,6 +31,9 @@ from core.memory.retriever import MemoryRetriever
 # V2 Learning imports
 from core.learning import TrajectoryStore, DataSynthesizer
 
+# V2 Strategy Monitoring imports
+from core.monitoring import StrategyMonitor, AlertThresholds
+
 
 async def reconcile_positions(
     alpaca: AlpacaClient,
@@ -340,6 +343,101 @@ async def _run_weekly_rule_validation(
         print(f"Rule validation failed: {e}")
         import traceback
 
+        print(traceback.format_exc())
+
+
+async def _run_strategy_monitoring(
+    db: D1Client,
+    kv: KVClient,
+    discord: DiscordClient,
+    alpaca: AlpacaClient,
+) -> None:
+    """Run daily strategy monitoring and send alerts.
+
+    Monitors strategy performance against backtest expectations:
+    - Win Rate: 70% (backtest: 69.9%)
+    - Profit Factor: 6.0 (backtest: 6.10)
+    - Max Drawdown: 4.35% (backtest)
+    - Slippage: 66% (ORATS 2-leg)
+
+    Ref: analysis/walkforward_findings_2026-01-30.log
+    """
+    print("Running strategy monitoring...")
+
+    try:
+        # Initialize monitoring with default thresholds from env
+        thresholds = AlertThresholds.from_env()
+        monitor = StrategyMonitor(
+            d1_client=db,
+            kv_client=kv,
+            discord_client=discord,
+            thresholds=thresholds,
+        )
+
+        # Get current market context
+        vix_data = await alpaca.get_vix_snapshot()
+        current_vix = vix_data.get("vix", 20.0) if vix_data else 20.0
+
+        # Get IV percentile for primary underlying (QQQ - best performer per backtest)
+        iv_percentile = 50.0  # Default
+        try:
+            # Get historical IV data from D1
+            from core.analysis.iv_rank import calculate_iv_percentile
+            today = datetime.now().strftime("%Y-%m-%d")
+
+            # Get historical ATM IV from daily_iv table (populated during EOD)
+            iv_history = await db.execute(
+                """
+                SELECT atm_iv FROM daily_iv
+                WHERE underlying = 'QQQ'
+                ORDER BY date DESC
+                LIMIT 252
+                """,
+                [],
+            )
+
+            if iv_history and iv_history.get("results"):
+                historical_ivs = [row["atm_iv"] for row in iv_history["results"] if row.get("atm_iv")]
+                if historical_ivs:
+                    current_iv = historical_ivs[0] if historical_ivs else 0.20
+                    iv_percentile = calculate_iv_percentile(current_iv, historical_ivs)
+                    print(f"IV Percentile for QQQ: {iv_percentile:.1f}%")
+        except Exception as e:
+            print(f"Could not get IV metrics: {e}")
+
+        # Determine market regime from VIX
+        if current_vix >= 50:
+            market_regime = "crisis"
+        elif current_vix >= 40:
+            market_regime = "high_vol"
+        elif current_vix >= 30:
+            market_regime = "elevated"
+        elif current_vix >= 20:
+            market_regime = "normal"
+        else:
+            market_regime = "low_vol"
+
+        # Run all monitoring checks
+        alerts = await monitor.run_all_checks(
+            iv_percentile=iv_percentile,
+            vix_level=current_vix,
+            market_regime=market_regime,
+            underlying="QQQ",  # Primary underlying per backtest findings
+        )
+
+        if alerts:
+            print(f"Strategy monitoring generated {len(alerts)} alerts")
+            message_ids = await monitor.send_alerts(alerts)
+            print(f"Sent {len(message_ids)} alerts to Discord")
+
+            for alert in alerts:
+                print(f"  - [{alert.severity.value}] {alert.category.value}: {alert.title}")
+        else:
+            print("Strategy monitoring: no alerts triggered")
+
+    except Exception as e:
+        import traceback
+        print(f"Strategy monitoring failed: {e}")
         print(traceback.format_exc())
 
 
@@ -769,6 +867,12 @@ async def _run_eod_summary(env):
 
     except Exception as e:
         print(f"Error checking calibration: {e}")
+
+    # Strategy monitoring alerts (daily)
+    try:
+        await _run_strategy_monitoring(db, kv, discord, alpaca)
+    except Exception as e:
+        print(f"Error running strategy monitoring: {e}")
 
     # Weekly weight optimization (Friday)
     await _run_weekly_optimization(db, kv, discord)
