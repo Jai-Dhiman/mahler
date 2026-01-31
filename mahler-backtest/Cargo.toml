@@ -59,6 +59,7 @@ rust_decimal = { version = "1.33", features = ["serde"] }
 [dev-dependencies]
 approx = "0.5"
 proptest = "1.4"
+rust_decimal_macros = "1.33"
 
 [profile.release]
 lto = true
