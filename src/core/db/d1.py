@@ -1445,3 +1445,147 @@ class D1Client:
         )
 
         return result.get("results", [])
+
+    # Screening Results
+
+    async def save_screening_result(
+        self,
+        scan_date: str,
+        scan_time: str,  # 'morning', 'midday', 'afternoon'
+        scan_timestamp: str,
+        total_underlyings_scanned: int,
+        opportunities_found: int,
+        opportunities_passed_filters: int,
+        opportunities_sent_to_agents: int,
+        opportunities_approved: int,
+        skip_reasons: dict,
+        underlying_results: dict,
+        market_context: dict,
+        circuit_breaker_active: bool = False,
+        circuit_breaker_reason: str | None = None,
+        risk_multiplier: float = 1.0,
+        regime_multiplier: float = 1.0,
+        combined_multiplier: float = 1.0,
+    ) -> str:
+        """Save screening result for a scan.
+
+        Args:
+            scan_date: Date in YYYY-MM-DD format
+            scan_time: Time of scan ('morning', 'midday', 'afternoon')
+            scan_timestamp: ISO timestamp of scan
+            total_underlyings_scanned: Number of underlyings scanned
+            opportunities_found: Total opportunities found across all underlyings
+            opportunities_passed_filters: Opportunities that passed initial filters
+            opportunities_sent_to_agents: Opportunities sent to multi-agent pipeline
+            opportunities_approved: Opportunities approved and traded
+            skip_reasons: Dict of skip reason -> count
+            underlying_results: Dict of underlying -> result details
+            market_context: Dict of market conditions (VIX, IV percentile, regime, etc.)
+            circuit_breaker_active: Whether circuit breaker was active
+            circuit_breaker_reason: Reason circuit breaker was active (if applicable)
+            risk_multiplier: Risk-based position size multiplier
+            regime_multiplier: Regime-based position size multiplier
+            combined_multiplier: Combined position size multiplier
+
+        Returns:
+            Generated screening result ID
+        """
+        import json
+
+        result_id = str(uuid4())
+
+        # Build dynamic SQL to avoid None values
+        columns = [
+            "id", "scan_date", "scan_time", "scan_timestamp",
+            "total_underlyings_scanned", "opportunities_found",
+            "opportunities_passed_filters", "opportunities_sent_to_agents",
+            "opportunities_approved", "skip_reasons", "underlying_results",
+            "market_context", "circuit_breaker_active",
+            "risk_multiplier", "regime_multiplier", "combined_multiplier",
+        ]
+        values = [
+            result_id, scan_date, scan_time, scan_timestamp,
+            total_underlyings_scanned, opportunities_found,
+            opportunities_passed_filters, opportunities_sent_to_agents,
+            opportunities_approved, json.dumps(skip_reasons), json.dumps(underlying_results),
+            json.dumps(market_context), 1 if circuit_breaker_active else 0,
+            risk_multiplier, regime_multiplier, combined_multiplier,
+        ]
+        placeholders = ["?" for _ in columns]
+
+        if circuit_breaker_reason is not None:
+            columns.append("circuit_breaker_reason")
+            values.append(circuit_breaker_reason)
+            placeholders.append("?")
+
+        query = f"""
+            INSERT INTO screening_results ({', '.join(columns)})
+            VALUES ({', '.join(placeholders)})
+        """
+        await self.run(query, values)
+        return result_id
+
+    async def get_screening_results(
+        self,
+        scan_date: str | None = None,
+        limit: int = 10,
+    ) -> list[dict]:
+        """Get screening results.
+
+        Args:
+            scan_date: Optional date filter (YYYY-MM-DD)
+            limit: Maximum results to return
+
+        Returns:
+            List of screening result dicts
+        """
+        import json
+
+        if scan_date:
+            result = await self.execute(
+                """
+                SELECT * FROM screening_results
+                WHERE scan_date = ?
+                ORDER BY scan_timestamp DESC
+                LIMIT ?
+                """,
+                [scan_date, limit],
+            )
+        else:
+            result = await self.execute(
+                """
+                SELECT * FROM screening_results
+                ORDER BY scan_timestamp DESC
+                LIMIT ?
+                """,
+                [limit],
+            )
+
+        results = []
+        for row in result.get("results", []):
+            results.append({
+                "id": row["id"],
+                "scan_date": row["scan_date"],
+                "scan_time": row["scan_time"],
+                "scan_timestamp": row["scan_timestamp"],
+                "total_underlyings_scanned": row["total_underlyings_scanned"],
+                "opportunities_found": row["opportunities_found"],
+                "opportunities_passed_filters": row["opportunities_passed_filters"],
+                "opportunities_sent_to_agents": row["opportunities_sent_to_agents"],
+                "opportunities_approved": row["opportunities_approved"],
+                "skip_reasons": json.loads(row["skip_reasons"]) if row.get("skip_reasons") else {},
+                "underlying_results": json.loads(row["underlying_results"]) if row.get("underlying_results") else {},
+                "market_context": json.loads(row["market_context"]) if row.get("market_context") else {},
+                "circuit_breaker_active": bool(row.get("circuit_breaker_active")),
+                "circuit_breaker_reason": row.get("circuit_breaker_reason"),
+                "risk_multiplier": row.get("risk_multiplier", 1.0),
+                "regime_multiplier": row.get("regime_multiplier", 1.0),
+                "combined_multiplier": row.get("combined_multiplier", 1.0),
+                "created_at": row.get("created_at"),
+            })
+        return results
+
+    async def get_latest_screening_result(self) -> dict | None:
+        """Get the most recent screening result."""
+        results = await self.get_screening_results(limit=1)
+        return results[0] if results else None

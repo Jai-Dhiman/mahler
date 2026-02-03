@@ -1,23 +1,14 @@
-"""Options Greeks calculations using vollib library.
+"""Options Greeks calculations using pure Python Black-Scholes implementation.
 
-This module provides an adapter for py_vollib to calculate first-order Greeks
-and implied volatility. vollib uses Jaeckel's "Let's Be Rational" algorithm
-for accurate and fast IV calculation.
+This module provides first-order Greeks and implied volatility calculations
+using pure Python implementations compatible with Pyodide/Cloudflare Workers.
 
-Second-order Greeks (vanna, volga, charm) are not provided by vollib and
-remain in the custom greeks.py module.
+Second-order Greeks (vanna, volga, charm) remain in the custom greeks.py module.
 """
 
+import math
 from dataclasses import dataclass
 from typing import Literal
-
-from py_lets_be_rational.exceptions import (
-    AboveMaximumException,
-    BelowIntrinsicException,
-)
-from py_vollib.black_scholes.greeks.analytical import delta, gamma, rho, theta, vega
-from py_vollib.black_scholes.implied_volatility import implied_volatility
-from py_vollib.helpers.exceptions import PriceIsAboveMaximum, PriceIsBelowIntrinsic
 
 
 class IVCalculationError(Exception):
@@ -43,16 +34,71 @@ class GreeksResult:
     rho: float
 
 
-def _get_vollib_flag(option_type: Literal["call", "put"]) -> str:
-    """Convert option type to vollib flag.
+def _norm_cdf(x: float) -> float:
+    """Cumulative distribution function for standard normal distribution."""
+    return 0.5 * (1 + math.erf(x / math.sqrt(2)))
+
+
+def _norm_pdf(x: float) -> float:
+    """Probability density function for standard normal distribution."""
+    return math.exp(-0.5 * x * x) / math.sqrt(2 * math.pi)
+
+
+def _calculate_d1_d2(
+    spot: float,
+    strike: float,
+    time_to_expiry: float,
+    volatility: float,
+    risk_free_rate: float,
+) -> tuple[float, float]:
+    """Calculate d1 and d2 for Black-Scholes formula."""
+    if time_to_expiry <= 0 or volatility <= 0:
+        return 0.0, 0.0
+
+    sqrt_t = math.sqrt(time_to_expiry)
+    d1 = (
+        math.log(spot / strike) + (risk_free_rate + 0.5 * volatility**2) * time_to_expiry
+    ) / (volatility * sqrt_t)
+    d2 = d1 - volatility * sqrt_t
+
+    return d1, d2
+
+
+def _black_scholes_price(
+    spot: float,
+    strike: float,
+    time_to_expiry: float,
+    volatility: float,
+    risk_free_rate: float,
+    option_type: Literal["call", "put"],
+) -> float:
+    """Calculate Black-Scholes option price.
 
     Args:
+        spot: Current underlying price
+        strike: Option strike price
+        time_to_expiry: Time to expiration in years
+        volatility: Implied volatility as decimal
+        risk_free_rate: Risk-free interest rate as decimal
         option_type: "call" or "put"
 
     Returns:
-        "c" for call, "p" for put
+        Option price
     """
-    return "c" if option_type == "call" else "p"
+    if time_to_expiry <= 0:
+        # At expiration, return intrinsic value
+        if option_type == "call":
+            return max(0.0, spot - strike)
+        else:
+            return max(0.0, strike - spot)
+
+    d1, d2 = _calculate_d1_d2(spot, strike, time_to_expiry, volatility, risk_free_rate)
+    exp_rt = math.exp(-risk_free_rate * time_to_expiry)
+
+    if option_type == "call":
+        return spot * _norm_cdf(d1) - strike * exp_rt * _norm_cdf(d2)
+    else:
+        return strike * exp_rt * _norm_cdf(-d2) - spot * _norm_cdf(-d1)
 
 
 def calculate_greeks_vollib(
@@ -63,7 +109,7 @@ def calculate_greeks_vollib(
     risk_free_rate: float = 0.05,
     option_type: Literal["call", "put"] = "call",
 ) -> GreeksResult:
-    """Calculate first-order Greeks using vollib.
+    """Calculate first-order Greeks using Black-Scholes formulas.
 
     Args:
         spot: Current underlying price
@@ -97,21 +143,39 @@ def calculate_greeks_vollib(
     if strike <= 0:
         raise ValueError(f"Strike price must be positive, got {strike}")
 
-    flag = _get_vollib_flag(option_type)
+    d1, d2 = _calculate_d1_d2(spot, strike, time_to_expiry, volatility, risk_free_rate)
+    sqrt_t = math.sqrt(time_to_expiry)
 
-    # Calculate Greeks using vollib
-    # vollib uses convention: delta(flag, S, K, t, r, sigma)
-    delta_val = delta(flag, spot, strike, time_to_expiry, risk_free_rate, volatility)
-    gamma_val = gamma(flag, spot, strike, time_to_expiry, risk_free_rate, volatility)
+    # Common calculations
+    nd1 = _norm_cdf(d1)
+    nd2 = _norm_cdf(d2)
+    npd1 = _norm_pdf(d1)
+    exp_rt = math.exp(-risk_free_rate * time_to_expiry)
 
-    # vollib theta is per-day (same as our custom implementation)
-    theta_val = theta(flag, spot, strike, time_to_expiry, risk_free_rate, volatility)
+    # Delta
+    if option_type == "call":
+        delta_val = nd1
+    else:
+        delta_val = nd1 - 1
 
-    # vollib vega is per 1% vol change (same as our custom implementation)
-    vega_val = vega(flag, spot, strike, time_to_expiry, risk_free_rate, volatility)
+    # Gamma (same for calls and puts)
+    gamma_val = npd1 / (spot * volatility * sqrt_t)
 
-    # vollib rho is per 1% rate change (same as our custom implementation)
-    rho_val = rho(flag, spot, strike, time_to_expiry, risk_free_rate, volatility)
+    # Theta (per day, negative for long options)
+    theta_common = -(spot * npd1 * volatility) / (2 * sqrt_t)
+    if option_type == "call":
+        theta_val = (theta_common - risk_free_rate * strike * exp_rt * nd2) / 365
+    else:
+        theta_val = (theta_common + risk_free_rate * strike * exp_rt * (1 - nd2)) / 365
+
+    # Vega (per 1% change in volatility)
+    vega_val = spot * sqrt_t * npd1 / 100
+
+    # Rho (per 1% change in interest rate)
+    if option_type == "call":
+        rho_val = strike * time_to_expiry * exp_rt * nd2 / 100
+    else:
+        rho_val = -strike * time_to_expiry * exp_rt * (1 - nd2) / 100
 
     return GreeksResult(
         delta=delta_val,
@@ -130,10 +194,7 @@ def calculate_implied_volatility(
     risk_free_rate: float,
     option_type: Literal["call", "put"],
 ) -> float:
-    """Calculate implied volatility from option price using Jaeckel's algorithm.
-
-    Uses the "Let's Be Rational" algorithm which is accurate and fast,
-    handling edge cases like deep ITM/OTM options.
+    """Calculate implied volatility from option price using Newton-Raphson method.
 
     Args:
         option_price: Market price of the option
@@ -147,8 +208,8 @@ def calculate_implied_volatility(
         Implied volatility as decimal (e.g., 0.20 for 20%)
 
     Raises:
-        InvalidOptionPriceError: If option price is below intrinsic value
-        IVCalculationError: If IV calculation fails for other reasons
+        InvalidOptionPriceError: If option price is below intrinsic value or above maximum
+        IVCalculationError: If IV calculation fails to converge
     """
     # Edge case: at expiration
     if time_to_expiry <= 0:
@@ -162,21 +223,73 @@ def calculate_implied_volatility(
     if strike <= 0:
         raise ValueError(f"Strike price must be positive, got {strike}")
 
-    flag = _get_vollib_flag(option_type)
+    exp_rt = math.exp(-risk_free_rate * time_to_expiry)
 
-    try:
-        iv = implied_volatility(
-            option_price, spot, strike, time_to_expiry, risk_free_rate, flag
+    # Calculate intrinsic value
+    if option_type == "call":
+        intrinsic = max(0.0, spot - strike * exp_rt)
+    else:
+        intrinsic = max(0.0, strike * exp_rt - spot)
+
+    # Check if price is below intrinsic value
+    if option_price < intrinsic - 1e-10:  # Small tolerance for floating point
+        raise InvalidOptionPriceError(
+            f"Option price ${option_price:.2f} is below intrinsic value ${intrinsic:.2f}"
         )
-        return iv
-    except (PriceIsBelowIntrinsic, BelowIntrinsicException) as e:
+
+    # Check if price exceeds theoretical maximum
+    if option_type == "call":
+        max_price = spot  # Call can't be worth more than the stock
+    else:
+        max_price = strike * exp_rt  # Put can't be worth more than PV of strike
+
+    if option_price > max_price + 1e-10:
         raise InvalidOptionPriceError(
-            f"Option price ${option_price:.2f} is below intrinsic value"
-        ) from e
-    except (PriceIsAboveMaximum, AboveMaximumException) as e:
-        # Deep ITM options where price exceeds theoretical maximum
-        raise InvalidOptionPriceError(
-            f"Option price ${option_price:.2f} exceeds theoretical maximum (deep ITM)"
-        ) from e
-    except Exception as e:
-        raise IVCalculationError(f"Failed to calculate IV: {e}") from e
+            f"Option price ${option_price:.2f} exceeds theoretical maximum ${max_price:.2f}"
+        )
+
+    # Newton-Raphson iteration
+    sigma = 0.3  # Initial guess: 30% volatility
+    max_iterations = 100
+    tolerance = 1e-6
+
+    for _ in range(max_iterations):
+        # Calculate price and vega at current sigma
+        price = _black_scholes_price(
+            spot, strike, time_to_expiry, sigma, risk_free_rate, option_type
+        )
+
+        # Calculate vega (not scaled by 100 for IV solver)
+        d1, _ = _calculate_d1_d2(spot, strike, time_to_expiry, sigma, risk_free_rate)
+        sqrt_t = math.sqrt(time_to_expiry)
+        vega = spot * sqrt_t * _norm_pdf(d1)
+
+        # Check for convergence
+        price_diff = price - option_price
+        if abs(price_diff) < tolerance:
+            return sigma
+
+        # Avoid division by zero (vega near zero means we're at extreme moneyness)
+        if abs(vega) < 1e-10:
+            # Switch to bisection or adjust sigma
+            if price_diff > 0:
+                sigma = sigma * 0.5  # Price too high, reduce vol
+            else:
+                sigma = sigma * 1.5  # Price too low, increase vol
+            continue
+
+        # Newton-Raphson update
+        sigma_new = sigma - price_diff / vega
+
+        # Ensure sigma stays positive and reasonable
+        sigma_new = max(0.001, min(sigma_new, 5.0))  # Bound between 0.1% and 500%
+
+        # Check for convergence in sigma
+        if abs(sigma_new - sigma) < tolerance:
+            return sigma_new
+
+        sigma = sigma_new
+
+    raise IVCalculationError(
+        f"IV calculation did not converge after {max_iterations} iterations"
+    )

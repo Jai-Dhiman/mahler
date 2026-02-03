@@ -569,8 +569,23 @@ async def _run_morning_scan(env):
 
     all_opportunities = []
 
+    # Screening tracking for logging and notifications
+    screening_stats = {
+        "total_underlyings_scanned": 0,
+        "opportunities_found": 0,
+        "opportunities_passed_filters": 0,
+        "opportunities_sent_to_agents": 0,
+        "opportunities_approved": 0,
+    }
+    skip_reasons: dict[str, int] = {}
+    underlying_results: dict[str, dict] = {}
+    iv_percentiles: dict[str, float] = {}
+
     # Scan each underlying
     for symbol in UNDERLYINGS:
+        screening_stats["total_underlyings_scanned"] += 1
+        underlying_results[symbol] = {"found": 0, "passed": 0, "reason": ""}
+
         try:
             print(f"Scanning {symbol}...")
 
@@ -579,6 +594,7 @@ async def _run_morning_scan(env):
 
             if not chain.contracts:
                 print(f"No options data for {symbol}")
+                underlying_results[symbol]["reason"] = "No options data"
                 continue
 
             print(f"{symbol}: Got {len(chain.contracts)} contracts, price=${chain.underlying_price:.2f}")
@@ -617,6 +633,9 @@ async def _run_morning_scan(env):
                 print(f"{symbol}: Using estimated IV rank {estimated_rank:.0f}% (only {iv_history_count} days history)")
             print(f"{symbol}: IV={current_iv:.2%}, Rank={iv_metrics.iv_rank:.1f}%, Percentile={iv_metrics.iv_percentile:.1f}%")
 
+            # Track IV percentile for logging
+            iv_percentiles[symbol] = iv_metrics.iv_percentile
+
             # IV Term Structure Analysis
             # Build term structure from options chain expirations
             term_structure_result = None
@@ -651,6 +670,8 @@ async def _run_morning_scan(env):
                     # Skip if backwardation (elevated near-term fear)
                     if term_structure_result.regime == TermStructureRegime.BACKWARDATION:
                         print(f"{symbol}: Skipping due to backwardation (elevated short-term fear)")
+                        underlying_results[symbol]["reason"] = "Backwardation - elevated short-term fear"
+                        skip_reasons["backwardation"] = skip_reasons.get("backwardation", 0) + 1
                         continue
 
             except Exception as e:
@@ -674,8 +695,14 @@ async def _run_morning_scan(env):
             current_regime = regime_result.get("regime") if regime_result else None
             opportunities = screener.screen_chain(chain, iv_metrics, regime=current_regime)
 
+            # Track found opportunities
+            underlying_results[symbol]["found"] = len(opportunities) if opportunities else 0
+            screening_stats["opportunities_found"] += len(opportunities) if opportunities else 0
+
             if opportunities:
                 print(f"Found {len(opportunities)} opportunities for {symbol}")
+                underlying_results[symbol]["passed"] = min(len(opportunities), 2)  # Top 2 per symbol
+                screening_stats["opportunities_passed_filters"] += min(len(opportunities), 2)
                 for opp in opportunities[:2]:  # Top 2 per symbol
                     # Include term structure and mean reversion context with opportunity
                     iv_context = {
@@ -683,9 +710,14 @@ async def _run_morning_scan(env):
                         "mean_reversion": mean_reversion_result,
                     }
                     all_opportunities.append((opp, chain.underlying_price, iv_metrics, iv_context))
+            else:
+                underlying_results[symbol]["reason"] = "No opportunities passed screening filters"
+                skip_reasons["no_opportunities"] = skip_reasons.get("no_opportunities", 0) + 1
 
         except Exception as e:
             print(f"Error scanning {symbol}: {e}")
+            underlying_results[symbol]["reason"] = f"Error: {str(e)[:50]}"
+            skip_reasons["error"] = skip_reasons.get("error", 0) + 1
             await circuit_breaker.check_api_errors()
 
     # Sort all opportunities by score
@@ -694,6 +726,9 @@ async def _run_morning_scan(env):
 
     # Process top opportunities
     recommendations_sent = 0
+
+    # Track opportunities sent to agent pipeline
+    screening_stats["opportunities_sent_to_agents"] = min(len(all_opportunities), MAX_RECOMMENDATIONS)
 
     for opp, underlying_price, iv_metrics, iv_context in all_opportunities[:MAX_RECOMMENDATIONS]:
         try:
@@ -744,6 +779,7 @@ async def _run_morning_scan(env):
 
             if size_result.contracts == 0:
                 print(f"Position size is 0 for {spread.underlying}: {size_result.reason}")
+                skip_reasons["position_size_zero"] = skip_reasons.get("position_size_zero", 0) + 1
                 continue
 
             # Apply graduated risk multiplier
@@ -821,11 +857,13 @@ async def _run_morning_scan(env):
             # Skip low confidence trades
             if analysis.confidence == Confidence.LOW:
                 print(f"Skipping low confidence trade: {spread.underlying}")
+                skip_reasons["low_confidence"] = skip_reasons.get("low_confidence", 0) + 1
                 continue
 
             # Skip if recommendation is "skip"
             if v2_result.recommendation == "skip":
                 print(f"Skipping trade per multi-agent recommendation: {spread.underlying}")
+                skip_reasons["agent_rejected"] = skip_reasons.get("agent_rejected", 0) + 1
                 continue
 
             # Get delta/theta from the scored spread or Greeks if available
@@ -904,6 +942,7 @@ async def _run_morning_scan(env):
                 )
 
                 recommendations_sent += 1
+                screening_stats["opportunities_approved"] += 1
                 print(f"Order placed (pending fill): {trade_id}, Order: {order.id}")
 
                 # Store episodic memory with trade ID
@@ -970,3 +1009,64 @@ async def _run_morning_scan(env):
             print(traceback.format_exc())
 
     print(f"Morning scan complete. Sent {recommendations_sent} recommendations.")
+
+    # Save screening results to database
+    try:
+        scan_timestamp = datetime.now().isoformat()
+        scan_date = datetime.now().strftime("%Y-%m-%d")
+
+        # Build market context for logging
+        market_context = {
+            "vix": current_vix,
+            "iv_percentile": iv_percentiles,
+            "regime": regime_result.get("regime") if regime_result else None,
+            "regime_probability": regime_result.get("probability") if regime_result else None,
+            "risk_multiplier": risk_state.size_multiplier,
+            "regime_multiplier": regime_multiplier,
+            "combined_multiplier": combined_size_multiplier,
+        }
+
+        await db.save_screening_result(
+            scan_date=scan_date,
+            scan_time="morning",
+            scan_timestamp=scan_timestamp,
+            total_underlyings_scanned=screening_stats["total_underlyings_scanned"],
+            opportunities_found=screening_stats["opportunities_found"],
+            opportunities_passed_filters=screening_stats["opportunities_passed_filters"],
+            opportunities_sent_to_agents=screening_stats["opportunities_sent_to_agents"],
+            opportunities_approved=screening_stats["opportunities_approved"],
+            skip_reasons=skip_reasons,
+            underlying_results=underlying_results,
+            market_context=market_context,
+            circuit_breaker_active=False,
+            circuit_breaker_reason=None,
+            risk_multiplier=risk_state.size_multiplier,
+            regime_multiplier=regime_multiplier,
+            combined_multiplier=combined_size_multiplier,
+        )
+        print(f"Saved screening results: {screening_stats}")
+    except Exception as e:
+        print(f"Error saving screening results: {e}")
+
+    # Send "no trade" notification if no trades were approved
+    if recommendations_sent == 0:
+        try:
+            market_context_for_notification = {
+                "vix": current_vix,
+                "iv_percentile": iv_percentiles,
+                "regime": regime_result.get("regime") if regime_result else None,
+                "combined_multiplier": combined_size_multiplier,
+            }
+
+            await discord.send_no_trade_notification(
+                scan_time="morning",
+                underlyings_scanned=screening_stats["total_underlyings_scanned"],
+                opportunities_found=screening_stats["opportunities_found"],
+                opportunities_filtered=screening_stats["opportunities_passed_filters"],
+                skip_reasons=skip_reasons,
+                market_context=market_context_for_notification,
+                underlying_details=underlying_results,
+            )
+            print("Sent no-trade notification")
+        except Exception as e:
+            print(f"Error sending no-trade notification: {e}")

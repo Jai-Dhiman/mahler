@@ -880,11 +880,50 @@ async def _run_eod_summary(env):
     # Weekly rule validation (Friday)
     await _run_weekly_rule_validation(db, kv, discord)
 
+    # Fetch today's screening results for the summary
+    screening_summary = None
+    market_context_for_summary = None
+    try:
+        screening_results = await db.get_screening_results(scan_date=today, limit=3)
+        if screening_results:
+            # Aggregate across all scans today
+            screening_summary = {
+                "total_underlyings_scanned": max(r.get("total_underlyings_scanned", 0) for r in screening_results),
+                "opportunities_found": sum(r.get("opportunities_found", 0) for r in screening_results),
+                "opportunities_approved": sum(r.get("opportunities_approved", 0) for r in screening_results),
+                "skip_reasons": {},
+            }
+            # Aggregate skip reasons
+            for r in screening_results:
+                for reason, count in r.get("skip_reasons", {}).items():
+                    screening_summary["skip_reasons"][reason] = (
+                        screening_summary["skip_reasons"].get(reason, 0) + count
+                    )
+
+            # Use the most recent scan's market context
+            if screening_results[0].get("market_context"):
+                market_context_for_summary = screening_results[0]["market_context"]
+    except Exception as e:
+        print(f"Error fetching screening results: {e}")
+
+    # If no market context from screening, build it from VIX data
+    if not market_context_for_summary:
+        try:
+            latest_vix = await db.get_latest_vix()
+            if latest_vix:
+                market_context_for_summary = {
+                    "vix": latest_vix.get("vix_close"),
+                }
+        except Exception as e:
+            print(f"Error fetching VIX for summary: {e}")
+
     # Send Discord summary
     await discord.send_daily_summary(
         performance=performance,
         open_positions=len(open_trades),
         trade_stats=trade_stats,
+        screening_summary=screening_summary,
+        market_context=market_context_for_summary,
     )
 
     # Reset daily KV stats for next day

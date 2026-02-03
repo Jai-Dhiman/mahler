@@ -287,36 +287,101 @@ class DiscordClient:
         performance: DailyPerformance,
         open_positions: int,
         trade_stats: dict,
+        screening_summary: dict | None = None,
+        market_context: dict | None = None,
     ) -> str:
-        """Send end-of-day summary."""
+        """Send end-of-day summary.
+
+        Args:
+            performance: Daily performance stats
+            open_positions: Number of open positions
+            trade_stats: Trade statistics (win_rate, profit_factor, net_pnl)
+            screening_summary: Optional summary of today's screening results
+            market_context: Optional market context (VIX, IV, regime)
+
+        Returns:
+            Message ID
+        """
         pnl_color = 0x57F287 if performance.realized_pnl >= 0 else 0xED4245
+
+        fields = [
+            {
+                "name": "Starting Balance",
+                "value": f"${performance.starting_balance:,.2f}",
+                "inline": True,
+            },
+            {
+                "name": "Ending Balance",
+                "value": f"${performance.ending_balance:,.2f}",
+                "inline": True,
+            },
+            {
+                "name": "Realized P/L",
+                "value": f"${performance.realized_pnl:,.2f}",
+                "inline": True,
+            },
+            {"name": "Open Positions", "value": str(open_positions), "inline": True},
+            {"name": "Trades Opened", "value": str(performance.trades_opened), "inline": True},
+            {"name": "Trades Closed", "value": str(performance.trades_closed), "inline": True},
+        ]
+
+        # Add market context if provided
+        if market_context:
+            vix = market_context.get("vix")
+            if vix:
+                fields.append({"name": "VIX", "value": f"{vix:.1f}", "inline": True})
+
+            regime = market_context.get("regime")
+            if regime:
+                regime_display = regime.replace("_", " ").title()
+                fields.append({"name": "Regime", "value": regime_display, "inline": True})
+
+            iv_percentile = market_context.get("iv_percentile")
+            if iv_percentile:
+                if isinstance(iv_percentile, dict):
+                    # Average across underlyings
+                    avg_iv = sum(iv_percentile.values()) / len(iv_percentile) if iv_percentile else 0
+                    fields.append({"name": "Avg IV Pctl", "value": f"{avg_iv:.0f}%", "inline": True})
+                else:
+                    fields.append({"name": "IV Pctl", "value": f"{iv_percentile:.0f}%", "inline": True})
+
+        # Add screening summary if provided
+        if screening_summary:
+            scanned = screening_summary.get("total_underlyings_scanned", 0)
+            found = screening_summary.get("opportunities_found", 0)
+            approved = screening_summary.get("opportunities_approved", 0)
+            skip_reasons = screening_summary.get("skip_reasons", {})
+
+            # Build screening summary text
+            screening_text = f"Scanned: {scanned} | Found: {found} | Approved: {approved}"
+            fields.append({
+                "name": "Today's Screening",
+                "value": screening_text,
+                "inline": False,
+            })
+
+            # Add skip reasons if there were any
+            if skip_reasons and found > approved:
+                reasons_text = " | ".join(
+                    f"{reason.replace('_', ' ').title()}: {count}"
+                    for reason, count in list(skip_reasons.items())[:3]
+                )
+                if reasons_text:
+                    fields.append({
+                        "name": "Skip Reasons",
+                        "value": reasons_text,
+                        "inline": False,
+                    })
+
+        # Add win/loss counts
+        fields.append({"name": "Wins", "value": str(performance.win_count), "inline": True})
+        fields.append({"name": "Losses", "value": str(performance.loss_count), "inline": True})
+        fields.append({"name": "\u200b", "value": "\u200b", "inline": True})  # Empty field for alignment
 
         embed = {
             "title": f"Daily Summary - {performance.date}",
             "color": pnl_color,
-            "fields": [
-                {
-                    "name": "Starting Balance",
-                    "value": f"${performance.starting_balance:,.2f}",
-                    "inline": True,
-                },
-                {
-                    "name": "Ending Balance",
-                    "value": f"${performance.ending_balance:,.2f}",
-                    "inline": True,
-                },
-                {
-                    "name": "Realized P/L",
-                    "value": f"${performance.realized_pnl:,.2f}",
-                    "inline": True,
-                },
-                {"name": "Open Positions", "value": str(open_positions), "inline": True},
-                {"name": "Trades Opened", "value": str(performance.trades_opened), "inline": True},
-                {"name": "Trades Closed", "value": str(performance.trades_closed), "inline": True},
-                {"name": "Wins", "value": str(performance.win_count), "inline": True},
-                {"name": "Losses", "value": str(performance.loss_count), "inline": True},
-                {"name": "\u200b", "value": "\u200b", "inline": True},  # Empty field for alignment
-            ],
+            "fields": fields,
             "footer": {
                 "text": f"Win Rate: {trade_stats['win_rate']:.1%} | Profit Factor: {trade_stats['profit_factor']:.2f} | Net P/L: ${trade_stats['net_pnl']:,.2f}",
             },
@@ -922,6 +987,138 @@ class DiscordClient:
 
         return await self.send_message(
             content=f"**Regime Change: {title}**",
+            embeds=[embed],
+        )
+
+    async def send_no_trade_notification(
+        self,
+        scan_time: str,  # 'morning', 'midday', 'afternoon'
+        underlyings_scanned: int,
+        opportunities_found: int,
+        opportunities_filtered: int,
+        skip_reasons: dict,  # {"iv_too_low": 3, "agent_rejected": 2, ...}
+        market_context: dict,  # {"vix": 25.3, "iv_percentile": {"SPY": 45}, "regime": "..."}
+        underlying_details: dict | None = None,  # Per-underlying breakdown
+    ) -> str:
+        """Send notification when scan finds no viable trades.
+
+        Args:
+            scan_time: Time of scan ('morning', 'midday', 'afternoon')
+            underlyings_scanned: Number of underlyings scanned
+            opportunities_found: Total opportunities found
+            opportunities_filtered: Opportunities that passed initial filters
+            skip_reasons: Dict of skip reason -> count
+            market_context: Dict with VIX, IV percentile, regime, etc.
+            underlying_details: Optional per-underlying breakdown
+
+        Returns:
+            Message ID
+        """
+        # Determine color based on market conditions
+        vix = market_context.get("vix", 0)
+        if vix >= 40:
+            color = 0xED4245  # Red - high volatility
+        elif vix >= 30:
+            color = 0xF97316  # Orange - elevated
+        else:
+            color = 0x5865F2  # Blurple - normal
+
+        # Build description
+        if opportunities_found == 0:
+            description = (
+                f"Scanned {underlyings_scanned} underlyings but found no opportunities "
+                "that passed initial screening criteria."
+            )
+        elif opportunities_filtered == 0:
+            description = (
+                f"Found {opportunities_found} opportunities across {underlyings_scanned} underlyings, "
+                "but none passed the screening filters."
+            )
+        else:
+            description = (
+                f"Found {opportunities_found} opportunities, {opportunities_filtered} passed filters, "
+                "but none were approved by the multi-agent pipeline."
+            )
+
+        fields = []
+
+        # Market context
+        fields.append({
+            "name": "VIX",
+            "value": f"{vix:.1f}" if vix else "N/A",
+            "inline": True,
+        })
+
+        regime = market_context.get("regime", "unknown")
+        if regime:
+            regime_display = regime.replace("_", " ").title()
+            fields.append({
+                "name": "Market Regime",
+                "value": regime_display,
+                "inline": True,
+            })
+
+        # Size multiplier if reduced
+        combined_mult = market_context.get("combined_multiplier", 1.0)
+        if combined_mult < 1.0:
+            fields.append({
+                "name": "Size Multiplier",
+                "value": f"{combined_mult:.0%}",
+                "inline": True,
+            })
+
+        # IV Percentile by underlying
+        iv_percentiles = market_context.get("iv_percentile", {})
+        if iv_percentiles:
+            iv_text = " | ".join(f"{sym}: {pct:.0f}%" for sym, pct in iv_percentiles.items())
+            fields.append({
+                "name": "IV Percentile",
+                "value": iv_text,
+                "inline": False,
+            })
+
+        # Skip reasons breakdown
+        if skip_reasons:
+            reasons_text = "\n".join(f"- {reason.replace('_', ' ').title()}: {count}" for reason, count in skip_reasons.items())
+            fields.append({
+                "name": "Skip Reasons",
+                "value": reasons_text,
+                "inline": False,
+            })
+
+        # Per-underlying details (if provided)
+        if underlying_details:
+            underlying_text = []
+            for sym, details in underlying_details.items():
+                found = details.get("found", 0)
+                passed = details.get("passed", 0)
+                reason = details.get("reason", "")
+                if found == 0:
+                    underlying_text.append(f"**{sym}**: No opportunities")
+                elif reason:
+                    underlying_text.append(f"**{sym}**: {found} found, {passed} passed - {reason}")
+                else:
+                    underlying_text.append(f"**{sym}**: {found} found, {passed} passed")
+
+            if underlying_text:
+                fields.append({
+                    "name": "Per-Underlying",
+                    "value": "\n".join(underlying_text[:5]),  # Limit to 5
+                    "inline": False,
+                })
+
+        embed = {
+            "title": f"No Trades - {scan_time.title()} Scan",
+            "description": description,
+            "color": color,
+            "fields": fields,
+            "footer": {
+                "text": "No action required - market conditions or filters prevented trades",
+            },
+        }
+
+        return await self.send_message(
+            content=f"**{scan_time.title()} Scan Complete - No Viable Trades**",
             embeds=[embed],
         )
 

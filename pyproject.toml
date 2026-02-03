@@ -9,7 +9,6 @@ license = { text = "MIT" }
 dependencies = [
     "httpx>=0.27.0",
     "numpy",
-    "py-vollib>=1.0.1",
 ]
 
 [project.optional-dependencies]

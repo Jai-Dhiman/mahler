@@ -285,7 +285,7 @@ class TestCalculateImpliedVolatility:
 
     def test_iv_round_trip(self):
         """Price -> IV -> Price should return original price."""
-        from py_vollib.black_scholes import black_scholes
+        from core.analysis.greeks_vollib import _black_scholes_price
 
         spot = 100.0
         strike = 100.0
@@ -294,7 +294,7 @@ class TestCalculateImpliedVolatility:
         original_vol = 0.25
 
         # Calculate price from known vol
-        option_price = black_scholes("c", spot, strike, time_to_expiry, risk_free_rate, original_vol)
+        option_price = _black_scholes_price(spot, strike, time_to_expiry, original_vol, risk_free_rate, "call")
 
         # Calculate IV from price
         calculated_iv = calculate_implied_volatility(
@@ -311,7 +311,7 @@ class TestCalculateImpliedVolatility:
 
     def test_iv_put_option(self):
         """IV calculation should work for puts too."""
-        from py_vollib.black_scholes import black_scholes
+        from core.analysis.greeks_vollib import _black_scholes_price
 
         spot = 450.0
         strike = 440.0
@@ -319,7 +319,7 @@ class TestCalculateImpliedVolatility:
         risk_free_rate = 0.05
         original_vol = 0.22
 
-        option_price = black_scholes("p", spot, strike, time_to_expiry, risk_free_rate, original_vol)
+        option_price = _black_scholes_price(spot, strike, time_to_expiry, original_vol, risk_free_rate, "put")
 
         calculated_iv = calculate_implied_volatility(
             option_price=option_price,
@@ -386,7 +386,7 @@ class TestCalculateImpliedVolatility:
         """Test IV calculation for realistic SPY option."""
         # SPY at 450, 30 DTE put spread scenario
         # Typical 0.20 delta put might have IV around 15-20%
-        from py_vollib.black_scholes import black_scholes
+        from core.analysis.greeks_vollib import _black_scholes_price
 
         spot = 450.0
         strike = 430.0  # ~0.20 delta put
@@ -394,7 +394,7 @@ class TestCalculateImpliedVolatility:
         risk_free_rate = 0.05
         expected_iv = 0.18
 
-        option_price = black_scholes("p", spot, strike, time_to_expiry, risk_free_rate, expected_iv)
+        option_price = _black_scholes_price(spot, strike, time_to_expiry, expected_iv, risk_free_rate, "put")
 
         calculated_iv = calculate_implied_volatility(
             option_price=option_price,
