@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from core.memory.vectorize import EpisodicMemoryStore, SimilarTradeResult
 
+from core.db.d1 import js_to_python
 from core.memory.consolidation import MemoryConsolidator
 from core.memory.scoring import MemoryScorer
 from core.memory.types import CognitiveSpanConfig
@@ -217,17 +218,22 @@ class MemoryRetriever:
         trade_lessons = []
 
         if self.episodic_store:
-            # Over-fetch to allow for composite scoring and re-ranking
-            # Use metadata filtering for market_regime and spread_type
-            similar_results = await self.episodic_store.find_similar(
-                underlying=underlying,
-                spread_type=spread_type,
-                market_regime=market_regime,
-                iv_rank=iv_rank,
-                vix_at_entry=vix,
-                top_k=k * 2,  # Over-fetch for re-ranking
-                filter_spread_type=True,  # Use Vectorize metadata filter
-            )
+            try:
+                # Over-fetch to allow for composite scoring and re-ranking
+                # Use metadata filtering for market_regime and spread_type
+                similar_results = await self.episodic_store.find_similar(
+                    underlying=underlying,
+                    spread_type=spread_type,
+                    market_regime=market_regime,
+                    iv_rank=iv_rank,
+                    vix_at_entry=vix,
+                    top_k=k * 2,  # Over-fetch for re-ranking
+                    filter_spread_type=True,  # Use Vectorize metadata filter
+                )
+            except Exception as e:
+                # Gracefully handle episodic memory errors - pipeline can run without it
+                logger.warning(f"Episodic memory retrieval failed: {e}, continuing without similar trades")
+                similar_results = []
 
             # Apply composite scoring and re-rank
             scored_results = await self._score_and_rank_results(similar_results)
@@ -322,8 +328,12 @@ class MemoryRetriever:
                 ORDER BY supporting_trades DESC
             """).all()
 
+        # Convert JsProxy results to Python dicts
+        results = js_to_python(rows)
+        result_rows = results.get("results", []) if isinstance(results, dict) else []
+
         rules = []
-        for row in rows.results:
+        for row in result_rows:
             rules.append(SemanticRule(
                 id=row["id"],
                 rule_text=row["rule_text"],

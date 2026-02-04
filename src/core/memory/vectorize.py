@@ -497,7 +497,8 @@ class EpisodicMemoryStore:
 
     async def _generate_embedding(self, text: str) -> list[float]:
         """Generate embedding using Workers AI."""
-        response = await self.ai.run(self.EMBEDDING_MODEL, {"text": text})
+        # Workers AI expects text as an array for embedding models
+        response = await self.ai.run(self.EMBEDDING_MODEL, {"text": [text]})
         return response.data[0]
 
     def _generate_embedding_text(
