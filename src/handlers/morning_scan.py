@@ -413,6 +413,20 @@ async def _run_morning_scan(env):
         print("Market is closed, skipping scan")
         return
 
+    # Send scan start notification
+    scan_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+    await discord.send_message(
+        content="**Morning Scan Starting**",
+        embeds=[{
+            "title": "Morning Scan Initiated",
+            "color": 0x5865F2,  # Blurple
+            "description": f"Starting options screening for credit spread opportunities.\n\n**Time:** {scan_time}",
+            "fields": [
+                {"name": "Underlyings", "value": ", ".join(UNDERLYINGS), "inline": True},
+            ],
+        }]
+    )
+
     # Notify if circuit breaker was auto-reset
     if circuit_breaker_auto_reset:
         await discord.send_message(
@@ -482,10 +496,9 @@ async def _run_morning_scan(env):
                     if abs(c.strike - spy_chain.underlying_price) < spy_chain.underlying_price * 0.02
                     and c.implied_volatility
                 ]
-                spy_iv = (
-                    sum(c.implied_volatility for c in atm_contracts) / len(atm_contracts)
-                    if atm_contracts else 0.20
-                )
+                if not atm_contracts:
+                    raise ValueError("No SPY ATM contracts with IV data for regime detection")
+                spy_iv = sum(c.implied_volatility for c in atm_contracts) / len(atm_contracts)
 
                 # Detect regime (uses pre-computed model in production, sklearn in dev)
                 detector = await create_regime_detector(env, kv)
@@ -604,33 +617,37 @@ async def _run_morning_scan(env):
                 c
                 for c in chain.contracts
                 if abs(c.strike - chain.underlying_price) < chain.underlying_price * 0.02
+                and c.implied_volatility is not None
             ]
 
-            if atm_contracts and atm_contracts[0].implied_volatility:
-                current_iv = atm_contracts[0].implied_volatility
-            else:
-                current_iv = 0.20  # Default
+            if not atm_contracts:
+                print(f"{symbol}: No ATM contracts with IV data - skipping")
+                underlying_results[symbol]["reason"] = "No IV data available"
+                skip_reasons["no_iv_data"] = skip_reasons.get("no_iv_data", 0) + 1
+                continue
+
+            # Use average IV from ATM contracts
+            current_iv = sum(c.implied_volatility for c in atm_contracts) / len(atm_contracts)
 
             # Load real IV history from database
             historical_ivs = await db.get_iv_history(symbol, lookback_days=252)
             iv_history_count = len(historical_ivs)
 
-            # Use historical data if available, otherwise use fallback for testing
+            # Calculate IV metrics - use historical if available, otherwise use current IV as baseline
             if iv_history_count >= 30:
                 iv_metrics = calculate_iv_metrics(current_iv, historical_ivs)
             else:
-                # Fallback: estimate IV rank from VIX level (temporary for testing)
-                # VIX 20-30 suggests elevated IV, use 70% rank as estimate
+                # Not enough history - use current IV with neutral rank
+                # This allows trading while IV history builds up
                 from core.analysis.iv_rank import IVMetrics
-                estimated_rank = min(90.0, max(50.0, current_vix * 2.5)) if current_vix else 70.0
                 iv_metrics = IVMetrics(
                     current_iv=current_iv,
-                    iv_rank=estimated_rank,
-                    iv_percentile=estimated_rank,
-                    iv_high=current_iv * 1.2,
-                    iv_low=current_iv * 0.7,
+                    iv_rank=50.0,  # Neutral - no historical context
+                    iv_percentile=50.0,
+                    iv_high=current_iv,
+                    iv_low=current_iv,
                 )
-                print(f"{symbol}: Using estimated IV rank {estimated_rank:.0f}% (only {iv_history_count} days history)")
+                print(f"{symbol}: Insufficient IV history ({iv_history_count} days) - using neutral rank")
             print(f"{symbol}: IV={current_iv:.2%}, Rank={iv_metrics.iv_rank:.1f}%, Percentile={iv_metrics.iv_percentile:.1f}%")
 
             # Track IV percentile for logging
@@ -842,6 +859,32 @@ async def _run_morning_scan(env):
 
             print(f"Pipeline complete: recommendation={v2_result.recommendation}, confidence={v2_result.confidence:.0%}")
 
+            # Log agent pipeline decisions to Discord
+            try:
+                # Serialize pipeline messages to dicts for Discord
+                def serialize_message(msg):
+                    if msg is None:
+                        return None
+                    return {
+                        "agent_id": msg.agent_id,
+                        "content": msg.content,
+                        "confidence": msg.confidence,
+                        "structured_data": msg.structured_data,
+                    }
+
+                pipeline_dict = {
+                    "analyst_messages": [serialize_message(m) for m in (v2_result.analyst_messages or [])],
+                    "debate_messages": [serialize_message(m) for m in (v2_result.debate_messages or [])],
+                    "fund_manager_message": serialize_message(v2_result.synthesis_message),
+                }
+                await discord.send_agent_pipeline_log(
+                    underlying=spread.underlying,
+                    spread_type=spread.spread_type.value,
+                    pipeline_result=pipeline_dict,
+                )
+            except Exception as e:
+                print(f"Error sending agent pipeline log: {e}")
+
             # Map V2 result to TradeAnalysis format
             analysis = _map_v2_result_to_analysis(v2_result)
 
@@ -858,12 +901,40 @@ async def _run_morning_scan(env):
             if analysis.confidence == Confidence.LOW:
                 print(f"Skipping low confidence trade: {spread.underlying}")
                 skip_reasons["low_confidence"] = skip_reasons.get("low_confidence", 0) + 1
+                # Notify about skipped trade
+                await discord.send_trade_decision(
+                    underlying=spread.underlying,
+                    spread_type=spread.spread_type.value,
+                    short_strike=spread.short_strike,
+                    long_strike=spread.long_strike,
+                    expiration=spread.expiration,
+                    credit=spread.credit,
+                    decision="skipped",
+                    reason="Low confidence from AI analysis",
+                    ai_summary=v2_result.thesis,
+                    confidence=v2_result.confidence,
+                    iv_rank=iv_metrics.iv_rank,
+                )
                 continue
 
             # Skip if recommendation is "skip"
             if v2_result.recommendation == "skip":
                 print(f"Skipping trade per multi-agent recommendation: {spread.underlying}")
                 skip_reasons["agent_rejected"] = skip_reasons.get("agent_rejected", 0) + 1
+                # Notify about rejected trade with AI reasoning
+                await discord.send_trade_decision(
+                    underlying=spread.underlying,
+                    spread_type=spread.spread_type.value,
+                    short_strike=spread.short_strike,
+                    long_strike=spread.long_strike,
+                    expiration=spread.expiration,
+                    credit=spread.credit,
+                    decision="rejected",
+                    reason="Multi-agent analysis recommended skip",
+                    ai_summary=v2_result.thesis,
+                    confidence=v2_result.confidence,
+                    iv_rank=iv_metrics.iv_rank,
+                )
                 continue
 
             # Get delta/theta from the scored spread or Greeks if available

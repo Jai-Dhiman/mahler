@@ -376,6 +376,21 @@ async def _reconcile_pending_orders(db, alpaca, discord, kv):
                 print(f"Order {order.id} FILLED - activating trade {trade.id}")
                 await db.mark_trade_filled(trade.id)
 
+                # Log slippage on entry fill
+                if order.filled_avg_price is not None:
+                    filled_price = abs(order.filled_avg_price)  # Credits are negative in Alpaca
+                    expected_price = trade.entry_credit
+                    try:
+                        await discord.send_slippage_log(
+                            underlying=trade.underlying,
+                            expected_price=expected_price,
+                            filled_price=filled_price,
+                            contracts=trade.contracts,
+                            order_type="entry",
+                        )
+                    except Exception as e:
+                        print(f"Error sending slippage log: {e}")
+
                 # Clean up adjustment tracking (keyed by trade.id)
                 await kv.delete(f"order_adjustment:{trade.id}")
 
@@ -536,6 +551,20 @@ async def _reconcile_pending_exit_orders(db, alpaca, discord, kv):
 
                 # Get exit metadata stored when order was placed
                 exit_metadata = await kv.get_json(f"exit_metadata:{trade.id}")
+
+                # Log slippage on exit fill
+                expected_exit = exit_metadata.get("expected_exit_debit") if exit_metadata else None
+                if expected_exit is not None and order.filled_avg_price is not None:
+                    try:
+                        await discord.send_slippage_log(
+                            underlying=trade.underlying,
+                            expected_price=expected_exit,
+                            filled_price=exit_debit,
+                            contracts=trade.contracts,
+                            order_type="exit",
+                        )
+                    except Exception as e:
+                        print(f"Error sending exit slippage log: {e}")
                 exit_reason = exit_metadata.get("exit_reason") if exit_metadata else None
                 iv_rank_at_exit = exit_metadata.get("iv_rank_at_exit") if exit_metadata else None
                 dte_at_exit = exit_metadata.get("dte_at_exit") if exit_metadata else None

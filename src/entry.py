@@ -336,6 +336,64 @@ async def on_fetch(request, env):
             from core.db.kv import KVClient
             from core.risk.circuit_breaker import CircuitBreaker
 
+            def _get_screening_debug(chain, valid_expirations, config, current_iv):
+                """Get detailed screening diagnostics."""
+                from core.analysis.greeks import years_to_expiry
+                from core.analysis.greeks_vollib import calculate_greeks_vollib
+
+                debug = {"expirations": {}}
+                for exp in valid_expirations[:2]:  # First 2 expirations
+                    puts = chain.get_puts(exp)
+                    calls = chain.get_calls(exp)
+
+                    # Filter for liquidity
+                    liquid_puts = []
+                    for c in puts:
+                        if (c.open_interest >= config.min_open_interest and
+                            c.volume >= config.min_volume and
+                            c.bid > 0 and c.ask > 0):
+                            mid = (c.bid + c.ask) / 2
+                            spread_pct = (c.ask - c.bid) / mid if mid > 0 else 1.0
+                            if spread_pct <= config.max_bid_ask_spread_pct:
+                                liquid_puts.append(c)
+
+                    # Check delta filter
+                    tte = years_to_expiry(exp)
+                    puts_in_delta_range = 0
+                    sample_deltas = []
+                    for p in liquid_puts[:20]:
+                        try:
+                            if p.delta is not None:
+                                delta = p.delta
+                            else:
+                                iv = p.implied_volatility or current_iv
+                                greeks = calculate_greeks_vollib(
+                                    spot=chain.underlying_price,
+                                    strike=p.strike,
+                                    time_to_expiry=tte,
+                                    volatility=iv,
+                                    option_type="put",
+                                )
+                                delta = greeks.delta
+                            if config.min_delta <= abs(delta) <= config.max_delta:
+                                puts_in_delta_range += 1
+                            sample_deltas.append({
+                                "strike": p.strike,
+                                "delta": round(delta, 4),
+                                "in_range": config.min_delta <= abs(delta) <= config.max_delta,
+                            })
+                        except Exception:
+                            pass
+
+                    debug["expirations"][exp] = {
+                        "total_puts": len(puts),
+                        "liquid_puts": len(liquid_puts),
+                        "puts_in_delta_range": puts_in_delta_range,
+                        "total_calls": len(calls),
+                        "sample_put_deltas": sample_deltas[:5],
+                    }
+                return debug
+
             debug_output = {"status": "ok", "checks": {}, "scan_results": {}}
 
             # Initialize clients
@@ -396,8 +454,14 @@ async def on_fetch(request, env):
                     atm_contracts = [
                         c for c in chain.contracts
                         if abs(c.strike - chain.underlying_price) < chain.underlying_price * 0.02
+                        and c.implied_volatility is not None
                     ]
-                    current_iv = atm_contracts[0].implied_volatility if atm_contracts and atm_contracts[0].implied_volatility else 0.20
+
+                    if not atm_contracts:
+                        scan_results[symbol] = {"error": "No ATM contracts with IV data"}
+                        continue
+
+                    current_iv = sum(c.implied_volatility for c in atm_contracts) / len(atm_contracts)
 
                     # Get IV history
                     historical_ivs = await db.get_iv_history(symbol, lookback_days=252)
@@ -406,19 +470,41 @@ async def on_fetch(request, env):
                     if len(historical_ivs) >= 30:
                         iv_metrics = calculate_iv_metrics(current_iv, historical_ivs)
                     else:
-                        # Fallback estimation
-                        current_vix = debug_output["checks"].get("vix", {}).get("vix", 20)
-                        estimated_rank = min(90.0, max(50.0, current_vix * 2.5)) if current_vix else 70.0
+                        # Insufficient history - use neutral rank (debug only)
                         iv_metrics = IVMetrics(
                             current_iv=current_iv,
-                            iv_rank=estimated_rank,
-                            iv_percentile=estimated_rank,
-                            iv_high=current_iv * 1.2,
-                            iv_low=current_iv * 0.7,
+                            iv_rank=50.0,  # Neutral rank
+                            iv_percentile=50.0,
+                            iv_high=current_iv,
+                            iv_low=current_iv,
                         )
 
                     # Screen for opportunities
                     opportunities = screener.screen_chain(chain, iv_metrics)
+
+                    # Diagnostic: Count contracts passing each filter
+                    from core.analysis.greeks import days_to_expiry
+                    config = screener.config
+
+                    # Filter diagnostics
+                    valid_expirations = [
+                        exp for exp in chain.expirations
+                        if config.min_dte <= days_to_expiry(exp) <= config.max_dte
+                    ]
+
+                    # Count liquidity-passing contracts
+                    liquidity_passing = 0
+                    has_iv = 0
+                    for c in chain.contracts:
+                        if c.implied_volatility:
+                            has_iv += 1
+                        if (c.open_interest >= config.min_open_interest and
+                            c.volume >= config.min_volume and
+                            c.bid > 0 and c.ask > 0):
+                            mid = (c.bid + c.ask) / 2
+                            spread_pct = (c.ask - c.bid) / mid if mid > 0 else 1.0
+                            if spread_pct <= config.max_bid_ask_spread_pct:
+                                liquidity_passing += 1
 
                     scan_results[symbol] = {
                         "underlying_price": chain.underlying_price,
@@ -439,6 +525,21 @@ async def on_fetch(request, env):
                             for opp in opportunities[:3]
                         ],
                         "filter_passed": iv_metrics.iv_percentile >= 50.0,
+                        "diagnostics": {
+                            "valid_expirations": len(valid_expirations),
+                            "expirations_list": valid_expirations[:5],
+                            "contracts_with_iv": has_iv,
+                            "contracts_passing_liquidity": liquidity_passing,
+                            "sample_atm_contract": {
+                                "strike": atm_contracts[0].strike if atm_contracts else None,
+                                "bid": atm_contracts[0].bid if atm_contracts else None,
+                                "ask": atm_contracts[0].ask if atm_contracts else None,
+                                "volume": atm_contracts[0].volume if atm_contracts else None,
+                                "open_interest": atm_contracts[0].open_interest if atm_contracts else None,
+                                "iv": atm_contracts[0].implied_volatility if atm_contracts else None,
+                            } if atm_contracts else None,
+                            "screening_debug": _get_screening_debug(chain, valid_expirations, config, iv_metrics.current_iv),
+                        },
                     }
 
                 except Exception as e:

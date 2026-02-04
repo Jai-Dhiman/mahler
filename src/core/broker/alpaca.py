@@ -280,6 +280,9 @@ class AlpacaClient:
         # Get underlying price
         underlying_price = await self._get_underlying_price(symbol)
 
+        # Calculate IV for contracts missing it (Alpaca often doesn't provide Greeks)
+        self._calculate_missing_ivs(contracts, underlying_price)
+
         return OptionsChain(
             underlying=symbol,
             underlying_price=underlying_price,
@@ -301,6 +304,62 @@ class AlpacaClient:
         if bid and ask:
             return (bid + ask) / 2
         return float(quote.get("ap", 0) or quote.get("bp", 0))
+
+    def _calculate_missing_ivs(
+        self, contracts: list[OptionContract], underlying_price: float
+    ) -> None:
+        """Calculate implied volatility for contracts missing it.
+
+        Uses Newton-Raphson method from greeks_vollib to back-calculate IV
+        from option mid-price when Alpaca doesn't provide Greeks data.
+        """
+        from core.analysis.greeks import days_to_expiry
+
+        for contract in contracts:
+            # Skip if IV already present
+            if contract.implied_volatility is not None:
+                continue
+
+            # Skip if no valid quote
+            if contract.bid <= 0 or contract.ask <= 0:
+                continue
+
+            # Calculate mid-price
+            mid_price = (contract.bid + contract.ask) / 2
+
+            # Skip if price too low
+            if mid_price < 0.05:
+                continue
+
+            # Calculate time to expiry
+            dte = days_to_expiry(contract.expiration)
+            if dte <= 0:
+                continue
+
+            time_to_expiry = dte / 365.0
+
+            # Try to calculate IV
+            try:
+                from core.analysis.greeks_vollib import (
+                    InvalidOptionPriceError,
+                    IVCalculationError,
+                    calculate_implied_volatility,
+                )
+
+                option_type = "call" if contract.option_type == "call" else "put"
+                iv = calculate_implied_volatility(
+                    option_price=mid_price,
+                    spot=underlying_price,
+                    strike=contract.strike,
+                    time_to_expiry=time_to_expiry,
+                    risk_free_rate=0.05,
+                    option_type=option_type,
+                )
+                # Update the contract
+                contract.implied_volatility = iv
+            except (InvalidOptionPriceError, IVCalculationError, ValueError):
+                # Can't calculate IV for this contract - leave as None
+                pass
 
     def _parse_option_contract(
         self, occ_symbol: str, snapshot: dict, metadata: dict | None = None

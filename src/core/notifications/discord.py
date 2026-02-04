@@ -251,6 +251,217 @@ class DiscordClient:
             components=[],  # No buttons in autonomous mode
         )
 
+    async def send_trade_decision(
+        self,
+        underlying: str,
+        spread_type: str,
+        short_strike: float,
+        long_strike: float,
+        expiration: str,
+        credit: float,
+        decision: str,  # "approved", "rejected", "skipped"
+        reason: str,
+        ai_summary: str | None = None,
+        confidence: float | None = None,
+        iv_rank: float | None = None,
+        delta: float | None = None,
+    ) -> str:
+        """Send notification for any trade decision (approved, rejected, or skipped).
+
+        This provides full traceability of the agentic system's decisions.
+
+        Args:
+            underlying: Symbol (SPY, QQQ, etc.)
+            spread_type: "bull_put" or "bear_call"
+            short_strike: Short leg strike
+            long_strike: Long leg strike
+            expiration: Expiration date
+            credit: Net credit
+            decision: Decision type
+            reason: Why this decision was made
+            ai_summary: AI agent's reasoning/summary
+            confidence: Confidence level (0.0-1.0)
+            iv_rank: Current IV rank
+            delta: Short delta
+
+        Returns:
+            Message ID
+        """
+        spread_name = "Bull Put" if spread_type == "bull_put" else "Bear Call"
+
+        # Color based on decision
+        if decision == "approved":
+            color = 0x57F287  # Green
+            emoji = "CHECK"
+            title_prefix = "Trade Approved"
+        elif decision == "rejected":
+            color = 0xED4245  # Red
+            emoji = "X"
+            title_prefix = "Trade Rejected"
+        else:  # skipped
+            color = 0xFEE75C  # Yellow
+            emoji = "SKIP"
+            title_prefix = "Trade Skipped"
+
+        fields = [
+            {"name": "Strategy", "value": spread_name, "inline": True},
+            {"name": "Strikes", "value": f"${short_strike:.0f}/${long_strike:.0f}", "inline": True},
+            {"name": "Expiration", "value": expiration, "inline": True},
+            {"name": "Credit", "value": f"${credit:.2f}", "inline": True},
+            {"name": "Decision", "value": decision.upper(), "inline": True},
+        ]
+
+        if confidence is not None:
+            fields.append({"name": "Confidence", "value": f"{confidence:.0%}", "inline": True})
+        if iv_rank is not None:
+            fields.append({"name": "IV Rank", "value": f"{iv_rank:.1f}%", "inline": True})
+        if delta is not None:
+            fields.append({"name": "Delta", "value": f"{delta:.3f}", "inline": True})
+
+        fields.append({"name": "Reason", "value": reason[:200], "inline": False})
+
+        # AI summary is the key part for traceability
+        description = ai_summary[:500] if ai_summary else "No AI summary available"
+
+        embed = {
+            "title": f"{title_prefix}: {underlying}",
+            "description": f"**AI Analysis:**\n{description}",
+            "color": color,
+            "fields": fields,
+            "footer": {"text": f"Decision Agent | {spread_name}"},
+        }
+
+        return await self.send_message(
+            content=f"**{title_prefix}: {underlying} {spread_name}**",
+            embeds=[embed],
+        )
+
+    async def send_agent_pipeline_log(
+        self,
+        underlying: str,
+        spread_type: str,
+        pipeline_result: dict,
+    ) -> str:
+        """Send detailed log of all agent decisions in the pipeline.
+
+        Args:
+            underlying: Symbol
+            spread_type: "bull_put" or "bear_call"
+            pipeline_result: Dict with analyst_messages, debate_messages, etc.
+
+        Returns:
+            Message ID
+        """
+        spread_name = "Bull Put" if spread_type == "bull_put" else "Bear Call"
+        fields = []
+
+        # Analyst perspectives
+        analyst_msgs = pipeline_result.get("analyst_messages", [])
+        for msg in analyst_msgs[:4]:  # Limit to 4 analysts
+            agent_name = msg.get("agent_id", "Unknown").replace("_agent", "").title()
+            content = msg.get("content", "")[:150]
+            confidence = msg.get("confidence", 0)
+            fields.append({
+                "name": f"{agent_name} ({confidence:.0%})",
+                "value": content + "..." if len(msg.get("content", "")) > 150 else content,
+                "inline": False,
+            })
+
+        # Debate summary
+        debate_msgs = pipeline_result.get("debate_messages", [])
+        if debate_msgs:
+            last_bull = None
+            last_bear = None
+            for msg in debate_msgs:
+                if "bull" in msg.get("agent_id", "").lower():
+                    last_bull = msg
+                elif "bear" in msg.get("agent_id", "").lower():
+                    last_bear = msg
+
+            if last_bull:
+                rec = last_bull.get("structured_data", {}).get("recommendation", "?")
+                fields.append({
+                    "name": f"Bull Researcher ({last_bull.get('confidence', 0):.0%})",
+                    "value": f"Rec: {rec} - {last_bull.get('content', '')[:100]}...",
+                    "inline": False,
+                })
+            if last_bear:
+                rec = last_bear.get("structured_data", {}).get("recommendation", "?")
+                fields.append({
+                    "name": f"Bear Researcher ({last_bear.get('confidence', 0):.0%})",
+                    "value": f"Rec: {rec} - {last_bear.get('content', '')[:100]}...",
+                    "inline": False,
+                })
+
+        # Final decision
+        fund_manager = pipeline_result.get("fund_manager_message")
+        if fund_manager:
+            rec = fund_manager.get("structured_data", {}).get("action", "?")
+            fields.append({
+                "name": f"Fund Manager Decision ({fund_manager.get('confidence', 0):.0%})",
+                "value": f"**{rec.upper()}** - {fund_manager.get('content', '')[:150]}",
+                "inline": False,
+            })
+
+        embed = {
+            "title": f"Agent Pipeline: {underlying} {spread_name}",
+            "color": 0x5865F2,  # Blurple
+            "fields": fields[:10],  # Discord limit
+            "footer": {"text": "Multi-Agent Analysis Pipeline"},
+        }
+
+        return await self.send_message(
+            content=f"**Agent Analysis: {underlying}**",
+            embeds=[embed],
+        )
+
+    async def send_slippage_log(
+        self,
+        underlying: str,
+        expected_price: float,
+        filled_price: float,
+        contracts: int,
+        order_type: str,  # "entry" or "exit"
+    ) -> str:
+        """Log slippage on order fills.
+
+        Args:
+            underlying: Symbol
+            expected_price: Limit price or expected fill
+            filled_price: Actual fill price
+            contracts: Number of contracts
+            order_type: "entry" or "exit"
+
+        Returns:
+            Message ID
+        """
+        slippage = filled_price - expected_price
+        slippage_pct = (slippage / expected_price * 100) if expected_price else 0
+        total_slippage = slippage * contracts * 100
+
+        # Color based on slippage severity
+        if abs(slippage_pct) < 1:
+            color = 0x57F287  # Green - minimal
+        elif abs(slippage_pct) < 3:
+            color = 0xFEE75C  # Yellow - moderate
+        else:
+            color = 0xED4245  # Red - significant
+
+        embed = {
+            "title": f"Order Fill: {underlying}",
+            "color": color,
+            "fields": [
+                {"name": "Type", "value": order_type.title(), "inline": True},
+                {"name": "Expected", "value": f"${expected_price:.2f}", "inline": True},
+                {"name": "Filled", "value": f"${filled_price:.2f}", "inline": True},
+                {"name": "Slippage", "value": f"${slippage:.2f} ({slippage_pct:+.1f}%)", "inline": True},
+                {"name": "Contracts", "value": str(contracts), "inline": True},
+                {"name": "Total Impact", "value": f"${total_slippage:.2f}", "inline": True},
+            ],
+        }
+
+        return await self.send_message(embeds=[embed])
+
     # Exit alerts
 
     async def send_exit_alert(
