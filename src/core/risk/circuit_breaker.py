@@ -316,10 +316,19 @@ class GraduatedCircuitBreaker:
         Returns:
             RiskState with the lowest size_multiplier among all checks
         """
-        # Check if manually halted first
+        # Check if halted in KV
         status = await self.get_status()
         if status.halted:
-            return RiskState.halted(reason=status.reason or CircuitBreakerReason.MANUAL)
+            halt_reason = status.reason or CircuitBreakerReason.MANUAL
+
+            # Manual halts and severe drawdown halts stay until manual/daily reset
+            if halt_reason == CircuitBreakerReason.MANUAL or (
+                "drawdown" in halt_reason.lower()
+            ):
+                return RiskState.halted(reason=halt_reason)
+
+            # For other halts (daily loss, weekly loss, VIX, rapid loss),
+            # re-evaluate conditions below -- if they've improved, auto-recover
 
         # Collect all risk states
         states: list[RiskState] = []
@@ -349,6 +358,14 @@ class GraduatedCircuitBreaker:
         # If halted, trip the circuit breaker
         if worst_state.level == RiskLevel.HALTED and worst_state.reason:
             await self.trip(worst_state.reason)
+        elif status.halted and worst_state.level != RiskLevel.HALTED:
+            # Conditions improved below halt threshold -- auto-recover
+            await self.reset()
+            worst_state.should_alert = True
+            worst_state.reason = (
+                f"Circuit breaker auto-recovered: {status.reason or 'unknown'} "
+                f"-> {worst_state.level.value}"
+            )
 
         return worst_state
 

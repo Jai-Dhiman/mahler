@@ -666,11 +666,11 @@ class D1Client:
             SELECT
                 COUNT(*) as total_trades,
                 SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END) as closed_trades,
-                SUM(CASE WHEN profit_loss > 0 THEN 1 ELSE 0 END) as wins,
-                SUM(CASE WHEN profit_loss < 0 THEN 1 ELSE 0 END) as losses,
-                SUM(CASE WHEN profit_loss > 0 THEN profit_loss ELSE 0 END) as total_profit,
-                SUM(CASE WHEN profit_loss < 0 THEN ABS(profit_loss) ELSE 0 END) as total_loss,
-                SUM(profit_loss) as net_pnl
+                SUM(CASE WHEN status = 'closed' AND profit_loss > 0 THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN status = 'closed' AND profit_loss < 0 THEN 1 ELSE 0 END) as losses,
+                SUM(CASE WHEN status = 'closed' AND profit_loss > 0 THEN profit_loss ELSE 0 END) as total_profit,
+                SUM(CASE WHEN status = 'closed' AND profit_loss < 0 THEN ABS(profit_loss) ELSE 0 END) as total_loss,
+                SUM(CASE WHEN status = 'closed' THEN profit_loss ELSE 0 END) as net_pnl
             FROM trades
             """
         )
@@ -678,7 +678,14 @@ class D1Client:
         wins = row.get("wins") or 0
         losses = row.get("losses") or 0
         total_profit = row.get("total_profit") or 0
-        total_loss = row.get("total_loss") or 1  # Avoid division by zero
+        total_loss = row.get("total_loss") or 0
+
+        if total_loss > 0:
+            profit_factor = total_profit / total_loss
+        elif total_profit > 0:
+            profit_factor = float("inf")
+        else:
+            profit_factor = 0.0
 
         return {
             "total_trades": row.get("total_trades") or 0,
@@ -686,7 +693,7 @@ class D1Client:
             "wins": wins,
             "losses": losses,
             "win_rate": wins / (wins + losses) if (wins + losses) > 0 else 0,
-            "profit_factor": total_profit / total_loss if total_loss > 0 else 0,
+            "profit_factor": profit_factor,
             "net_pnl": row.get("net_pnl") or 0,
         }
 

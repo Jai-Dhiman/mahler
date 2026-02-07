@@ -74,12 +74,6 @@ async def _run_position_monitor(env):
     kv = KVClient(env.MAHLER_KV)
     circuit_breaker = CircuitBreaker(kv)
 
-    # Check circuit breaker
-    if not await circuit_breaker.is_trading_allowed():
-        status = await circuit_breaker.check_status()
-        print(f"Trading halted: {status.reason}")
-        return
-
     # Initialize external clients
     alpaca = AlpacaClient(
         api_key=env.ALPACA_API_KEY,
@@ -150,10 +144,26 @@ async def _run_position_monitor(env):
         else:
             print(f"Skipping duplicate circuit breaker alert: {risk_state.reason}")
 
-    # If halted, stop processing
+    # If halted, log and optionally force-close positions, but continue to exit loop
     if risk_state.level == RiskLevel.HALTED:
         print(f"Trading halted: {risk_state.reason}")
-        return
+        print("Continuing position monitoring for exit conditions...")
+
+        if risk_state.should_close_positions and risk_state.close_position_pct > 0:
+            await _close_positions_for_circuit_breaker(
+                open_trades=open_trades,
+                close_pct=risk_state.close_position_pct,
+                reason=risk_state.reason or "Circuit breaker triggered",
+                alpaca=alpaca,
+                db=db,
+                discord=discord,
+                kv=kv,
+            )
+            # Refresh open trades after closures
+            open_trades = await db.get_open_trades()
+            if not open_trades:
+                print("All positions closed by circuit breaker")
+                return
 
     # Process each open trade
     for trade in open_trades:
@@ -957,6 +967,134 @@ async def _auto_execute_exit(
                     "fields": [
                         {"name": "Reason", "value": exit_reason, "inline": False},
                         {"name": "Trade ID", "value": trade.id, "inline": True},
+                    ],
+                }
+            ],
+        )
+
+
+async def _close_positions_for_circuit_breaker(
+    open_trades,
+    close_pct: float,
+    reason: str,
+    alpaca,
+    db,
+    discord,
+    kv,
+):
+    """Force-close a percentage of positions when circuit breaker fires.
+
+    Closes the worst-performing positions first (by unrealized P/L).
+    Skips trades that already have pending exit orders.
+    """
+    import math
+
+    # Get position snapshots for unrealized P/L data
+    positions = await db.get_all_positions()
+    position_by_trade = {p.trade_id: p for p in positions}
+
+    # Filter to trades eligible for closing (no pending exit order)
+    eligible_trades = [t for t in open_trades if not t.exit_order_id]
+
+    if not eligible_trades:
+        print("No eligible trades to close (all have pending exit orders)")
+        return
+
+    # Sort by unrealized P/L ascending (worst losses first)
+    eligible_trades.sort(
+        key=lambda t: position_by_trade[t.id].unrealized_pnl
+        if t.id in position_by_trade
+        else 0
+    )
+
+    # Calculate how many to close
+    num_to_close = max(1, math.ceil(len(eligible_trades) * close_pct))
+    trades_to_close = eligible_trades[:num_to_close]
+
+    print(
+        f"Circuit breaker closing {num_to_close}/{len(eligible_trades)} positions "
+        f"({close_pct:.0%}) - reason: {reason}"
+    )
+
+    closed_count = 0
+    for trade in trades_to_close:
+        try:
+            # Get current prices for the trade
+            chain = await alpaca.get_options_chain(
+                trade.underlying,
+                expiration_start=trade.expiration,
+                expiration_end=trade.expiration,
+            )
+
+            # Find our contracts
+            exp_parts = trade.expiration.split("-")
+            exp_str = exp_parts[0][2:] + exp_parts[1] + exp_parts[2]
+            option_type = "P" if trade.spread_type.value == "bull_put" else "C"
+
+            short_symbol = (
+                f"{trade.underlying}{exp_str}{option_type}{int(trade.short_strike * 1000):08d}"
+            )
+            long_symbol = (
+                f"{trade.underlying}{exp_str}{option_type}{int(trade.long_strike * 1000):08d}"
+            )
+
+            short_contract = next(
+                (c for c in chain.contracts if c.symbol == short_symbol), None
+            )
+            long_contract = next(
+                (c for c in chain.contracts if c.symbol == long_symbol), None
+            )
+
+            if not short_contract or not long_contract:
+                print(f"Could not find contracts for trade {trade.id}, skipping")
+                continue
+
+            current_value = short_contract.mid - long_contract.mid
+            unrealized_pnl = (trade.entry_credit - current_value) * trade.contracts * 100
+            dte = days_to_expiry(trade.expiration)
+
+            exit_reason = f"Circuit breaker: {reason}"
+
+            await _auto_execute_exit(
+                trade=trade,
+                short_symbol=short_symbol,
+                long_symbol=long_symbol,
+                current_value=current_value,
+                unrealized_pnl=unrealized_pnl,
+                exit_reason=exit_reason,
+                iv_rank=None,
+                dte=dte,
+                alpaca=alpaca,
+                db=db,
+                discord=discord,
+                kv=kv,
+            )
+            closed_count += 1
+
+        except Exception as e:
+            print(f"Error closing trade {trade.id} for circuit breaker: {e}")
+
+    # Send summary notification
+    if closed_count > 0:
+        await discord.send_message(
+            content=f"**Circuit Breaker: {closed_count} Exit Orders Placed**",
+            embeds=[
+                {
+                    "title": "Circuit Breaker Position Reduction",
+                    "color": 0xED4245,
+                    "description": f"Placed exit orders for {closed_count}/{num_to_close} positions ({close_pct:.0%} target).",
+                    "fields": [
+                        {"name": "Reason", "value": reason, "inline": False},
+                        {
+                            "name": "Positions Targeted",
+                            "value": str(num_to_close),
+                            "inline": True,
+                        },
+                        {
+                            "name": "Exit Orders Placed",
+                            "value": str(closed_count),
+                            "inline": True,
+                        },
                     ],
                 }
             ],

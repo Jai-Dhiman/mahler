@@ -54,6 +54,17 @@ async def verify_ed25519_signature(public_key_hex: str, message: bytes, signatur
         return False
 
 
+def _format_daily_summary_footer(trade_stats: dict) -> str:
+    """Format the daily summary footer, handling infinity profit factor."""
+    pf = trade_stats["profit_factor"]
+    pf_str = "N/A" if pf == float("inf") else f"{pf:.2f}"
+    return (
+        f"Win Rate: {trade_stats['win_rate']:.1%} | "
+        f"Profit Factor: {pf_str} | "
+        f"Net P/L: ${trade_stats['net_pnl']:,.2f}"
+    )
+
+
 class DiscordClient:
     """Client for Discord notifications with interactive components."""
 
@@ -594,7 +605,7 @@ class DiscordClient:
             "color": pnl_color,
             "fields": fields,
             "footer": {
-                "text": f"Win Rate: {trade_stats['win_rate']:.1%} | Profit Factor: {trade_stats['profit_factor']:.2f} | Net P/L: ${trade_stats['net_pnl']:,.2f}",
+                "text": _format_daily_summary_footer(trade_stats),
             },
         }
 
