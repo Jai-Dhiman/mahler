@@ -16,6 +16,7 @@ class KVClient:
     WEEKLY_KEY_PREFIX = "weekly:"
     RATE_LIMIT_PREFIX = "rate_limit:"
     REGIME_KEY_PREFIX = "regime:"
+    LATEST_ENDING_EQUITY_KEY = "latest_ending_equity"
 
     def __init__(self, kv_binding: Any):
         self.kv = kv_binding
@@ -85,7 +86,11 @@ class KVClient:
         return f"{self.DAILY_KEY_PREFIX}{date}"
 
     async def get_daily_stats(self, date: str | None = None) -> dict:
-        """Get daily trading stats."""
+        """Get daily trading stats.
+
+        Falls back to latest_ending_equity when starting_equity is 0.0
+        (e.g., on Mondays when Friday's EOD wrote to Saturday's key).
+        """
         defaults = {
             "trades_count": 0,
             "realized_pnl": 0.0,
@@ -97,8 +102,16 @@ class KVClient:
         data = await self.get_json(self._daily_key(date))
         if data:
             # Merge defaults with existing data to handle schema evolution
-            return {**defaults, **data}
-        return defaults
+            stats = {**defaults, **data}
+        else:
+            stats = defaults
+
+        # Fall back to latest_ending_equity if starting_equity is 0
+        if stats["starting_equity"] == 0.0:
+            latest = await self.get_latest_ending_equity()
+            if latest is not None and latest > 0:
+                stats["starting_equity"] = latest
+        return stats
 
     async def update_daily_stats(
         self,
@@ -131,6 +144,17 @@ class KVClient:
         # TTL of 7 days for daily stats
         await self.put_json(self._daily_key(date), stats, expiration_ttl=7 * 24 * 3600)
         return stats
+
+    async def get_latest_ending_equity(self) -> float | None:
+        """Get the most recent ending equity (survives weekends/holidays)."""
+        value = await self.get(self.LATEST_ENDING_EQUITY_KEY)
+        if value is not None:
+            return float(value)
+        return None
+
+    async def set_latest_ending_equity(self, equity: float) -> None:
+        """Store the latest ending equity (no TTL - persists until next write)."""
+        await self.put(self.LATEST_ENDING_EQUITY_KEY, str(equity))
 
     async def reset_daily_stats(self, date: str | None = None) -> None:
         """Reset daily stats (for new trading day)."""

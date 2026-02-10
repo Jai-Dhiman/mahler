@@ -176,6 +176,7 @@ def determine_trading_style(
     vix: float | None = None,
     recent_pnl_percent: float | None = None,
     market_regime: str | None = None,
+    risk_level: str | None = None,
 ) -> TradingStyle:
     """Determine trading style based on market conditions and performance.
 
@@ -183,6 +184,7 @@ def determine_trading_style(
     1. VIX level is the primary factor (market stress indicator)
     2. Recent P&L adjusts within VIX-based tier
     3. Market regime provides additional context
+    4. Risk level override has final say (circuit breaker integration)
 
     Decision Logic:
     - VIX > 30: Conservative (high stress environment)
@@ -198,10 +200,15 @@ def determine_trading_style(
     - Crisis/Bearish regime: Always conservative regardless of VIX
     - Bullish regime: Allow aggressive if VIX supports it
 
+    Risk Level Override (final priority):
+    - caution/high: Shift one tier more conservative
+    - critical/halted: Force CONSERVATIVE regardless of other factors
+
     Args:
         vix: Current VIX level (None defaults to neutral)
         recent_pnl_percent: Recent P&L as percentage (e.g., -0.05 = -5%)
         market_regime: Market regime string (e.g., "bullish", "bearish", "neutral", "crisis")
+        risk_level: Circuit breaker risk level (e.g., "normal", "caution", "critical", "halted")
 
     Returns:
         TradingStyle enum value
@@ -234,6 +241,14 @@ def determine_trading_style(
             style_score = 0  # Always conservative in crisis/bearish
         elif regime_lower == "highly_bullish" and style_score >= 1:
             style_score = 2  # Allow aggressive in highly bullish
+
+    # Risk level override (final priority - circuit breaker integration)
+    if risk_level is not None:
+        risk_lower = risk_level.lower()
+        if risk_lower in ("critical", "halted"):
+            style_score = 0  # Force conservative in severe risk states
+        elif risk_lower in ("caution", "high", "elevated"):
+            style_score = max(0, style_score - 1)  # Shift one tier conservative
 
     # Map score to style
     style_map = {0: TradingStyle.CONSERVATIVE, 1: TradingStyle.NEUTRAL, 2: TradingStyle.AGGRESSIVE}

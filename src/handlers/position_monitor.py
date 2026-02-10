@@ -50,6 +50,27 @@ async def _should_send_circuit_breaker_alert(kv: KVClient, reason: str) -> bool:
     return True
 
 
+async def _should_close_positions(kv: KVClient, level: str) -> bool:
+    """Check if we should close positions for this risk level (dedup within 1 hour).
+
+    Prevents the 5-minute monitor loop from repeatedly closing positions at the
+    same risk level. Returns True only if we haven't closed at this level (or worse)
+    in the last hour.
+    """
+    key = f"circuit_breaker_closure:{level}"
+
+    last_closure = await kv.get(key)
+    if last_closure:
+        return False
+
+    await kv.put(
+        key,
+        datetime.now(UTC).isoformat(),
+        expiration_ttl=CIRCUIT_BREAKER_ALERT_DEDUP_SECONDS,
+    )
+    return True
+
+
 async def handle_position_monitor(env):
     """Monitor positions for exit conditions."""
     print("Starting position monitor...")
@@ -144,12 +165,10 @@ async def _run_position_monitor(env):
         else:
             print(f"Skipping duplicate circuit breaker alert: {risk_state.reason}")
 
-    # If halted, log and optionally force-close positions, but continue to exit loop
-    if risk_state.level == RiskLevel.HALTED:
-        print(f"Trading halted: {risk_state.reason}")
-        print("Continuing position monitoring for exit conditions...")
-
-        if risk_state.should_close_positions and risk_state.close_position_pct > 0:
+    # Force-close positions if any risk state requests it (CRITICAL or HALTED)
+    if risk_state.should_close_positions and risk_state.close_position_pct > 0:
+        should_close = await _should_close_positions(kv, risk_state.level.value)
+        if should_close:
             await _close_positions_for_circuit_breaker(
                 open_trades=open_trades,
                 close_pct=risk_state.close_position_pct,
@@ -164,6 +183,10 @@ async def _run_position_monitor(env):
             if not open_trades:
                 print("All positions closed by circuit breaker")
                 return
+
+    if risk_state.level == RiskLevel.HALTED:
+        print(f"Trading halted: {risk_state.reason}")
+        print("Continuing position monitoring for exit conditions...")
 
     # Process each open trade
     for trade in open_trades:
@@ -251,6 +274,7 @@ async def _run_position_monitor(env):
                 vix=current_vix,
                 recent_pnl_percent=recent_pnl_percent,
                 market_regime=None,  # Could fetch from KV if available
+                risk_level=risk_state.level.value,
             )
 
             # Calculate 10-day volatility for dynamic exits

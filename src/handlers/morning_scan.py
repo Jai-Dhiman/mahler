@@ -603,7 +603,10 @@ async def _run_morning_scan(env):
             print(f"Scanning {symbol}...")
 
             # Get options chain
-            chain = await alpaca.get_options_chain(symbol)
+            try:
+                chain = await alpaca.get_options_chain(symbol)
+            except Exception as e:
+                raise RuntimeError(f"Options chain fetch failed: {e}") from e
 
             if not chain.contracts:
                 print(f"No options data for {symbol}")
@@ -630,24 +633,30 @@ async def _run_morning_scan(env):
             current_iv = sum(c.implied_volatility for c in atm_contracts) / len(atm_contracts)
 
             # Load real IV history from database
-            historical_ivs = await db.get_iv_history(symbol, lookback_days=252)
+            try:
+                historical_ivs = await db.get_iv_history(symbol, lookback_days=252)
+            except Exception as e:
+                raise RuntimeError(f"IV history fetch failed: {e}") from e
             iv_history_count = len(historical_ivs)
 
             # Calculate IV metrics - use historical if available, otherwise use current IV as baseline
-            if iv_history_count >= 30:
-                iv_metrics = calculate_iv_metrics(current_iv, historical_ivs)
-            else:
-                # Not enough history - use current IV with neutral rank
-                # This allows trading while IV history builds up
-                from core.analysis.iv_rank import IVMetrics
-                iv_metrics = IVMetrics(
-                    current_iv=current_iv,
-                    iv_rank=50.0,  # Neutral - no historical context
-                    iv_percentile=50.0,
-                    iv_high=current_iv,
-                    iv_low=current_iv,
-                )
-                print(f"{symbol}: Insufficient IV history ({iv_history_count} days) - using neutral rank")
+            try:
+                if iv_history_count >= 30:
+                    iv_metrics = calculate_iv_metrics(current_iv, historical_ivs)
+                else:
+                    # Not enough history - use current IV with neutral rank
+                    # This allows trading while IV history builds up
+                    from core.analysis.iv_rank import IVMetrics
+                    iv_metrics = IVMetrics(
+                        current_iv=current_iv,
+                        iv_rank=50.0,  # Neutral - no historical context
+                        iv_percentile=50.0,
+                        iv_high=current_iv,
+                        iv_low=current_iv,
+                    )
+                    print(f"{symbol}: Insufficient IV history ({iv_history_count} days) - using neutral rank")
+            except Exception as e:
+                raise RuntimeError(f"IV metrics calculation failed: {e}") from e
             print(f"{symbol}: IV={current_iv:.2%}, Rank={iv_metrics.iv_rank:.1f}%, Percentile={iv_metrics.iv_percentile:.1f}%")
 
             # Track IV percentile for logging
@@ -709,8 +718,11 @@ async def _run_morning_scan(env):
                     print(f"{symbol}: Mean reversion analysis failed: {e}")
 
             # Screen for opportunities with regime-conditional scoring
-            current_regime = regime_result.get("regime") if regime_result else None
-            opportunities = screener.screen_chain(chain, iv_metrics, regime=current_regime)
+            try:
+                current_regime = regime_result.get("regime") if regime_result else None
+                opportunities = screener.screen_chain(chain, iv_metrics, regime=current_regime)
+            except Exception as e:
+                raise RuntimeError(f"Screening failed: {e}") from e
 
             # Track found opportunities
             underlying_results[symbol]["found"] = len(opportunities) if opportunities else 0
@@ -732,8 +744,11 @@ async def _run_morning_scan(env):
                 skip_reasons["no_opportunities"] = skip_reasons.get("no_opportunities", 0) + 1
 
         except Exception as e:
-            print(f"Error scanning {symbol}: {e}")
-            underlying_results[symbol]["reason"] = f"Error: {str(e)[:50]}"
+            import traceback
+            error_type = type(e).__name__
+            print(f"Error scanning {symbol}: {error_type}: {e}")
+            print(traceback.format_exc())
+            underlying_results[symbol]["reason"] = f"{error_type}: {str(e)[:200]}"
             skip_reasons["error"] = skip_reasons.get("error", 0) + 1
             await circuit_breaker.check_api_errors()
 

@@ -54,15 +54,26 @@ async def verify_ed25519_signature(public_key_hex: str, message: bytes, signatur
         return False
 
 
-def _format_daily_summary_footer(trade_stats: dict) -> str:
-    """Format the daily summary footer, handling infinity profit factor."""
+def _format_daily_summary_footer(
+    trade_stats: dict,
+    trade_stats_today: dict | None = None,
+) -> str:
+    """Format the daily summary footer with all-time and today's stats."""
     pf = trade_stats["profit_factor"]
     pf_str = "N/A" if pf == float("inf") else f"{pf:.2f}"
-    return (
-        f"Win Rate: {trade_stats['win_rate']:.1%} | "
-        f"Profit Factor: {pf_str} | "
-        f"Net P/L: ${trade_stats['net_pnl']:,.2f}"
-    )
+
+    parts = [
+        f"All-Time: {trade_stats['win_rate']:.0%} WR | PF {pf_str} | ${trade_stats['net_pnl']:,.2f} P/L"
+    ]
+
+    if trade_stats_today and trade_stats_today.get("closed_trades", 0) > 0:
+        today_pf = trade_stats_today["profit_factor"]
+        today_pf_str = "N/A" if today_pf == float("inf") else f"{today_pf:.2f}"
+        parts.append(
+            f"Today: {trade_stats_today['win_rate']:.0%} WR | PF {today_pf_str} | ${trade_stats_today['net_pnl']:,.2f}"
+        )
+
+    return " | ".join(parts)
 
 
 class DiscordClient:
@@ -509,6 +520,7 @@ class DiscordClient:
         performance: DailyPerformance,
         open_positions: int,
         trade_stats: dict,
+        trade_stats_today: dict | None = None,
         screening_summary: dict | None = None,
         market_context: dict | None = None,
     ) -> str:
@@ -517,14 +529,21 @@ class DiscordClient:
         Args:
             performance: Daily performance stats
             open_positions: Number of open positions
-            trade_stats: Trade statistics (win_rate, profit_factor, net_pnl)
+            trade_stats: All-time trade statistics (win_rate, profit_factor, net_pnl)
+            trade_stats_today: Today-only trade statistics
             screening_summary: Optional summary of today's screening results
             market_context: Optional market context (VIX, IV, regime)
 
         Returns:
             Message ID
         """
-        pnl_color = 0x57F287 if performance.realized_pnl >= 0 else 0xED4245
+        # Color based on account change (ending - starting), not just realized P/L
+        account_change = performance.ending_balance - performance.starting_balance
+        pnl_color = 0x57F287 if account_change >= 0 else 0xED4245
+
+        # Account change percentage
+        change_pct = (account_change / performance.starting_balance * 100) if performance.starting_balance > 0 else 0
+        change_sign = "+" if account_change >= 0 else ""
 
         fields = [
             {
@@ -535,6 +554,11 @@ class DiscordClient:
             {
                 "name": "Ending Balance",
                 "value": f"${performance.ending_balance:,.2f}",
+                "inline": True,
+            },
+            {
+                "name": "Account Change",
+                "value": f"{change_sign}${account_change:,.2f} ({change_sign}{change_pct:.2f}%)",
                 "inline": True,
             },
             {
@@ -605,7 +629,7 @@ class DiscordClient:
             "color": pnl_color,
             "fields": fields,
             "footer": {
-                "text": _format_daily_summary_footer(trade_stats),
+                "text": _format_daily_summary_footer(trade_stats, trade_stats_today),
             },
         }
 

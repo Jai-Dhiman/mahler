@@ -543,7 +543,16 @@ class D1Client:
         """Get or create daily performance record."""
         result = await self.execute("SELECT * FROM daily_performance WHERE date = ?", [date])
         if result["results"]:
-            return self._row_to_daily_performance(result["results"][0])
+            row = result["results"][0]
+            # Fix race condition: if row was created with starting_balance=0
+            # (by update_daily_performance) and we now have a real value, update it
+            if row["starting_balance"] == 0 and starting_balance > 0:
+                await self.run(
+                    "UPDATE daily_performance SET starting_balance = ? WHERE date = ?",
+                    [starting_balance, date],
+                )
+                row["starting_balance"] = starting_balance
+            return self._row_to_daily_performance(row)
 
         await self.run(
             """
@@ -659,21 +668,43 @@ class D1Client:
 
     # Stats
 
-    async def get_trade_stats(self) -> dict:
-        """Get aggregate trade statistics."""
-        result = await self.execute(
-            """
-            SELECT
-                COUNT(*) as total_trades,
-                SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END) as closed_trades,
-                SUM(CASE WHEN status = 'closed' AND profit_loss > 0 THEN 1 ELSE 0 END) as wins,
-                SUM(CASE WHEN status = 'closed' AND profit_loss < 0 THEN 1 ELSE 0 END) as losses,
-                SUM(CASE WHEN status = 'closed' AND profit_loss > 0 THEN profit_loss ELSE 0 END) as total_profit,
-                SUM(CASE WHEN status = 'closed' AND profit_loss < 0 THEN ABS(profit_loss) ELSE 0 END) as total_loss,
-                SUM(CASE WHEN status = 'closed' THEN profit_loss ELSE 0 END) as net_pnl
-            FROM trades
-            """
-        )
+    async def get_trade_stats(self, date: str | None = None) -> dict:
+        """Get aggregate trade statistics.
+
+        Args:
+            date: Optional date filter (YYYY-MM-DD). When provided, only includes
+                  trades closed on that date. When None, returns all-time stats.
+        """
+        if date:
+            result = await self.execute(
+                """
+                SELECT
+                    COUNT(*) as total_trades,
+                    SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END) as closed_trades,
+                    SUM(CASE WHEN status = 'closed' AND profit_loss > 0 THEN 1 ELSE 0 END) as wins,
+                    SUM(CASE WHEN status = 'closed' AND profit_loss < 0 THEN 1 ELSE 0 END) as losses,
+                    SUM(CASE WHEN status = 'closed' AND profit_loss > 0 THEN profit_loss ELSE 0 END) as total_profit,
+                    SUM(CASE WHEN status = 'closed' AND profit_loss < 0 THEN ABS(profit_loss) ELSE 0 END) as total_loss,
+                    SUM(CASE WHEN status = 'closed' THEN profit_loss ELSE 0 END) as net_pnl
+                FROM trades
+                WHERE closed_at LIKE ?
+                """,
+                [f"{date}%"],
+            )
+        else:
+            result = await self.execute(
+                """
+                SELECT
+                    COUNT(*) as total_trades,
+                    SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END) as closed_trades,
+                    SUM(CASE WHEN status = 'closed' AND profit_loss > 0 THEN 1 ELSE 0 END) as wins,
+                    SUM(CASE WHEN status = 'closed' AND profit_loss < 0 THEN 1 ELSE 0 END) as losses,
+                    SUM(CASE WHEN status = 'closed' AND profit_loss > 0 THEN profit_loss ELSE 0 END) as total_profit,
+                    SUM(CASE WHEN status = 'closed' AND profit_loss < 0 THEN ABS(profit_loss) ELSE 0 END) as total_loss,
+                    SUM(CASE WHEN status = 'closed' THEN profit_loss ELSE 0 END) as net_pnl
+                FROM trades
+                """
+            )
         row = result["results"][0] if result["results"] else {}
         wins = row.get("wins") or 0
         losses = row.get("losses") or 0

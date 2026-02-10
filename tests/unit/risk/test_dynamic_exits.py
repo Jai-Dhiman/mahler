@@ -2,6 +2,8 @@
 
 import pytest
 
+from core.risk.dynamic_exit import TradingStyle as DynamicTradingStyle
+from core.risk.dynamic_exit import determine_trading_style
 from core.risk.validators import (
     DynamicExitCalculator,
     DynamicExitResult,
@@ -303,3 +305,63 @@ class TestSerialization:
         assert "trading_style" in d
         assert d["trading_style"] == "neutral"
         assert "vol_adjustment" in d
+
+
+class TestRiskLevelOverride:
+    """Test risk_level parameter in determine_trading_style()."""
+
+    def test_normal_risk_level_no_effect(self):
+        """risk_level='normal' should not change the style."""
+        # Low VIX would normally give aggressive
+        style = determine_trading_style(vix=15.0, risk_level="normal")
+        assert style == DynamicTradingStyle.AGGRESSIVE
+
+    def test_caution_shifts_one_tier_conservative(self):
+        """risk_level='caution' should shift one tier more conservative."""
+        # Low VIX alone = aggressive (score=2), caution shifts to neutral (score=1)
+        style = determine_trading_style(vix=15.0, risk_level="caution")
+        assert style == DynamicTradingStyle.NEUTRAL
+
+    def test_high_shifts_one_tier_conservative(self):
+        """risk_level='high' should shift one tier more conservative."""
+        # Low VIX alone = aggressive (score=2), high shifts to neutral (score=1)
+        style = determine_trading_style(vix=15.0, risk_level="high")
+        assert style == DynamicTradingStyle.NEUTRAL
+
+    def test_elevated_shifts_one_tier_conservative(self):
+        """risk_level='elevated' should shift one tier more conservative."""
+        # VIX 22 = neutral (score=1), elevated shifts to conservative (score=0)
+        style = determine_trading_style(vix=22.0, risk_level="elevated")
+        assert style == DynamicTradingStyle.CONSERVATIVE
+
+    def test_critical_forces_conservative(self):
+        """risk_level='critical' should force CONSERVATIVE regardless of VIX."""
+        # Low VIX alone would give aggressive
+        style = determine_trading_style(vix=15.0, risk_level="critical")
+        assert style == DynamicTradingStyle.CONSERVATIVE
+
+    def test_halted_forces_conservative(self):
+        """risk_level='halted' should force CONSERVATIVE regardless of VIX."""
+        style = determine_trading_style(vix=15.0, risk_level="halted")
+        assert style == DynamicTradingStyle.CONSERVATIVE
+
+    def test_critical_overrides_bullish_regime(self):
+        """risk_level='critical' should override even highly_bullish regime."""
+        style = determine_trading_style(
+            vix=15.0,
+            market_regime="highly_bullish",
+            risk_level="critical",
+        )
+        assert style == DynamicTradingStyle.CONSERVATIVE
+
+    def test_caution_already_conservative_stays_conservative(self):
+        """Caution shift on already conservative should stay conservative (floor at 0)."""
+        # High VIX = conservative (score=0), caution shifts to max(0, 0-1) = 0
+        style = determine_trading_style(vix=35.0, risk_level="caution")
+        assert style == DynamicTradingStyle.CONSERVATIVE
+
+    def test_none_risk_level_no_effect(self):
+        """risk_level=None should not change the style (backward compat)."""
+        style_without = determine_trading_style(vix=15.0)
+        style_with_none = determine_trading_style(vix=15.0, risk_level=None)
+        assert style_without == style_with_none

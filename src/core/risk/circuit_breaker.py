@@ -226,6 +226,8 @@ class GraduatedCircuitBreaker:
                 size_multiplier=0.25,  # Minimum sizing
                 reason=CircuitBreakerReason.DRAWDOWN_CAUTION,
                 should_alert=True,
+                should_close_positions=True,
+                close_position_pct=0.25,  # Close 25% of positions (worst first)
             )
 
         return RiskState.normal()

@@ -479,3 +479,47 @@ class TestCircuitBreaker:
 
         # Should return normal (0% loss)
         assert state.size_multiplier >= 0
+
+    @pytest.mark.asyncio
+    async def test_critical_drawdown_closes_25_percent(self, mock_kv):
+        """Test 10% drawdown (CRITICAL) triggers 25% position closure."""
+        from core.risk.circuit_breaker import GraduatedCircuitBreaker, RiskLevel
+
+        cb = GraduatedCircuitBreaker(mock_kv)
+        state = await cb.evaluate_drawdown_risk(
+            peak_equity=10000.0,
+            current_equity=8800.0,  # 12% drawdown
+        )
+
+        assert state.level == RiskLevel.CRITICAL
+        assert state.should_close_positions is True
+        assert state.close_position_pct == 0.25
+
+    @pytest.mark.asyncio
+    async def test_critical_drawdown_at_boundary(self, mock_kv):
+        """Test exactly 10% drawdown triggers CRITICAL with closures."""
+        from core.risk.circuit_breaker import GraduatedCircuitBreaker, RiskLevel
+
+        cb = GraduatedCircuitBreaker(mock_kv)
+        state = await cb.evaluate_drawdown_risk(
+            peak_equity=10000.0,
+            current_equity=9000.0,  # Exactly 10% drawdown
+        )
+
+        assert state.level == RiskLevel.CRITICAL
+        assert state.should_close_positions is True
+        assert state.close_position_pct == 0.25
+
+    @pytest.mark.asyncio
+    async def test_below_critical_drawdown_no_closures(self, mock_kv):
+        """Test drawdown below 10% does NOT trigger closures."""
+        from core.risk.circuit_breaker import GraduatedCircuitBreaker, RiskLevel
+
+        cb = GraduatedCircuitBreaker(mock_kv)
+        state = await cb.evaluate_drawdown_risk(
+            peak_equity=10000.0,
+            current_equity=9200.0,  # 8% drawdown
+        )
+
+        assert state.level == RiskLevel.NORMAL
+        assert state.should_close_positions is False

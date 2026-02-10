@@ -531,7 +531,16 @@ async def _run_eod_summary(env):
 
     # Get or create daily performance record
     daily_stats = await kv.get_daily_stats(today)
-    starting_balance = daily_stats.get("starting_equity", account.equity)
+    starting_balance = daily_stats.get("starting_equity", 0.0)
+
+    # Fall back to latest_ending_equity if starting_equity is still 0
+    if starting_balance == 0.0:
+        latest_equity = await kv.get_latest_ending_equity()
+        if latest_equity is not None and latest_equity > 0:
+            starting_balance = latest_equity
+    # Final fallback: use current account equity
+    if starting_balance == 0.0:
+        starting_balance = account.equity
 
     performance = await db.get_or_create_daily_performance(
         date=today,
@@ -554,8 +563,9 @@ async def _run_eod_summary(env):
     positions = await db.get_all_positions()
     open_trades = await db.get_open_trades()
 
-    # Get trade stats
+    # Get trade stats (all-time and today)
     trade_stats = await db.get_trade_stats()
+    trade_stats_today = await db.get_trade_stats(date=today)
 
     # Generate reflections for trades closed today
     closed_today = []
@@ -922,6 +932,7 @@ async def _run_eod_summary(env):
         performance=performance,
         open_positions=len(open_trades),
         trade_stats=trade_stats,
+        trade_stats_today=trade_stats_today,
         screening_summary=screening_summary,
         market_context=market_context_for_summary,
     )
@@ -930,11 +941,13 @@ async def _run_eod_summary(env):
     tomorrow = datetime.now().replace(hour=0, minute=0, second=0) + __import__(
         "datetime"
     ).timedelta(days=1)
-    # Store starting equity for tomorrow
+    # Store starting equity for tomorrow (date-keyed, may miss weekends/holidays)
     await kv.put_json(
         f"daily:{tomorrow.strftime('%Y-%m-%d')}",
         {"starting_equity": account.equity, "trades_count": 0, "realized_pnl": 0},
         expiration_ttl=7 * 24 * 3600,
     )
+    # Store latest ending equity (non-date-keyed, survives weekends/holidays)
+    await kv.set_latest_ending_equity(account.equity)
 
     print("EOD summary complete.")
