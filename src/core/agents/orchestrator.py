@@ -35,13 +35,12 @@ if TYPE_CHECKING:
 class PipelineStage(str, Enum):
     """Stages in the analysis pipeline.
 
-    V2 Pipeline Order:
+    Pipeline Order:
     1. ANALYSTS - Parallel analysis (IV, Technical, Macro, Greeks)
     2. DEBATE - Bull vs Bear researchers, N rounds
     3. SYNTHESIS - Facilitator combines debate outcome
-    4. RISK_DELIBERATION - Three-perspective risk debate (new)
-    5. TRADER - Synthesizes into trading proposal (new)
-    6. FUND_MANAGER - Final approval authority (new)
+    4. RISK_DELIBERATION - Three-perspective risk debate
+    5. FUND_MANAGER - Evaluates debate outcome, makes final decision
     """
 
     ANALYSTS = "analysts"
@@ -144,13 +143,12 @@ class PipelineResult:
 class AgentOrchestrator:
     """Orchestrates the multi-agent analysis pipeline.
 
-    V2 Pipeline (7-agent architecture inspired by TradingAgents paper):
+    V2 Pipeline (5-stage architecture):
     1. Analysts (parallel): IV, Technical, Macro, Greeks analysts
     2. Debate (sequential): Bull vs Bear researchers, N rounds
     3. Synthesis: Facilitator combines all inputs
-    4. Risk Deliberation: Three-perspective risk debate (V2)
-    5. Trader: Synthesizes into trading proposal (V2)
-    6. Fund Manager: Final approval authority (V2)
+    4. Risk Deliberation: Three-perspective risk debate
+    5. Fund Manager: Evaluates debate outcome and makes final decision
 
     Usage:
         orchestrator = AgentOrchestrator(claude)
@@ -159,7 +157,6 @@ class AgentOrchestrator:
         orchestrator.register_debater(BullResearcher(claude), "bull")
         orchestrator.register_debater(BearResearcher(claude), "bear")
         orchestrator.set_facilitator(DebateFacilitator(claude))
-        orchestrator.set_trader(TraderAgent(claude))
         orchestrator.set_fund_manager(FundManagerAgent(claude))
 
         result = await orchestrator.run_pipeline(context)
@@ -231,15 +228,14 @@ class AgentOrchestrator:
         context: AgentContext,
         current_vix: float | None = None,
     ) -> PipelineResult:
-        """Run the full V2 analysis pipeline.
+        """Run the full analysis pipeline.
 
         Pipeline stages:
         1. Analysts (parallel) - IV, Technical, Macro, Greeks
         2. Debate - Bull vs Bear, N rounds with dynamic termination
         3. Facilitator synthesis - Debate outcome
-        4. Risk deliberation - Three-perspective agent debate (V2)
-        5. Trader proposal - Concrete trading parameters (V2)
-        6. Fund Manager approval - Final decision (V2)
+        4. Risk deliberation - Three-perspective agent debate
+        5. Fund Manager decision - Evaluates debate outcome, makes final call
 
         Args:
             context: Initial context with spread and market data
@@ -282,15 +278,7 @@ class AgentOrchestrator:
                 result.risk_deliberation_message = risk_result
                 context.prior_messages.append(risk_result)
 
-        # Stage 5: Trader proposal (V2 - if trader registered)
-        if self._trader:
-            result.trader_message = await self._trader.synthesize(
-                context, result.analyst_messages
-            )
-            if result.trader_message:
-                context.prior_messages.append(result.trader_message)
-
-        # Stage 6: Fund Manager approval (V2 - if fund manager registered)
+        # Stage 5: Fund Manager decision (if fund manager registered)
         if self._fund_manager:
             result.fund_manager_message = await self._fund_manager.synthesize(
                 context, result.analyst_messages

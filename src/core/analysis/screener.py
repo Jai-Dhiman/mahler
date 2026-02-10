@@ -186,7 +186,7 @@ class ScreenerConfig:
     min_iv_rank: float = 50.0  # Keep as secondary signal for AI context
 
     # Minimum credit (as percentage of width)
-    min_credit_pct: float = 0.25  # 25% of spread width
+    min_credit_pct: float = 0.12  # 12% of spread width (lowered for backtest-validated delta range)
 
     # Spread width range
     # Note: $2+ wide spreads have significantly better liquidity and fill rates

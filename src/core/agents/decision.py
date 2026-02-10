@@ -27,6 +27,7 @@ from core.agents.base import (
 
 if TYPE_CHECKING:
     from core.ai.claude import ClaudeClient
+    from core.ai.router import LLMRouter
     from core.memory.retriever import RetrievedContext, SemanticRule
     from core.risk.three_perspective import ThreePerspectiveResult, ThreePerspectiveRiskManager
 
@@ -45,7 +46,7 @@ Your decision must balance:
 - Risk management (from rules and portfolio context)
 - Position sizing (from risk state)
 
-Be decisive but conservative. When in doubt, skip or reduce size.
+Be decisive and balanced. Evaluate each trade on its merits -- approve trades that meet the strategy criteria even if conditions aren't perfect. Only skip when there are concrete, specific reasons to reject.
 Never override hard risk limits."""
 
 DECISION_USER = """Make the final trading decision:
@@ -164,8 +165,8 @@ class TradingDecisionAgent(SynthesisAgent):
     The decision is autonomous - no human approval required.
     """
 
-    def __init__(self, claude: ClaudeClient):
-        super().__init__(claude, agent_id="decision_agent")
+    def __init__(self, claude: ClaudeClient | None = None, *, router: LLMRouter | None = None):
+        super().__init__(claude, agent_id="decision_agent", router=router)
 
     @property
     def role(self) -> str:

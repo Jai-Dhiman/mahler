@@ -24,6 +24,7 @@ from core.ai.prompts import (
 
 if TYPE_CHECKING:
     from core.ai.claude import ClaudeClient
+    from core.ai.router import LLMRouter
 
 
 class DebatePerspective(str, Enum):
@@ -93,8 +94,8 @@ class DebateFacilitator(SynthesisAgent):
     5. Sets position size based on confidence
     """
 
-    def __init__(self, claude: ClaudeClient):
-        super().__init__(claude, agent_id="facilitator")
+    def __init__(self, claude: ClaudeClient | None = None, *, router: LLMRouter | None = None):
+        super().__init__(claude, agent_id="facilitator", router=router)
 
     @property
     def role(self) -> str:

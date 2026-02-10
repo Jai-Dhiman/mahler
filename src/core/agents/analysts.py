@@ -32,6 +32,7 @@ from core.ai.prompts import (
 
 if TYPE_CHECKING:
     from core.ai.claude import ClaudeClient
+    from core.ai.router import LLMRouter
 
 
 class IVAnalyst(AnalystAgent):
@@ -44,8 +45,8 @@ class IVAnalyst(AnalystAgent):
     - Historical IV context
     """
 
-    def __init__(self, claude: ClaudeClient):
-        super().__init__(claude, agent_id="iv_analyst")
+    def __init__(self, claude: ClaudeClient | None = None, *, router: LLMRouter | None = None):
+        super().__init__(claude, agent_id="iv_analyst", router=router)
 
     @property
     def role(self) -> str:
@@ -121,8 +122,8 @@ class TechnicalAnalyst(AnalystAgent):
     - Recent price action
     """
 
-    def __init__(self, claude: ClaudeClient):
-        super().__init__(claude, agent_id="technical_analyst")
+    def __init__(self, claude: ClaudeClient | None = None, *, router: LLMRouter | None = None):
+        super().__init__(claude, agent_id="technical_analyst", router=router)
 
     @property
     def role(self) -> str:
@@ -252,8 +253,8 @@ class MacroAnalyst(AnalystAgent):
     - Calendar considerations
     """
 
-    def __init__(self, claude: ClaudeClient):
-        super().__init__(claude, agent_id="macro_analyst")
+    def __init__(self, claude: ClaudeClient | None = None, *, router: LLMRouter | None = None):
+        super().__init__(claude, agent_id="macro_analyst", router=router)
 
     @property
     def role(self) -> str:
@@ -321,8 +322,8 @@ class GreeksAnalyst(AnalystAgent):
     - Correlation and concentration risk
     """
 
-    def __init__(self, claude: ClaudeClient):
-        super().__init__(claude, agent_id="greeks_analyst")
+    def __init__(self, claude: ClaudeClient | None = None, *, router: LLMRouter | None = None):
+        super().__init__(claude, agent_id="greeks_analyst", router=router)
 
     @property
     def role(self) -> str:

@@ -10,7 +10,7 @@ when spreads are wide and quotes are stale.
 from datetime import datetime, timedelta
 
 from core import http
-from core.ai.claude import ClaudeClient, ClaudeRateLimitError
+from core.ai.claude import ClaudeRateLimitError
 from core.analysis.greeks import (
     calculate_second_order_greeks,
     calculate_spread_second_order_greeks,
@@ -71,18 +71,18 @@ UNDERLYINGS = ["SPY", "QQQ", "IWM", "TLT", "GLD"]
 MAX_RECOMMENDATIONS = 3
 
 
-def _create_v2_orchestrator(claude, debate_rounds: int = 2) -> AgentOrchestrator:
+def _create_v2_orchestrator(router, debate_rounds: int = 2) -> AgentOrchestrator:
     """Create a configured V2 agent orchestrator with all analysts and debate agents.
 
     Args:
-        claude: ClaudeClient instance
+        router: LLMRouter instance for multi-model routing
         debate_rounds: Number of debate rounds (default 2)
 
     Returns:
         Configured AgentOrchestrator ready for pipeline execution
     """
     orchestrator = AgentOrchestrator(
-        claude=claude,
+        claude=router.get_client("facilitator"),
         debate_config=DebateConfig(
             max_rounds=debate_rounds,
             min_rounds=1,
@@ -90,18 +90,23 @@ def _create_v2_orchestrator(claude, debate_rounds: int = 2) -> AgentOrchestrator
         ),
     )
 
-    # Register analyst agents
-    orchestrator.register_analyst(IVAnalyst(claude))
-    orchestrator.register_analyst(TechnicalAnalyst(claude))
-    orchestrator.register_analyst(MacroAnalyst(claude))
-    orchestrator.register_analyst(GreeksAnalyst(claude))
+    # Register analyst agents (routed to Haiku)
+    orchestrator.register_analyst(IVAnalyst(router=router))
+    orchestrator.register_analyst(TechnicalAnalyst(router=router))
+    orchestrator.register_analyst(MacroAnalyst(router=router))
+    orchestrator.register_analyst(GreeksAnalyst(router=router))
 
-    # Register debate agents
-    orchestrator.register_debater(BullResearcher(claude), "bull")
-    orchestrator.register_debater(BearResearcher(claude), "bear")
+    # Register debate agents (routed to Sonnet)
+    orchestrator.register_debater(BullResearcher(router=router), "bull")
+    orchestrator.register_debater(BearResearcher(router=router), "bear")
 
-    # Set facilitator for synthesis
-    orchestrator.set_facilitator(DebateFacilitator(claude))
+    # Set facilitator for synthesis (routed to Sonnet)
+    orchestrator.set_facilitator(DebateFacilitator(router=router))
+
+    # Wire up Fund Manager for full pipeline (routed to Sonnet)
+    from core.agents.fund_manager import FundManagerAgent
+
+    orchestrator.set_fund_manager(FundManagerAgent(router=router))
 
     return orchestrator
 
@@ -374,13 +379,14 @@ async def _run_morning_scan(env):
         channel_id=env.DISCORD_CHANNEL_ID,
     )
 
-    claude = ClaudeClient(api_key=env.ANTHROPIC_API_KEY)
+    from core.ai.router import LLMRouter
+    router = LLMRouter(api_key=env.ANTHROPIC_API_KEY)
 
     # V2 Multi-Agent System initialization
     debate_rounds = int(getattr(env, "MULTI_AGENT_DEBATE_ROUNDS", "2"))
 
     print(f"V2 Multi-Agent System (debate_rounds={debate_rounds})")
-    orchestrator = _create_v2_orchestrator(claude, debate_rounds=debate_rounds)
+    orchestrator = _create_v2_orchestrator(router, debate_rounds=debate_rounds)
 
     # Initialize episodic memory if bindings are available
     episodic_store = None
@@ -693,12 +699,9 @@ async def _run_morning_scan(env):
                     regime_display = term_structure_result.regime.value.replace("_", " ").title()
                     print(f"{symbol}: Term structure {regime_display} (30/90 ratio: {term_structure_result.ratio_30_90:.2f})")
 
-                    # Skip if backwardation (elevated near-term fear)
+                    # Log backwardation but let agents evaluate (don't hard-skip)
                     if term_structure_result.regime == TermStructureRegime.BACKWARDATION:
-                        print(f"{symbol}: Skipping due to backwardation (elevated short-term fear)")
-                        underlying_results[symbol]["reason"] = "Backwardation - elevated short-term fear"
-                        skip_reasons["backwardation"] = skip_reasons.get("backwardation", 0) + 1
-                        continue
+                        print(f"{symbol}: Backwardation detected - agents will evaluate")
 
             except Exception as e:
                 print(f"{symbol}: Term structure analysis failed: {e}")
@@ -890,7 +893,9 @@ async def _run_morning_scan(env):
                 pipeline_dict = {
                     "analyst_messages": [serialize_message(m) for m in (v2_result.analyst_messages or [])],
                     "debate_messages": [serialize_message(m) for m in (v2_result.debate_messages or [])],
-                    "fund_manager_message": serialize_message(v2_result.synthesis_message),
+                    "synthesis_message": serialize_message(v2_result.synthesis_message),
+                    "trader_message": serialize_message(v2_result.trader_message),
+                    "fund_manager_message": serialize_message(v2_result.fund_manager_message),
                 }
                 await discord.send_agent_pipeline_log(
                     underlying=spread.underlying,
@@ -903,8 +908,14 @@ async def _run_morning_scan(env):
             # Map V2 result to TradeAnalysis format
             analysis = _map_v2_result_to_analysis(v2_result)
 
-            # Apply V2 position size adjustment if synthesis suggests it
-            if v2_result.synthesis_message and v2_result.synthesis_message.structured_data:
+            # Apply fund manager contract count if available
+            if v2_result.fund_manager_message and v2_result.fund_manager_message.structured_data:
+                fm_contracts = v2_result.fund_manager_message.structured_data.get("final_contracts")
+                if fm_contracts and fm_contracts > 0:
+                    adjusted_contracts = fm_contracts
+                    print(f"Fund manager set position size: {fm_contracts} contracts")
+            elif v2_result.synthesis_message and v2_result.synthesis_message.structured_data:
+                # Fallback to synthesis multiplier
                 v2_size_mult = v2_result.synthesis_message.structured_data.get("position_size_multiplier", 1.0)
                 if v2_size_mult < 1.0:
                     new_adjusted = max(1, int(adjusted_contracts * v2_size_mult))

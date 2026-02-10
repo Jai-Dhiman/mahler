@@ -25,6 +25,7 @@ from core.ai.prompts import (
 
 if TYPE_CHECKING:
     from core.ai.claude import ClaudeClient
+    from core.ai.router import LLMRouter
 
 
 class BullResearcher(DebateAgent):
@@ -35,8 +36,8 @@ class BullResearcher(DebateAgent):
     in multi-round debates.
     """
 
-    def __init__(self, claude: ClaudeClient):
-        super().__init__(claude, agent_id="bull_researcher")
+    def __init__(self, claude: ClaudeClient | None = None, *, router: LLMRouter | None = None):
+        super().__init__(claude, agent_id="bull_researcher", router=router)
 
     @property
     def role(self) -> str:
@@ -150,8 +151,8 @@ class BearResearcher(DebateAgent):
     arguments in multi-round debates.
     """
 
-    def __init__(self, claude: ClaudeClient):
-        super().__init__(claude, agent_id="bear_researcher")
+    def __init__(self, claude: ClaudeClient | None = None, *, router: LLMRouter | None = None):
+        super().__init__(claude, agent_id="bear_researcher", router=router)
 
     @property
     def role(self) -> str:

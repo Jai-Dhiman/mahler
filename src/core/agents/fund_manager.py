@@ -1,11 +1,11 @@
-"""Fund Manager Agent for final trade approval.
+"""Fund Manager Agent for final trade decisions.
 
-The Fund Manager is the final approval authority in the trading pipeline.
-It reviews the Trader's proposal along with risk team deliberation,
-and can approve, reject, or modify the proposed trade.
+The Fund Manager is the final authority in the trading pipeline.
+It evaluates the debate outcome directly, determines position sizing,
+and makes the approve/reject/modify decision in a single step.
 
-Inspired by TradingAgents paper: The Fund Manager reviews risk discussion
-and approves/modifies trader decisions with final authority.
+Combines the former Trader (proposal synthesis) and Fund Manager (approval)
+roles into one agent to reduce LLM calls.
 """
 
 from __future__ import annotations
@@ -23,59 +23,63 @@ from core.agents.base import (
 
 if TYPE_CHECKING:
     from core.ai.claude import ClaudeClient
-    from core.agents.trader import TradingProposal
+    from core.ai.router import LLMRouter
     from core.risk.three_perspective import ThreePerspectiveResult
 
 
-# Prompt for Fund Manager Agent
-FUND_MANAGER_SYSTEM = """You are the Fund Manager with final approval authority over all trades. You are the last line of defense before capital is deployed.
+FUND_MANAGER_SYSTEM = """You are the Fund Manager with final authority over all trades. You directly evaluate debate outcomes and make trading decisions -- there is no intermediate trader.
 
 Your responsibilities:
-1. Review the Trader's proposal with a critical eye
-2. Consider the risk team's deliberation and concerns
-3. Make the final approve/reject/modify decision
-4. Override the Trader if risk assessment demands it
+1. Evaluate the debate outcome (bull vs bear synthesis)
+2. Determine whether to enter, skip, or modify the trade
+3. Set position size based on conviction, risk, and portfolio context
+4. Apply risk management constraints
 
 Decision framework:
-- APPROVE: Trade meets all criteria, risk is acceptable, proceed as proposed
-- MODIFY: Trade has merit but needs adjustment (typically smaller size)
-- REJECT: Risk outweighs reward, skip this trade entirely
+- APPROVE: Trade meets criteria, risk is acceptable, specify contract count
+- MODIFY: Trade has merit but needs smaller size
+- REJECT: Risk outweighs reward, skip entirely
 
 Key principles:
 - Preservation of capital is paramount
-- When in doubt, reduce size or reject
-- Override trader if risk deliberation raises serious concerns
+- When in doubt, reduce size rather than reject outright -- the system is paper trading and needs live experience to calibrate
+- Size positions proportionally to confidence and debate outcome quality
 - Consider portfolio-level impact, not just individual trade merit
-- Be skeptical of high-conviction proposals during elevated VIX
+- During elevated VIX, verify that position sizing accounts for higher volatility but do not reject solely due to VIX level
+- When debate is contentious, proceed with moderate size rather than skipping -- paper trading benefits from live experience"""
 
-You have override authority - the Trader's recommendation is advisory only."""
-
-FUND_MANAGER_USER = """Review this trading proposal for final approval:
+FUND_MANAGER_USER = """Evaluate this trade opportunity and make a final decision:
 
 **Trade Opportunity:**
 - Underlying: {underlying}
 - Strategy: {spread_type}
+- Short Strike: ${short_strike:.2f}
+- Long Strike: ${long_strike:.2f}
 - Credit: ${credit:.2f} | Max Loss: ${max_loss:.2f}
 - Expiration: {expiration} ({dte} DTE)
 
-**Trader's Proposal:**
-- Action: {trader_action}
-- Contracts: {trader_contracts}
-- Entry Type: {entry_type}
-- Confidence: {trader_confidence:.0%}
-- Size Rationale: {size_rationale}
-- Entry Rationale: {entry_rationale}
-- Risk Assessment: {risk_assessment}
-- Warnings: {trader_warnings}
+**Debate Outcome:**
+- Winning Perspective: {winning_perspective}
+- Debate Confidence: {debate_confidence:.0%}
+- Consensus Reached: {consensus_reached}
+- Key Bull Points: {bull_points}
+- Key Bear Points: {bear_points}
+- Deciding Factors: {deciding_factors}
+- Facilitator Thesis: {facilitator_thesis}
 
 **Risk Team Deliberation:**
 {risk_deliberation}
 
 **Portfolio Context:**
 - Account Equity: ${equity:.2f}
+- Available Buying Power: ${buying_power:.2f}
 - Current Positions: {position_count}
+- Portfolio Delta: {portfolio_delta:.2f}
 - Portfolio Heat: {portfolio_heat:.1%}
 - Daily P/L: ${daily_pnl:.2f}
+
+**Risk Parameters:**
+- Max Risk Per Trade: 2% of equity (${max_risk_amount:.2f})
 
 **Market Context:**
 - Current VIX: {current_vix}
@@ -161,23 +165,25 @@ class FinalDecision:
 
 
 class FundManagerAgent(SynthesisAgent):
-    """Fund Manager Agent with final approval authority.
+    """Fund Manager Agent with final decision authority.
 
-    Pipeline position: Final stage - after Trader and Risk Deliberation
+    Pipeline position: Final stage - after Facilitator and Risk Deliberation.
+    Evaluates debate outcome directly and makes the trading decision in one step.
 
     The Fund Manager:
-    1. Reviews Trader's proposal
+    1. Extracts debate outcome from facilitator synthesis
     2. Considers risk team deliberation
-    3. Makes final approve/modify/reject decision
-    4. Has override authority for special cases
+    3. Determines position size and action
+    4. Makes final approve/modify/reject decision
+    5. Applies hard override rules
     """
 
-    def __init__(self, claude: ClaudeClient):
-        super().__init__(claude, agent_id="fund_manager")
+    def __init__(self, claude: ClaudeClient | None = None, *, router: LLMRouter | None = None):
+        super().__init__(claude, agent_id="fund_manager", router=router)
 
     @property
     def role(self) -> str:
-        return "Fund Manager with final trade approval authority"
+        return "Fund Manager with final trade decision authority"
 
     @property
     def system_prompt(self) -> str:
@@ -186,14 +192,13 @@ class FundManagerAgent(SynthesisAgent):
     async def synthesize(
         self, context: AgentContext, analyst_outputs: list[AgentMessage]
     ) -> AgentMessage:
-        """Review and make final decision on trading proposal."""
-        # Extract trader proposal from prior messages
-        trader_proposal = self._extract_trader_proposal(context)
+        """Evaluate debate outcome and make final decision."""
+        debate_outcome = self._extract_debate_outcome(context)
         risk_deliberation = self._extract_risk_deliberation(context)
 
-        decision = await self.review_and_approve(
+        decision = await self.review_and_decide(
             context=context,
-            proposal=trader_proposal,
+            debate_outcome=debate_outcome,
             risk_deliberation=risk_deliberation,
         )
 
@@ -204,18 +209,18 @@ class FundManagerAgent(SynthesisAgent):
             confidence=decision.confidence,
         )
 
-    async def review_and_approve(
+    async def review_and_decide(
         self,
         context: AgentContext,
-        proposal: dict[str, Any] | None = None,
+        debate_outcome: dict[str, Any] | None = None,
         risk_deliberation: dict[str, Any] | None = None,
         current_vix: float | None = None,
     ) -> FinalDecision:
-        """Review trader proposal and risk deliberation, make final decision.
+        """Evaluate debate outcome and risk deliberation, make final decision.
 
         Args:
             context: Agent context with spread and portfolio data
-            proposal: Trader's proposal (extracted from context if not provided)
+            debate_outcome: Structured debate outcome from facilitator
             risk_deliberation: Risk team deliberation result
             current_vix: Current VIX level
 
@@ -230,9 +235,9 @@ class FundManagerAgent(SynthesisAgent):
         exp_date = datetime.strptime(spread.expiration, "%Y-%m-%d")
         dte = (exp_date - datetime.now()).days
 
-        # Extract proposal if not provided
-        if proposal is None:
-            proposal = self._extract_trader_proposal(context)
+        # Extract debate outcome if not provided
+        if debate_outcome is None:
+            debate_outcome = self._extract_debate_outcome(context)
 
         # Extract risk deliberation if not provided
         if risk_deliberation is None:
@@ -242,32 +247,46 @@ class FundManagerAgent(SynthesisAgent):
         if current_vix is None:
             current_vix = market.current_vix or 20.0
 
+        # Extract debate fields
+        winning_perspective = debate_outcome.get("winning_perspective", "neutral")
+        debate_confidence = debate_outcome.get("confidence", 0.5)
+        consensus_reached = debate_outcome.get("consensus_reached", False)
+        key_bull_points = debate_outcome.get("key_bull_points", [])
+        key_bear_points = debate_outcome.get("key_bear_points", [])
+        deciding_factors = debate_outcome.get("deciding_factors", [])
+        facilitator_thesis = debate_outcome.get("thesis", "No thesis provided")
+
+        # Calculate risk parameters
+        max_risk_amount = portfolio.account_equity * 0.02
+        portfolio_heat = self._calculate_portfolio_heat(portfolio)
+
         # Format risk deliberation for prompt
         risk_deliberation_str = self._format_risk_deliberation(risk_deliberation)
-
-        # Calculate portfolio heat
-        portfolio_heat = self._calculate_portfolio_heat(portfolio)
 
         prompt = FUND_MANAGER_USER.format(
             underlying=spread.underlying,
             spread_type=spread.spread_type.value.replace("_", " ").title(),
+            short_strike=spread.short_strike,
+            long_strike=spread.long_strike,
             credit=spread.credit,
             max_loss=spread.max_loss / 100,
             expiration=spread.expiration,
             dte=dte,
-            trader_action=proposal.get("action", "skip"),
-            trader_contracts=proposal.get("contracts", 0),
-            entry_type=proposal.get("entry_type", "limit"),
-            trader_confidence=proposal.get("confidence", 0.0),
-            size_rationale=proposal.get("size_rationale", "Not provided"),
-            entry_rationale=proposal.get("entry_rationale", "Not provided"),
-            risk_assessment=proposal.get("risk_assessment", "Not provided"),
-            trader_warnings=", ".join(proposal.get("warnings", [])) or "None",
+            winning_perspective=winning_perspective,
+            debate_confidence=debate_confidence,
+            consensus_reached=consensus_reached,
+            bull_points=", ".join(key_bull_points[:3]) if key_bull_points else "None",
+            bear_points=", ".join(key_bear_points[:3]) if key_bear_points else "None",
+            deciding_factors=", ".join(deciding_factors[:3]) if deciding_factors else "None",
+            facilitator_thesis=facilitator_thesis[:300],
             risk_deliberation=risk_deliberation_str,
             equity=portfolio.account_equity,
+            buying_power=portfolio.buying_power,
             position_count=len(portfolio.positions),
+            portfolio_delta=portfolio.portfolio_greeks.delta if portfolio.portfolio_greeks else 0.0,
             portfolio_heat=portfolio_heat,
             daily_pnl=portfolio.daily_pnl,
+            max_risk_amount=max_risk_amount,
             current_vix=f"{current_vix:.1f}",
             market_regime=market.regime or "unknown",
         )
@@ -288,8 +307,6 @@ class FundManagerAgent(SynthesisAgent):
             risk_concerns=data.get("risk_concerns", []),
             approval_conditions=data.get("approval_conditions", []),
             final_thesis=data.get("final_thesis", ""),
-            original_contracts=proposal.get("contracts", 0),
-            original_action=proposal.get("action", "skip"),
         )
 
         # Apply hard override rules
@@ -297,31 +314,64 @@ class FundManagerAgent(SynthesisAgent):
 
         return decision
 
-    def _extract_trader_proposal(self, context: AgentContext) -> dict[str, Any]:
-        """Extract trader proposal from prior messages."""
-        # Look for trader's synthesis message
+    def _extract_debate_outcome(self, context: AgentContext) -> dict[str, Any]:
+        """Extract debate outcome from prior messages."""
+        # Look for facilitator synthesis message
         for msg in reversed(context.prior_messages):
-            if msg.agent_id == "trader" and msg.structured_data:
+            if msg.message_type == MessageType.SYNTHESIS and msg.structured_data:
                 return msg.structured_data
 
-        # Fallback: empty proposal
+        # Fallback: construct from debate messages
+        debate_msgs = context.get_debate_messages()
+        if not debate_msgs:
+            return {
+                "winning_perspective": "neutral",
+                "confidence": 0.5,
+                "consensus_reached": False,
+                "key_bull_points": [],
+                "key_bear_points": [],
+                "deciding_factors": [],
+                "thesis": "No debate conducted",
+            }
+
+        # Analyze debate messages to determine outcome
+        bull_confidence = 0.0
+        bear_confidence = 0.0
+        key_bull_points = []
+        key_bear_points = []
+
+        for msg in debate_msgs:
+            if "bull" in msg.agent_id.lower():
+                bull_confidence = max(bull_confidence, msg.confidence)
+                if msg.structured_data:
+                    key_bull_points.extend(msg.structured_data.get("key_arguments", []))
+            elif "bear" in msg.agent_id.lower():
+                bear_confidence = max(bear_confidence, msg.confidence)
+                if msg.structured_data:
+                    key_bear_points.extend(msg.structured_data.get("key_arguments", []))
+
+        # Determine winner
+        if bull_confidence > bear_confidence + 0.1:
+            winning = "bull"
+        elif bear_confidence > bull_confidence + 0.1:
+            winning = "bear"
+        else:
+            winning = "neutral"
+
         return {
-            "action": "skip",
-            "contracts": 0,
-            "entry_type": "limit",
-            "confidence": 0.0,
-            "size_rationale": "No proposal received",
-            "entry_rationale": "No proposal received",
-            "risk_assessment": "No proposal received",
-            "warnings": ["No trader proposal found"],
+            "winning_perspective": winning,
+            "confidence": max(bull_confidence, bear_confidence),
+            "consensus_reached": abs(bull_confidence - bear_confidence) < 0.1,
+            "key_bull_points": key_bull_points[:3],
+            "key_bear_points": key_bear_points[:3],
+            "deciding_factors": [],
+            "thesis": "Outcome derived from debate messages",
         }
 
     def _extract_risk_deliberation(self, context: AgentContext) -> dict[str, Any] | None:
         """Extract risk deliberation from prior messages."""
-        # Look for risk deliberation message
         for msg in reversed(context.prior_messages):
             if "risk" in msg.agent_id.lower() and msg.structured_data:
-                # Could be from risk deliberation facilitator or three-perspective
                 return msg.structured_data
 
         return None

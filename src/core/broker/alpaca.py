@@ -700,7 +700,7 @@ class AlpacaClient:
             "end": end,
             "limit": limit,
             "adjustment": "split",  # Adjust for splits
-            "feed": "sip",  # Use SIP feed for accuracy
+            "feed": "iex" if self.paper else "sip",  # IEX for paper, SIP for live
         }
 
         all_bars = []

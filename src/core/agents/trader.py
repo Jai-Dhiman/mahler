@@ -23,6 +23,7 @@ from core.agents.base import (
 
 if TYPE_CHECKING:
     from core.ai.claude import ClaudeClient
+    from core.ai.router import LLMRouter
     from core.agents.facilitator import DebateOutcome
 
 
@@ -41,7 +42,7 @@ Key principles:
 - Size positions proportionally to confidence and debate outcome quality
 - Be specific about entry conditions and risk parameters
 - Consider portfolio context when sizing
-- Err on the side of smaller size when debate was contentious
+- When debate is contentious, proceed with moderate size rather than skipping -- paper trading benefits from live experience
 
 You do NOT have final authority - the fund manager reviews your proposal."""
 
@@ -174,8 +175,8 @@ class TraderAgent(SynthesisAgent):
     4. Produces detailed proposal for fund manager review
     """
 
-    def __init__(self, claude: ClaudeClient):
-        super().__init__(claude, agent_id="trader")
+    def __init__(self, claude: ClaudeClient | None = None, *, router: LLMRouter | None = None):
+        super().__init__(claude, agent_id="trader", router=router)
 
     @property
     def role(self) -> str:
@@ -387,15 +388,6 @@ class TraderAgent(SynthesisAgent):
         # Constraint 3: Minimum 1 contract if entering
         if proposal.action == "enter" and proposal.contracts < 1:
             proposal.contracts = 1
-
-        # Constraint 4: If debate strongly favored bear, reduce size
-        if proposal.winning_perspective == "bear" and proposal.action == "enter":
-            original = proposal.contracts
-            proposal.contracts = max(1, proposal.contracts // 2)
-            if original != proposal.contracts:
-                proposal.warnings.append(
-                    f"Reduced size from {original} to {proposal.contracts} due to bear-favored debate"
-                )
 
         return proposal
 

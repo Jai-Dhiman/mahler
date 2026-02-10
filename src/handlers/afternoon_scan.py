@@ -7,7 +7,7 @@ probability setups with excellent IV conditions.
 from datetime import datetime, timedelta
 
 from core import http
-from core.ai.claude import ClaudeClient, ClaudeRateLimitError
+from core.ai.claude import ClaudeRateLimitError
 from core.analysis.iv_rank import calculate_iv_metrics
 from core.analysis.screener import OptionsScreener, ScreenerConfig
 from core.broker.alpaca import AlpacaClient
@@ -36,23 +36,26 @@ from core.agents import (
 UNDERLYINGS = ["SPY", "QQQ", "IWM"]
 
 
-def _create_orchestrator(claude, debate_rounds: int = 2) -> AgentOrchestrator:
+def _create_orchestrator(router, debate_rounds: int = 2) -> AgentOrchestrator:
     """Create a configured agent orchestrator."""
+    from core.agents.fund_manager import FundManagerAgent
+
     orchestrator = AgentOrchestrator(
-        claude=claude,
+        claude=router.get_client("facilitator"),
         debate_config=DebateConfig(
             max_rounds=debate_rounds,
             min_rounds=1,
             consensus_threshold=0.7,
         ),
     )
-    orchestrator.register_analyst(IVAnalyst(claude))
-    orchestrator.register_analyst(TechnicalAnalyst(claude))
-    orchestrator.register_analyst(MacroAnalyst(claude))
-    orchestrator.register_analyst(GreeksAnalyst(claude))
-    orchestrator.register_debater(BullResearcher(claude), "bull")
-    orchestrator.register_debater(BearResearcher(claude), "bear")
-    orchestrator.set_facilitator(DebateFacilitator(claude))
+    orchestrator.register_analyst(IVAnalyst(router=router))
+    orchestrator.register_analyst(TechnicalAnalyst(router=router))
+    orchestrator.register_analyst(MacroAnalyst(router=router))
+    orchestrator.register_analyst(GreeksAnalyst(router=router))
+    orchestrator.register_debater(BullResearcher(router=router), "bull")
+    orchestrator.register_debater(BearResearcher(router=router), "bear")
+    orchestrator.set_facilitator(DebateFacilitator(router=router))
+    orchestrator.set_fund_manager(FundManagerAgent(router=router))
     return orchestrator
 
 
@@ -107,11 +110,12 @@ async def _run_afternoon_scan(env):
         channel_id=env.DISCORD_CHANNEL_ID,
     )
 
-    claude = ClaudeClient(api_key=env.ANTHROPIC_API_KEY)
+    from core.ai.router import LLMRouter
+    router = LLMRouter(api_key=env.ANTHROPIC_API_KEY)
 
     # V2 Multi-Agent System
     debate_rounds = int(getattr(env, "MULTI_AGENT_DEBATE_ROUNDS", "2"))
-    orchestrator = _create_orchestrator(claude, debate_rounds=debate_rounds)
+    orchestrator = _create_orchestrator(router, debate_rounds=debate_rounds)
 
     if not await alpaca.is_market_open():
         print("Market is closed, skipping afternoon scan")

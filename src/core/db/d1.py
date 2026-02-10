@@ -758,6 +758,25 @@ class D1Client:
         )
         return iv_id
 
+    async def save_daily_iv_batch(self, records: list[dict]) -> int:
+        """Batch save daily IV observations.
+
+        Args:
+            records: List of dicts with keys: date, underlying, atm_iv, underlying_price
+        Returns:
+            Number of records saved
+        """
+        count = 0
+        for record in records:
+            await self.save_daily_iv(
+                date=record["date"],
+                underlying=record["underlying"],
+                atm_iv=record["atm_iv"],
+                underlying_price=record.get("underlying_price"),
+            )
+            count += 1
+        return count
+
     async def get_iv_history(
         self,
         underlying: str,
