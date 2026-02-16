@@ -171,16 +171,15 @@ class ExitConfig:
     """Configurable exit thresholds.
 
     Research notes:
-    - 50% profit target is well-supported by research
-    - 200% stop loss requires >80% win rate to be profitable
-    - Consider 150% stop if actual win rate is lower
-    - IV-adjusted targets capture premium before IV crush in high IV
-    - Gamma protection exits early when DTE <= 21 to avoid gamma risk
+    - 35% profit target for paper trading (faster turnover, more data)
+    - 125% stop loss cuts losers at 25% beyond credit (backtest-validated)
+    - 14 DTE time exit lets theta work longer while avoiding gamma
+    - 50% gamma protection is more aggressive near-expiry profit taking
     """
 
-    profit_target_pct: float = 0.50  # 50% of max profit
-    stop_loss_pct: float = 2.00  # 200% of credit (default, conservative)
-    time_exit_dte: int = 21  # Close at 21 DTE
+    profit_target_pct: float = 0.35  # 35% of max profit (paper trading: faster exits)
+    stop_loss_pct: float = 1.25  # 125% of credit (backtest-validated)
+    time_exit_dte: int = 14  # Close at 14 DTE
 
     # Win rate thresholds for adjusting stop loss
     # If win rate drops below threshold, use tighter stop
@@ -194,7 +193,7 @@ class ExitConfig:
 
     # Gamma protection settings
     gamma_protection_enabled: bool = True
-    gamma_protection_pnl: float = 0.70  # Exit at 70% profit when DTE <= 21
+    gamma_protection_pnl: float = 0.50  # Exit at 50% profit when DTE <= 14
     gamma_explosion_dte: int = 7  # Force exit when DTE <= 7
 
     # V2: Trading style multipliers for dynamic exits

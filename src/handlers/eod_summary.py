@@ -563,6 +563,24 @@ async def _run_eod_summary(env):
     positions = await db.get_all_positions()
     open_trades = await db.get_open_trades()
 
+    # Build position exit status for daily summary
+    from core.risk.validators import days_to_expiry
+    position_details = []
+    for trade in open_trades:
+        matching_pos = next((p for p in positions if p.trade_id == trade.id), None)
+        current_value = matching_pos.current_value if matching_pos else None
+        dte = days_to_expiry(trade.expiration)
+        profit_pct = None
+        if current_value is not None and trade.entry_credit > 0:
+            profit_pct = (trade.entry_credit - current_value) / trade.entry_credit
+        position_details.append({
+            "underlying": trade.underlying,
+            "dte": dte,
+            "profit_pct": profit_pct,
+            "entry_credit": trade.entry_credit,
+            "current_value": current_value,
+        })
+
     # Get trade stats (all-time and today)
     trade_stats = await db.get_trade_stats()
     trade_stats_today = await db.get_trade_stats(date=today)
@@ -935,6 +953,7 @@ async def _run_eod_summary(env):
         trade_stats_today=trade_stats_today,
         screening_summary=screening_summary,
         market_context=market_context_for_summary,
+        position_details=position_details,
     )
 
     # Reset daily KV stats for next day

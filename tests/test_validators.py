@@ -177,7 +177,7 @@ class TestExitValidator:
     """Test ExitValidator exit condition checks."""
 
     def test_profit_target_reached(self):
-        """Test profit target detection at 50% of max."""
+        """Test profit target detection at 35% of max."""
         from core.risk.validators import ExitValidator
 
         validator = ExitValidator()
@@ -198,12 +198,12 @@ class TestExitValidator:
         assert result.valid is False
 
     def test_stop_loss_triggered(self):
-        """Test stop loss detection at 200% of credit."""
+        """Test stop loss detection at 125% of credit."""
         from core.risk.validators import ExitValidator
 
         validator = ExitValidator()
-        # Entry credit: 1.00, current value: 3.50 = 250% loss
-        result = validator.check_stop_loss(entry_credit=1.00, current_value=3.50)
+        # Entry credit: 1.00, current value: 2.50 = 150% loss (above 125%)
+        result = validator.check_stop_loss(entry_credit=1.00, current_value=2.50)
 
         assert result.valid is True
         assert "stop" in result.reason.lower()
@@ -213,13 +213,13 @@ class TestExitValidator:
         from core.risk.validators import ExitValidator
 
         validator = ExitValidator()
-        # Entry credit: 1.00, current value: 2.00 = 100% loss (below 200%)
+        # Entry credit: 1.00, current value: 2.00 = 100% loss (below 125%)
         result = validator.check_stop_loss(entry_credit=1.00, current_value=2.00)
 
         assert result.valid is False
 
     def test_time_exit_triggered(self, near_expiry_date):
-        """Test time exit at 21 DTE."""
+        """Test time exit at 14 DTE."""
         from core.risk.validators import ExitValidator
 
         validator = ExitValidator()
@@ -229,7 +229,7 @@ class TestExitValidator:
         assert "time" in result.reason.lower()
 
     def test_time_exit_not_triggered(self, future_date):
-        """Test time exit not triggered (>21 DTE)."""
+        """Test time exit not triggered (>14 DTE)."""
         from core.risk.validators import ExitValidator
 
         validator = ExitValidator()

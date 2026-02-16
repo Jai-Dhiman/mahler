@@ -43,19 +43,19 @@ class RiskLimits:
     # Position sizing
     max_risk_per_trade_pct: float = 0.02  # 2% max per trade
     max_single_position_pct: float = 0.05  # 5% max in one position
-    max_portfolio_heat_pct: float = 0.10  # 10% total open risk
+    max_portfolio_heat_pct: float = 0.20  # 20% total open risk (paper trading: higher throughput)
 
     # Per-underlying limits (avoid concentration)
-    max_per_underlying_pct: float = 0.033  # ~33% max in any single underlying
+    max_per_underlying_pct: float = 0.10  # ~10% max in any single underlying (paper trading)
 
     # Asset class limits (manage correlation risk)
     max_equity_class_pct: float = 0.50  # 50% max in correlated equity ETFs
     max_treasury_class_pct: float = 0.25  # 25% max in treasuries
     max_commodity_class_pct: float = 0.25  # 25% max in commodities
 
-    # Correlation limit: max 1 position per asset class to avoid correlated losses
-    # Research: SPY/QQQ/IWM are 86-92% correlated - having multiple is a concentrated bet
-    max_positions_per_equity_class: int = 1  # Only 1 equity position at a time
+    # Paper trading: allow 3 equity positions for learning & data collection
+    # Research: SPY/QQQ/IWM are 86-92% correlated - tighten for live trading
+    max_positions_per_equity_class: int = 3
 
     # Portfolio Greeks limits
     max_portfolio_delta: float = 0.30  # Max absolute beta-weighted delta

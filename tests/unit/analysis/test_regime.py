@@ -156,20 +156,20 @@ class TestGetPositionMultiplier:
         mult = detector.get_position_multiplier(MarketRegime.BULL_LOW_VOL)
         assert mult == 1.0
 
-    def test_bull_high_vol_half_size(self, detector):
-        """Test that BULL_HIGH_VOL returns 0.5 multiplier."""
+    def test_bull_high_vol_reduced_size(self, detector):
+        """Test that BULL_HIGH_VOL returns 0.75 multiplier."""
         mult = detector.get_position_multiplier(MarketRegime.BULL_HIGH_VOL)
-        assert mult == 0.5
+        assert mult == 0.75
 
     def test_bear_low_vol_half_size(self, detector):
         """Test that BEAR_LOW_VOL returns 0.5 multiplier."""
         mult = detector.get_position_multiplier(MarketRegime.BEAR_LOW_VOL)
         assert mult == 0.5
 
-    def test_bear_high_vol_quarter_size(self, detector):
-        """Test that BEAR_HIGH_VOL returns 0.25 multiplier."""
+    def test_bear_high_vol_reduced_size(self, detector):
+        """Test that BEAR_HIGH_VOL returns 0.40 multiplier."""
         mult = detector.get_position_multiplier(MarketRegime.BEAR_HIGH_VOL)
-        assert mult == 0.25
+        assert mult == 0.40
 
     def test_vix_override_at_40(self, detector):
         """Test that VIX > 40 overrides to 0.1."""
@@ -178,7 +178,7 @@ class TestGetPositionMultiplier:
 
     def test_vix_override_takes_minimum(self, detector):
         """Test that VIX override uses min with regime multiplier."""
-        # BEAR_HIGH_VOL is 0.25, VIX > 40 is 0.1
+        # BEAR_HIGH_VOL is 0.40, VIX > 40 is 0.1
         mult = detector.get_position_multiplier(MarketRegime.BEAR_HIGH_VOL, current_vix=45.0)
         assert mult == 0.1
 

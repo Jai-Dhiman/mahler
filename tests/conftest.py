@@ -255,8 +255,8 @@ def past_date() -> str:
 
 @pytest.fixture
 def near_expiry_date() -> str:
-    """Return a date 15 days in the future (below 21 DTE threshold)."""
-    return (datetime.now() + timedelta(days=15)).strftime("%Y-%m-%d")
+    """Return a date 10 days in the future (below 14 DTE threshold)."""
+    return (datetime.now() + timedelta(days=10)).strftime("%Y-%m-%d")
 
 
 # Additional mock fixtures for comprehensive testing

@@ -523,6 +523,7 @@ class DiscordClient:
         trade_stats_today: dict | None = None,
         screening_summary: dict | None = None,
         market_context: dict | None = None,
+        position_details: list[dict] | None = None,
     ) -> str:
         """Send end-of-day summary.
 
@@ -618,6 +619,19 @@ class DiscordClient:
                         "value": reasons_text,
                         "inline": False,
                     })
+
+        # Add position exit status if provided
+        if position_details:
+            pos_lines = []
+            for pos in position_details:
+                profit_str = f"{pos['profit_pct']:.0%}" if pos['profit_pct'] is not None else "N/A"
+                pos_lines.append(f"{pos['underlying']}: {profit_str} profit, {pos['dte']} DTE")
+            if pos_lines:
+                fields.append({
+                    "name": "Open Position Status",
+                    "value": "\n".join(pos_lines),
+                    "inline": False,
+                })
 
         # Add win/loss counts
         fields.append({"name": "Wins", "value": str(performance.win_count), "inline": True})

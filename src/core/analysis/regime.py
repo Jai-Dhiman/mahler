@@ -93,9 +93,9 @@ class MarketRegimeDetector:
     # Position multipliers per regime
     REGIME_MULTIPLIERS = {
         MarketRegime.BULL_LOW_VOL: 1.0,
-        MarketRegime.BULL_HIGH_VOL: 0.5,
+        MarketRegime.BULL_HIGH_VOL: 0.75,
         MarketRegime.BEAR_LOW_VOL: 0.5,
-        MarketRegime.BEAR_HIGH_VOL: 0.25,
+        MarketRegime.BEAR_HIGH_VOL: 0.40,
     }
 
     # Feature names for output

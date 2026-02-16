@@ -330,6 +330,16 @@ async def _run_position_monitor(env):
                         current_value=current_value,
                         unrealized_pnl=unrealized_pnl,
                     )
+            else:
+                # Log position status for debugging (worker logs only, not Discord)
+                profit = trade.entry_credit - current_value
+                profit_pct = profit / trade.entry_credit if trade.entry_credit > 0 else 0
+                print(
+                    f"Holding {trade.underlying}: "
+                    f"profit={profit_pct:.0%}, DTE={dte}, "
+                    f"style={trading_style.value if trading_style else 'N/A'}, "
+                    f"entry={trade.entry_credit:.2f}, current={current_value:.2f}"
+                )
 
         except Exception as e:
             print(f"Error monitoring trade {trade.id}: {e}")
