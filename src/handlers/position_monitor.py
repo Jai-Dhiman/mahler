@@ -321,6 +321,8 @@ async def _run_position_monitor(env):
                         db=db,
                         discord=discord,
                         kv=kv,
+                        short_contract=short_contract,
+                        long_contract=long_contract,
                     )
                 else:
                     # Send exit alert with buttons for manual approval
@@ -643,8 +645,9 @@ async def _reconcile_pending_exit_orders(db, alpaca, discord, kv):
                     loss_delta=loss_delta,
                 )
 
-                # Clean up exit metadata
+                # Clean up exit metadata and adjustment tracking
                 await kv.delete(f"exit_metadata:{trade.id}")
+                await kv.delete(f"exit_order_adjustment:{trade.id}")
 
                 # Send Discord notification
                 pnl_color = 0x57F287 if realized_pnl > 0 else 0xED4245
@@ -696,8 +699,9 @@ async def _reconcile_pending_exit_orders(db, alpaca, discord, kv):
                 )
                 await db.clear_exit_order_id(trade.id)
 
-                # Clean up exit metadata
+                # Clean up exit metadata and adjustment tracking
                 await kv.delete(f"exit_metadata:{trade.id}")
+                await kv.delete(f"exit_order_adjustment:{trade.id}")
 
                 await discord.send_message(
                     content=f"**Exit Order Expired: {trade.underlying}**",
@@ -718,9 +722,14 @@ async def _reconcile_pending_exit_orders(db, alpaca, discord, kv):
                 OrderStatus.ACCEPTED,
                 OrderStatus.PARTIALLY_FILLED,
             ]:
-                # Exit order still pending - nothing to do
-                print(
-                    f"Exit order {order.id} still pending ({order.status.value}) for trade {trade.id}"
+                # Exit order still pending - check if we should adjust price
+                await _maybe_adjust_exit_order_price(
+                    trade=trade,
+                    order=order,
+                    alpaca=alpaca,
+                    db=db,
+                    discord=discord,
+                    kv=kv,
                 )
 
             else:
@@ -748,6 +757,19 @@ MAX_TOTAL_ADJUSTMENT = 0.30
 
 # Minimum credit to accept (never go below 5 cents)
 MIN_CREDIT = 0.05
+
+# Exit order price adjustment schedule
+# Each tuple is (minutes_elapsed, adjustment_cents)
+# For exit orders (debit spreads), we pay MORE to close faster
+EXIT_PRICE_ADJUSTMENT_SCHEDULE = [
+    (5, 0.01),   # After 5 min: +1 cent
+    (10, 0.01),  # After 10 min: +1 more (total 2c)
+    (15, 0.02),  # After 15 min: +2 more (total 4c)
+    (20, 0.02),  # After 20 min: +2 more (total 6c)
+    (30, 0.03),  # After 30 min: +3 more (total 9c)
+    (45, 0.03),  # After 45 min: +3 more (total 12c)
+]
+EXIT_MAX_TOTAL_ADJUSTMENT = 0.12
 
 
 async def _maybe_adjust_order_price(trade, order, alpaca, db, discord, kv):
@@ -888,6 +910,144 @@ async def _maybe_adjust_order_price(trade, order, alpaca, db, discord, kv):
         # Don't fail the whole reconciliation if one adjustment fails
 
 
+async def _maybe_adjust_exit_order_price(trade, order, alpaca, db, discord, kv):
+    """Check if a pending exit order should have its price adjusted to improve fill rate.
+
+    For exit orders (debit spreads to close), we INCREASE the debit we're willing to pay
+    to get filled faster. This mirrors _maybe_adjust_order_price but in the opposite direction.
+    """
+    # Get order age in minutes
+    order_age_minutes = (datetime.now(UTC) - order.created_at).total_seconds() / 60
+    print(
+        f"Exit order {order.id[:8]}... age: {order_age_minutes:.1f} min, status: {order.status.value}"
+    )
+
+    # Get current adjustment state from KV (keyed by trade.id since order IDs change)
+    adjustment_key = f"exit_order_adjustment:{trade.id}"
+    adjustment_data = await kv.get_json(adjustment_key)
+
+    if adjustment_data is None:
+        # Get the original limit price from exit metadata
+        exit_metadata = await kv.get_json(f"exit_metadata:{trade.id}")
+        original_debit = exit_metadata.get("expected_exit_debit", 0) if exit_metadata else 0
+        adjustment_data = {
+            "adjustments_made": 0,
+            "original_price": original_debit,
+            "current_price": original_debit,
+            "original_order_id": order.id,
+        }
+
+    adjustments_made = adjustment_data.get("adjustments_made", 0)
+    original_price = adjustment_data.get("original_price", 0)
+    current_price = adjustment_data.get("current_price", 0)
+
+    # Determine if we should make another adjustment based on time elapsed
+    target_adjustments = 0
+    for minutes_threshold, _ in EXIT_PRICE_ADJUSTMENT_SCHEDULE:
+        if order_age_minutes >= minutes_threshold:
+            target_adjustments += 1
+
+    if target_adjustments <= adjustments_made:
+        print(
+            f"Exit order {order.id[:8]}... no adjustment needed "
+            f"(made {adjustments_made}, target {target_adjustments})"
+        )
+        return
+
+    # Calculate total adjustment
+    total_adjustment = 0.0
+    for i in range(target_adjustments):
+        total_adjustment += EXIT_PRICE_ADJUSTMENT_SCHEDULE[i][1]
+
+    # Cap at EXIT_MAX_TOTAL_ADJUSTMENT or spread width (entry_credit), whichever is less
+    spread_width = trade.entry_credit  # Can't pay more than we received
+    max_adjustment = min(EXIT_MAX_TOTAL_ADJUSTMENT, spread_width)
+    total_adjustment = min(total_adjustment, max_adjustment)
+
+    # For exit orders, we INCREASE the debit (pay more to close faster)
+    new_debit = original_price + total_adjustment
+    new_debit = round(new_debit, 2)
+
+    if new_debit <= current_price:
+        print(
+            f"Exit order {order.id[:8]}... calculated price ${new_debit:.2f} "
+            f"not better than current ${current_price:.2f}"
+        )
+        return
+
+    try:
+        # For Alpaca multi-leg closing orders, limit_price is the debit (positive)
+        new_limit_price = abs(new_debit)
+
+        print(
+            f"Adjusting exit order {order.id[:8]}... from ${current_price:.2f} to ${new_debit:.2f} debit"
+        )
+
+        new_order = await alpaca.replace_order(
+            order_id=order.id,
+            limit_price=new_limit_price,
+        )
+
+        # Update the trade's exit_order_id if Alpaca created a new order
+        if new_order.id != order.id:
+            print(f"Exit order replaced: {order.id[:8]}... -> {new_order.id[:8]}...")
+            await db.set_exit_order_id(trade.id, new_order.id)
+
+        # Update adjustment tracking
+        adjustment_data["adjustments_made"] = target_adjustments
+        adjustment_data["current_price"] = new_debit
+        adjustment_data["current_order_id"] = new_order.id
+        adjustment_data["last_adjustment"] = datetime.now(UTC).isoformat()
+        await kv.put_json(adjustment_key, adjustment_data, expiration_ttl=24 * 3600)
+
+        # Send Discord notification
+        await discord.send_message(
+            content=f"**Exit Order Adjusted: {trade.underlying}**",
+            embeds=[
+                {
+                    "title": f"Exit Price Adjusted: {trade.underlying}",
+                    "description": (
+                        f"Exit order unfilled after {int(order_age_minutes)} min - "
+                        f"increased debit to improve fill chance."
+                    ),
+                    "color": 0xF59E0B,
+                    "fields": [
+                        {
+                            "name": "Strategy",
+                            "value": trade.spread_type.value.replace("_", " ").title(),
+                            "inline": True,
+                        },
+                        {
+                            "name": "Strikes",
+                            "value": f"${trade.short_strike:.2f}/${trade.long_strike:.2f}",
+                            "inline": True,
+                        },
+                        {
+                            "name": "Original Debit",
+                            "value": f"${original_price:.2f}",
+                            "inline": True,
+                        },
+                        {"name": "New Debit", "value": f"${new_debit:.2f}", "inline": True},
+                        {
+                            "name": "Adjustment",
+                            "value": f"+${new_debit - original_price:.2f}",
+                            "inline": True,
+                        },
+                        {"name": "Adjustment #", "value": str(target_adjustments), "inline": True},
+                    ],
+                }
+            ],
+        )
+
+        print(
+            f"Exit order {order.id[:8]}... price adjusted successfully. "
+            f"New order: {new_order.id[:8]}..."
+        )
+
+    except Exception as e:
+        print(f"Error adjusting exit order {order.id}: {e}")
+
+
 async def _auto_execute_exit(
     trade,
     short_symbol,
@@ -901,12 +1061,17 @@ async def _auto_execute_exit(
     db,
     discord,
     kv,
+    short_contract=None,
+    long_contract=None,
 ):
     """Auto-execute an exit when conditions are met.
 
     Places a closing order and saves exit_order_id. The trade remains OPEN
     until _reconcile_pending_exit_orders confirms the order filled.
     This prevents mismatches between DB and broker state.
+
+    If short_contract and long_contract are provided, the limit price is
+    set aggressively toward the ask to improve fill rates.
     """
     order = None
     try:
@@ -917,12 +1082,33 @@ async def _auto_execute_exit(
             print(f"Trade {trade.id} already has exit order {trade.exit_order_id}, skipping")
             return
 
+        # Calculate aggressive limit price if contract data available
+        limit_price = current_value
+        if short_contract and long_contract:
+            # To close: buy back short (pay ask), sell long (receive bid)
+            # Worst-case debit = short_ask - long_bid
+            ask_price = short_contract.ask - long_contract.bid
+            mid_price = current_value
+
+            if mid_price < 0.10:
+                # Near-zero debits (like $0.03): use ask directly
+                limit_price = max(ask_price, 0.01)
+            else:
+                # Larger debits: lean 75% toward ask
+                limit_price = mid_price + 0.75 * (ask_price - mid_price)
+
+            limit_price = round(limit_price, 2)
+            print(
+                f"Exit limit price: ${limit_price:.2f} "
+                f"(mid=${mid_price:.2f}, ask=${ask_price:.2f})"
+            )
+
         # Place closing order (buy back short, sell long)
         order = await alpaca.place_close_spread_order(
             short_symbol=short_symbol,
             long_symbol=long_symbol,
             contracts=trade.contracts,
-            limit_price=current_value,  # Close at current mid price
+            limit_price=limit_price,
         )
 
         print(f"Exit order placed: {order.id}")
@@ -938,7 +1124,7 @@ async def _auto_execute_exit(
                 "exit_reason": exit_reason,
                 "iv_rank_at_exit": iv_rank,
                 "dte_at_exit": dte,
-                "expected_exit_debit": current_value,
+                "expected_exit_debit": limit_price,
             },
             expiration_ttl=7 * 24 * 3600,
         )
@@ -963,7 +1149,7 @@ async def _auto_execute_exit(
             },
             {"name": "DTE", "value": str(dte), "inline": True},
             {"name": "Entry Credit", "value": f"${trade.entry_credit:.2f}", "inline": True},
-            {"name": "Limit Price", "value": f"${current_value:.2f}", "inline": True},
+            {"name": "Limit Price", "value": f"${limit_price:.2f}", "inline": True},
             {"name": "Expected P/L", "value": f"{pnl_emoji}${expected_pnl:.2f}", "inline": True},
         ]
         if iv_rank is not None:
@@ -1102,6 +1288,8 @@ async def _close_positions_for_circuit_breaker(
                 db=db,
                 discord=discord,
                 kv=kv,
+                short_contract=short_contract,
+                long_contract=long_contract,
             )
             closed_count += 1
 

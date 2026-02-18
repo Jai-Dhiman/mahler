@@ -349,11 +349,34 @@ class AgentOrchestrator:
 
         # Filter out exceptions and log them
         valid_messages = []
+        failed_analysts = []
         for i, msg in enumerate(messages):
             if isinstance(msg, Exception):
-                print(f"Analyst {self._analysts[i].agent_id} failed: {msg}")
+                analyst_id = self._analysts[i].agent_id
+                print(f"Analyst {analyst_id} failed: {msg}")
+                failed_analysts.append(analyst_id)
             elif isinstance(msg, AgentMessage):
                 valid_messages.append(msg)
+
+        # Inject error notice so researchers know about failures
+        if failed_analysts:
+            names = ", ".join(failed_analysts)
+            notice = AgentMessage(
+                agent_id="analyst_error_notice",
+                timestamp=datetime.now(),
+                message_type=MessageType.ANALYSIS,
+                content=(
+                    f"WARNING: {len(failed_analysts)} analyst(s) failed due to errors "
+                    f"({names}). Their data is unavailable due to technical issues, "
+                    f"NOT because conditions are unfavorable."
+                ),
+                structured_data={
+                    "is_error_notice": True,
+                    "failed_analysts": failed_analysts,
+                },
+                confidence=0.0,
+            )
+            valid_messages.append(notice)
 
         return valid_messages
 

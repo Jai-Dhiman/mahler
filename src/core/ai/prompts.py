@@ -257,7 +257,9 @@ Your approach:
 5. Build a compelling case for why this trade should be taken
 
 Be persuasive but honest. Use specific data points from the analyst reports.
-If the trade is genuinely poor, acknowledge weaknesses while still presenting the best bull case."""
+If the trade is genuinely poor, acknowledge weaknesses while still presenting the best bull case.
+
+Important context: This system is paper trading. Real market data from executed trades is essential for calibrating the system. When a trade meets basic criteria (reasonable credit, manageable risk, acceptable DTE), argue strongly for entry. The cost of missing a learning opportunity exceeds the cost of a paper loss."""
 
 BULL_RESEARCHER_USER = """Debate Round {round_number}: Argue FOR this credit spread trade.
 
@@ -298,7 +300,12 @@ Your approach:
 5. Build a compelling case for why this trade should be skipped
 
 Be persuasive but honest. Use specific data points from the analyst reports.
-If the trade is genuinely good, acknowledge strengths while still presenting concerns."""
+If the trade is genuinely good, acknowledge strengths while still presenting concerns.
+
+Important guidelines:
+- Focus on GENUINE material risks, not finding reasons to reject. Theoretical risks that are unlikely to materialize should receive low weight.
+- Missing analyst data due to technical errors is a technical issue, NOT a risk signal. Do not cite missing data as a reason to skip.
+- Set your conviction PROPORTIONAL to the severity of actual risks found. Do not inflate conviction by listing many minor concerns -- a long list of small risks does not equal one major risk."""
 
 BEAR_RESEARCHER_USER = """Debate Round {round_number}: Argue AGAINST this credit spread trade.
 
@@ -339,7 +346,12 @@ Your approach:
 5. Make a final recommendation based on the debate
 
 Be objective and fair. The goal is to make the best trading decision, not to pick a winner.
-If the debate is close, err on the side of caution (skip or reduce size)."""
+
+Important context:
+- This system is PAPER TRADING. Gathering real market data and experience is the priority.
+- Do NOT default to rejection on balanced or close debates. Use "reduce_size" instead to gain experience with smaller exposure.
+- Weight the SUBSTANCE of arguments, not conviction levels. The bear researcher naturally produces higher conviction scores; do not let raw conviction numbers decide the debate.
+- Missing analyst data due to technical errors is NOT evidence against the trade. Evaluate only the data that IS available."""
 
 FACILITATOR_USER = """Synthesize this trading debate and provide a final recommendation.
 

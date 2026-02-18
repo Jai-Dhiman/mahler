@@ -109,8 +109,34 @@ class BullResearcher(DebateAgent):
         if not analyst_msgs:
             return "No analyst reports available."
 
-        summaries = []
+        # Separate real reports from error notices
+        real_reports = []
+        error_notices = []
         for msg in analyst_msgs:
+            if msg.structured_data and msg.structured_data.get("is_error_notice"):
+                error_notices.append(msg)
+            else:
+                real_reports.append(msg)
+
+        # If all analysts failed, return explicit message
+        if not real_reports and error_notices:
+            return (
+                "Analyst reports unavailable due to technical errors. "
+                "This is NOT an indication of unfavorable conditions."
+            )
+
+        summaries = []
+
+        # Prepend error notice if some analysts failed
+        if error_notices:
+            for notice in error_notices:
+                failed = notice.structured_data.get("failed_analysts", []) if notice.structured_data else []
+                summaries.append(
+                    f"**NOTE:** {len(failed)} analyst(s) failed due to technical errors "
+                    f"({', '.join(failed)}). Missing data is NOT evidence against the trade."
+                )
+
+        for msg in real_reports:
             agent_name = msg.agent_id.replace("_", " ").title()
             content = msg.content[:200] if len(msg.content) > 200 else msg.content
 
@@ -219,14 +245,39 @@ class BearResearcher(DebateAgent):
 
     def _summarize_analysts(self, context: AgentContext) -> str:
         """Build summary of analyst reports for the prompt."""
-        # Same implementation as BullResearcher - could be refactored to base class
         analyst_msgs = context.get_analyst_messages()
 
         if not analyst_msgs:
             return "No analyst reports available."
 
-        summaries = []
+        # Separate real reports from error notices
+        real_reports = []
+        error_notices = []
         for msg in analyst_msgs:
+            if msg.structured_data and msg.structured_data.get("is_error_notice"):
+                error_notices.append(msg)
+            else:
+                real_reports.append(msg)
+
+        # If all analysts failed, return explicit message
+        if not real_reports and error_notices:
+            return (
+                "Analyst reports unavailable due to technical errors. "
+                "This is NOT an indication of unfavorable conditions."
+            )
+
+        summaries = []
+
+        # Prepend error notice if some analysts failed
+        if error_notices:
+            for notice in error_notices:
+                failed = notice.structured_data.get("failed_analysts", []) if notice.structured_data else []
+                summaries.append(
+                    f"**NOTE:** {len(failed)} analyst(s) failed due to technical errors "
+                    f"({', '.join(failed)}). Missing data is a technical issue, not a risk signal."
+                )
+
+        for msg in real_reports:
             agent_name = msg.agent_id.replace("_", " ").title()
             content = msg.content[:200] if len(msg.content) > 200 else msg.content
 

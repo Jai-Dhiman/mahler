@@ -29,6 +29,8 @@ if TYPE_CHECKING:
 
 FUND_MANAGER_SYSTEM = """You are the Fund Manager with final authority over all trades. You directly evaluate debate outcomes and make trading decisions -- there is no intermediate trader.
 
+You are NOT bound by prior agent consensus. Make your OWN assessment of the trade based on fundamentals, risk, and portfolio context. The debate informs you, but you decide independently.
+
 Your responsibilities:
 1. Evaluate the debate outcome (bull vs bear synthesis)
 2. Determine whether to enter, skip, or modify the trade
@@ -36,17 +38,21 @@ Your responsibilities:
 4. Apply risk management constraints
 
 Decision framework:
-- APPROVE: Trade meets criteria, risk is acceptable, specify contract count
-- MODIFY: Trade has merit but needs smaller size
-- REJECT: Risk outweighs reward, skip entirely
+- APPROVE: Trade meets basic criteria (reasonable credit, manageable risk, acceptable DTE). Specify contract count (minimum 1).
+- MODIFY: Trade has merit but needs smaller size due to specific risk concerns. Use 1-2 contracts.
+- REJECT: ONLY for hard disqualifiers: VIX > 40, portfolio heat > 12%, or per-trade risk exceeds 2% cap. Do NOT reject based on debate outcome alone.
+
+CRITICAL -- Paper trading directive:
+- This system is PAPER TRADING. The primary goal is gathering real market data to calibrate the system.
+- If a trade meets basic criteria, APPROVE it with at least 1 contract.
+- If the debate was contentious or close, APPROVE with reduced size (1-2 contracts) rather than rejecting.
+- Bear winning the debate does NOT automatically mean reject. Evaluate whether the bear's concerns are hard disqualifiers or manageable risks.
+- The cost of rejecting every trade (zero data, zero calibration) far exceeds the cost of a small paper loss.
 
 Key principles:
-- Preservation of capital is paramount
-- When in doubt, reduce size rather than reject outright -- the system is paper trading and needs live experience to calibrate
 - Size positions proportionally to confidence and debate outcome quality
 - Consider portfolio-level impact, not just individual trade merit
-- During elevated VIX, verify that position sizing accounts for higher volatility but do not reject solely due to VIX level
-- When debate is contentious, proceed with moderate size rather than skipping -- paper trading benefits from live experience"""
+- During elevated VIX, verify that position sizing accounts for higher volatility but do not reject solely due to VIX level"""
 
 FUND_MANAGER_USER = """Evaluate this trade opportunity and make a final decision:
 
@@ -351,9 +357,12 @@ class FundManagerAgent(SynthesisAgent):
                     key_bear_points.extend(msg.structured_data.get("key_arguments", []))
 
         # Determine winner
-        if bull_confidence > bear_confidence + 0.1:
+        # Apply 0.85 normalization to bear confidence since bear systematically
+        # gets higher conviction scores (85-90% vs bull's 65-75%)
+        normalized_bear = bear_confidence * 0.85
+        if bull_confidence > normalized_bear + 0.05:
             winning = "bull"
-        elif bear_confidence > bull_confidence + 0.1:
+        elif normalized_bear > bull_confidence + 0.05:
             winning = "bear"
         else:
             winning = "neutral"
@@ -361,7 +370,7 @@ class FundManagerAgent(SynthesisAgent):
         return {
             "winning_perspective": winning,
             "confidence": max(bull_confidence, bear_confidence),
-            "consensus_reached": abs(bull_confidence - bear_confidence) < 0.1,
+            "consensus_reached": abs(bull_confidence - normalized_bear) < 0.05,
             "key_bull_points": key_bull_points[:3],
             "key_bear_points": key_bear_points[:3],
             "deciding_factors": [],
