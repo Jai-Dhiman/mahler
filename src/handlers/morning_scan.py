@@ -462,6 +462,7 @@ async def _run_morning_scan(env):
 
     # Get current VIX for position sizing and circuit breaker
     current_vix = None
+    vix3m = None
     try:
         vix_data = await alpaca.get_vix_snapshot()
         if vix_data:
@@ -863,7 +864,7 @@ async def _run_morning_scan(env):
                 mean_reversion=mr_result,
                 regime_result=regime_result,
                 current_vix=current_vix,
-                vix_3m=vix_3m if 'vix_3m' in dir() else None,
+                vix_3m=vix3m,
                 price_bars=price_bars,
                 positions=positions,
                 portfolio_greeks=portfolio_greeks,
@@ -923,8 +924,13 @@ async def _run_morning_scan(env):
                         print(f"Reducing position size: {adjusted_contracts} -> {new_adjusted} (V2 multiplier: {v2_size_mult:.2f})")
                         adjusted_contracts = new_adjusted
 
-            # Skip low confidence trades
-            if analysis.confidence == Confidence.LOW:
+            # Skip low confidence trades unless fund manager explicitly approved
+            fm_approved = (
+                v2_result.fund_manager_message
+                and v2_result.fund_manager_message.structured_data
+                and v2_result.fund_manager_message.structured_data.get("final_contracts", 0) > 0
+            )
+            if analysis.confidence == Confidence.LOW and not fm_approved:
                 print(f"Skipping low confidence trade: {spread.underlying}")
                 skip_reasons["low_confidence"] = skip_reasons.get("low_confidence", 0) + 1
                 # Notify about skipped trade
@@ -942,6 +948,8 @@ async def _run_morning_scan(env):
                     iv_rank=iv_metrics.iv_rank,
                 )
                 continue
+            elif analysis.confidence == Confidence.LOW and fm_approved:
+                print(f"Fund manager override: accepting low-confidence trade for {spread.underlying}")
 
             # Skip if recommendation is "skip"
             if v2_result.recommendation == "skip":

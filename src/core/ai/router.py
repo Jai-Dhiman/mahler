@@ -51,7 +51,7 @@ class ModelConfig:
 
 # Model definitions
 HAIKU_CONFIG = ModelConfig(
-    model_id="claude-haiku-4-5-20251101",
+    model_id="claude-haiku-4-5-20251001",
     max_tokens=1024,
     temperature=0.0,
     tier=ModelTier.FAST,

@@ -137,15 +137,28 @@ class ClaudeClient:
             raise ClaudeError(f"Claude API error: {error_str}")
 
     def _parse_json_response(self, text: str) -> dict:
-        """Parse JSON from Claude response, handling markdown code blocks."""
-        # Strip markdown code blocks if present
-        text = text.strip()
-        if text.startswith("```"):
-            lines = text.split("\n")
-            # Remove first line (```json) and last line (```)
-            text = "\n".join(lines[1:-1])
+        """Parse JSON from Claude response, handling markdown code blocks and prose."""
+        import re
 
-        return json.loads(text)
+        text = text.strip()
+
+        # Try direct parse first (bare JSON)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        # Extract from fenced code block (```json ... ``` with possible trailing text)
+        fence_match = re.search(r"```(?:json)?\s*\n(.*?)```", text, re.DOTALL)
+        if fence_match:
+            return json.loads(fence_match.group(1).strip())
+
+        # Extract first JSON object embedded in prose
+        brace_match = re.search(r"\{.*\}", text, re.DOTALL)
+        if brace_match:
+            return json.loads(brace_match.group(0))
+
+        raise json.JSONDecodeError("No JSON found in response", text, 0)
 
     async def _request_with_thinking(
         self,

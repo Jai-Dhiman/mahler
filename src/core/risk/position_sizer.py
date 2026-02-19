@@ -63,7 +63,7 @@ class RiskLimits:
 
     # Volatility adjustments (kept for backward compatibility)
     high_vix_threshold: float = 40.0
-    high_vix_reduction: float = 0.75
+    high_vix_reduction: float = 0.50
     extreme_vix_threshold: float = 50.0
 
     # Second-order Greeks thresholds

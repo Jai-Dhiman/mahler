@@ -186,7 +186,7 @@ class ScreenerConfig:
     min_iv_rank: float = 50.0  # Keep as secondary signal for AI context
 
     # Minimum credit (as percentage of width)
-    min_credit_pct: float = 0.12  # 12% of spread width (lowered for backtest-validated delta range)
+    min_credit_pct: float = 0.10  # 10% of spread width (relaxed for paper trading data collection)
 
     # Spread width range
     # Note: $2+ wide spreads have significantly better liquidity and fill rates
@@ -194,10 +194,10 @@ class ScreenerConfig:
     min_width: float = 2.0  # Increased from 1.0 for better liquidity
     max_width: float = 10.0
 
-    # Liquidity filters
-    min_open_interest: int = 100
-    min_volume: int = 10
-    max_bid_ask_spread_pct: float = 0.08  # 8% of mid price (tightened from 10%)
+    # Liquidity filters (relaxed for paper trading: TLT/GLD have lower OI and wider spreads)
+    min_open_interest: int = 50
+    min_volume: int = 1
+    max_bid_ask_spread_pct: float = 0.12  # 12% of mid price (relaxed for TLT/GLD)
 
 
 @dataclass
@@ -394,21 +394,32 @@ class OptionsScreener:
     def _filter_for_liquidity(self, contracts: list[OptionContract]) -> list[OptionContract]:
         """Filter contracts for minimum liquidity."""
         filtered = []
+        rejected = {"open_interest": 0, "volume": 0, "no_quote": 0, "bid_ask_spread": 0}
         for c in contracts:
             if c.open_interest < self.config.min_open_interest:
+                rejected["open_interest"] += 1
                 continue
             if c.volume < self.config.min_volume:
+                rejected["volume"] += 1
                 continue
             if c.bid <= 0 or c.ask <= 0:
+                rejected["no_quote"] += 1
                 continue
 
             # Check bid-ask spread
             mid = (c.bid + c.ask) / 2
             spread_pct = (c.ask - c.bid) / mid if mid > 0 else 1.0
             if spread_pct > self.config.max_bid_ask_spread_pct:
+                rejected["bid_ask_spread"] += 1
                 continue
 
             filtered.append(c)
+
+        total_rejected = sum(rejected.values())
+        if total_rejected > 0:
+            print(f"Liquidity filter: {len(filtered)} passed, {total_rejected} rejected "
+                  f"(OI={rejected['open_interest']}, vol={rejected['volume']}, "
+                  f"quote={rejected['no_quote']}, spread={rejected['bid_ask_spread']})")
 
         return filtered
 
