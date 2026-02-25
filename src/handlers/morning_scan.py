@@ -931,32 +931,37 @@ async def _run_morning_scan(env):
                         print(f"Reducing position size: {adjusted_contracts} -> {new_adjusted} (V2 multiplier: {v2_size_mult:.2f})")
                         adjusted_contracts = new_adjusted
 
-            # Skip low confidence trades unless fund manager explicitly approved
+            # Paper trading: AI agents are advisory, not gatekeepers
+            # Log confidence level but don't veto -- the rules-based screener
+            # already validated this trade. Agent data is stored for future
+            # backtest validation of whether AI filtering adds alpha.
             fm_approved = (
                 v2_result.fund_manager_message
                 and v2_result.fund_manager_message.structured_data
                 and v2_result.fund_manager_message.structured_data.get("final_contracts", 0) > 0
             )
-            if analysis.confidence == Confidence.LOW and not fm_approved:
-                print(f"Skipping low confidence trade: {spread.underlying}")
-                skip_reasons["low_confidence"] = skip_reasons.get("low_confidence", 0) + 1
-                # Notify about skipped trade
-                await discord.send_trade_decision(
-                    underlying=spread.underlying,
-                    spread_type=spread.spread_type.value,
-                    short_strike=spread.short_strike,
-                    long_strike=spread.long_strike,
-                    expiration=spread.expiration,
-                    credit=spread.credit,
-                    decision="skipped",
-                    reason="Low confidence from AI analysis",
-                    ai_summary=v2_result.thesis,
-                    confidence=v2_result.confidence,
-                    iv_rank=iv_metrics.iv_rank,
-                )
-                continue
-            elif analysis.confidence == Confidence.LOW and fm_approved:
-                print(f"Fund manager override: accepting low-confidence trade for {spread.underlying}")
+            if analysis.confidence == Confidence.LOW:
+                if is_paper:
+                    print(f"Low confidence ({v2_result.confidence:.0%}) for {spread.underlying} - proceeding (paper trading, agents advisory)")
+                elif not fm_approved:
+                    print(f"Skipping low confidence trade: {spread.underlying}")
+                    skip_reasons["low_confidence"] = skip_reasons.get("low_confidence", 0) + 1
+                    await discord.send_trade_decision(
+                        underlying=spread.underlying,
+                        spread_type=spread.spread_type.value,
+                        short_strike=spread.short_strike,
+                        long_strike=spread.long_strike,
+                        expiration=spread.expiration,
+                        credit=spread.credit,
+                        decision="skipped",
+                        reason="Low confidence from AI analysis",
+                        ai_summary=v2_result.thesis,
+                        confidence=v2_result.confidence,
+                        iv_rank=iv_metrics.iv_rank,
+                    )
+                    continue
+                else:
+                    print(f"Fund manager override: accepting low-confidence trade for {spread.underlying}")
 
             # Skip if recommendation is "skip"
             if v2_result.recommendation == "skip":
