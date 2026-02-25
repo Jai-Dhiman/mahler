@@ -177,12 +177,12 @@ class TestExitValidator:
     """Test ExitValidator exit condition checks."""
 
     def test_profit_target_reached(self):
-        """Test profit target detection at 35% of max."""
+        """Test profit target detection at 65% of max."""
         from core.risk.validators import ExitValidator
 
         validator = ExitValidator()
-        # Entry credit: 1.00, current value: 0.40 = 60% profit
-        result = validator.check_profit_target(entry_credit=1.00, current_value=0.40)
+        # Entry credit: 1.00, current value: 0.30 = 70% profit (above 65% target)
+        result = validator.check_profit_target(entry_credit=1.00, current_value=0.30)
 
         assert result.valid is True
         assert "profit" in result.reason.lower()
@@ -278,7 +278,7 @@ class TestExitValidator:
         # Profit target met
         should_exit, reason, iv_rank = validator.check_all_exit_conditions(
             entry_credit=1.00,
-            current_value=0.40,  # 60% profit
+            current_value=0.30,  # 70% profit (above 65% target)
             expiration=future_date,
         )
         assert should_exit is True

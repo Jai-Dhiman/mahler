@@ -35,8 +35,8 @@ class TestTradingStyleMultipliers:
             trading_style=TradingStyle.AGGRESSIVE,
         )
 
-        # Aggressive: tp=0.6, sl=1.5
-        assert result.base_profit_target == pytest.approx(0.60)
+        # Aggressive: tp=0.80, sl=1.5
+        assert result.base_profit_target == pytest.approx(0.80)
         assert result.base_stop_loss == pytest.approx(1.50)
 
     def test_neutral_multipliers(self, calculator):
@@ -46,8 +46,8 @@ class TestTradingStyleMultipliers:
             trading_style=TradingStyle.NEUTRAL,
         )
 
-        # Neutral: tp=0.5, sl=1.25
-        assert result.base_profit_target == pytest.approx(0.50)
+        # Neutral: tp=0.65, sl=1.25 (backtest validated)
+        assert result.base_profit_target == pytest.approx(0.65)
         assert result.base_stop_loss == pytest.approx(1.25)
 
     def test_conservative_multipliers(self, calculator):
@@ -57,8 +57,8 @@ class TestTradingStyleMultipliers:
             trading_style=TradingStyle.CONSERVATIVE,
         )
 
-        # Conservative: tp=0.4, sl=1.0
-        assert result.base_profit_target == pytest.approx(0.40)
+        # Conservative: tp=0.50, sl=1.0
+        assert result.base_profit_target == pytest.approx(0.50)
         assert result.base_stop_loss == pytest.approx(1.00)
 
 
@@ -74,9 +74,9 @@ class TestVolatilityAdjustment:
             vol_10d=0.30,  # 2x baseline
         )
 
-        # Base tp = 0.5, with 2x vol ratio
-        # Adjusted tp = 0.5 / 2.0 = 0.25
-        assert result.profit_target == pytest.approx(0.25)
+        # Base tp = 0.65, with 2x vol ratio
+        # Adjusted tp = 0.65 / 2.0 = 0.325
+        assert result.profit_target == pytest.approx(0.325)
         assert result.vol_adjustment == pytest.approx(2.0)
 
     def test_high_volatility_widens_stop_loss(self, calculator):
@@ -100,9 +100,9 @@ class TestVolatilityAdjustment:
             vol_10d=0.075,  # 0.5x baseline
         )
 
-        # Base tp = 0.5, with 0.5x vol ratio
-        # Adjusted tp = 0.5 / 0.5 = 1.0
-        assert result.profit_target == pytest.approx(1.0)
+        # Base tp = 0.65, with 0.5x vol ratio
+        # Adjusted tp = 0.65 / 0.5 = 1.3
+        assert result.profit_target == pytest.approx(1.3)
         assert result.vol_adjustment == pytest.approx(0.5)
 
     def test_vol_ratio_clamped_at_bounds(self, calculator):
@@ -163,8 +163,8 @@ class TestExitPriceCalculation:
             trading_style=TradingStyle.NEUTRAL,
         )
 
-        # Profit target: close when value drops to 0.50 (captured 0.50 profit)
-        assert tp_value == pytest.approx(0.50)
+        # Profit target: close when value drops to 0.35 (captured 0.65 profit)
+        assert tp_value == pytest.approx(0.35)
 
         # Stop loss: close when value rises to 2.25 (lost 1.25)
         assert sl_value == pytest.approx(2.25)
@@ -179,9 +179,9 @@ class TestExitPriceCalculation:
             vol_10d=0.30,  # 2x baseline
         )
 
-        # With 2x vol: tp=0.25, sl=2.50
-        # TP value = 1.00 - 0.25 = 0.75 (exit faster)
-        assert tp_value == pytest.approx(0.75)
+        # With 2x vol: tp=0.325, sl=2.50
+        # TP value = 1.00 - 0.325 = 0.675 (exit faster)
+        assert tp_value == pytest.approx(0.675)
 
         # SL value = 1.00 + 2.50 = 3.50 (wider stop)
         assert sl_value == pytest.approx(3.50)
@@ -204,7 +204,7 @@ class TestExitValidatorIntegration:
         from datetime import datetime, timedelta
         future_exp = (datetime.now() + timedelta(days=45)).strftime("%Y-%m-%d")
 
-        # Check with aggressive style (tp multiplier = 0.6)
+        # Check with aggressive style (tp multiplier = 0.80)
         should_exit, reason, _ = validator.check_all_exit_conditions(
             entry_credit=entry_credit,
             current_value=current_value,
@@ -212,7 +212,7 @@ class TestExitValidatorIntegration:
             trading_style=TradingStyle.AGGRESSIVE,
         )
 
-        # 55% profit should not trigger aggressive exit (target = 60%)
+        # 55% profit should not trigger aggressive exit (target = 80%)
         assert not should_exit
 
     def test_dynamic_exit_triggers_at_target(self):
@@ -221,8 +221,8 @@ class TestExitValidatorIntegration:
         validator = ExitValidator(config)
 
         entry_credit = 1.00
-        # Position has achieved 65% profit (current_value = 0.35)
-        current_value = 0.35
+        # Position has achieved 85% profit (current_value = 0.15)
+        current_value = 0.15
 
         from datetime import datetime, timedelta
         future_exp = (datetime.now() + timedelta(days=45)).strftime("%Y-%m-%d")
@@ -234,7 +234,7 @@ class TestExitValidatorIntegration:
             trading_style=TradingStyle.AGGRESSIVE,
         )
 
-        # 65% profit should trigger aggressive exit (target = 60%)
+        # 85% profit should trigger aggressive exit (target = 80%)
         assert should_exit
         assert "dynamic_profit" in reason
 
@@ -267,8 +267,8 @@ class TestExitValidatorIntegration:
         validator = ExitValidator(config)
 
         entry_credit = 1.00
-        # 40% profit normally wouldn't trigger conservative (40% target)
-        # But with high vol, target tightens
+        # 40% profit normally wouldn't trigger conservative (50% target)
+        # But with high vol, target tightens to 25%
         current_value = 0.60  # 40% profit
 
         from datetime import datetime, timedelta
@@ -279,10 +279,10 @@ class TestExitValidatorIntegration:
             current_value=current_value,
             expiration=future_exp,
             trading_style=TradingStyle.CONSERVATIVE,
-            vol_10d=0.30,  # 2x baseline, tightens target to 20%
+            vol_10d=0.30,  # 2x baseline, tightens target to 25%
         )
 
-        # With high vol, 40% profit exceeds the 20% target
+        # With high vol, 40% profit exceeds the 25% target
         assert should_exit
         assert "dynamic_profit" in reason
 

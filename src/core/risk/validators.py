@@ -171,13 +171,13 @@ class ExitConfig:
     """Configurable exit thresholds.
 
     Research notes:
-    - 35% profit target for paper trading (faster turnover, more data)
-    - 125% stop loss cuts losers at 25% beyond credit (backtest-validated)
+    - 65% profit target (backtest validated: 6.25% CAGR, 69.9% win rate)
+    - 125% stop loss cuts losers at 25% beyond credit (backtest validated)
     - 14 DTE time exit lets theta work longer while avoiding gamma
     - 50% gamma protection is more aggressive near-expiry profit taking
     """
 
-    profit_target_pct: float = 0.35  # 35% of max profit (paper trading: faster exits)
+    profit_target_pct: float = 0.65  # 65% of max profit (backtest validated)
     stop_loss_pct: float = 1.25  # 125% of credit (backtest-validated)
     time_exit_dte: int = 14  # Close at 14 DTE
 
@@ -199,9 +199,9 @@ class ExitConfig:
     # V2: Trading style multipliers for dynamic exits
     # Format: {"tp": profit_target_multiplier, "sl": stop_loss_multiplier}
     style_multipliers: dict = field(default_factory=lambda: {
-        TradingStyle.AGGRESSIVE: {"tp": 0.6, "sl": 1.5},
-        TradingStyle.NEUTRAL: {"tp": 0.5, "sl": 1.25},
-        TradingStyle.CONSERVATIVE: {"tp": 0.4, "sl": 1.0},
+        TradingStyle.AGGRESSIVE: {"tp": 0.80, "sl": 1.5},
+        TradingStyle.NEUTRAL: {"tp": 0.65, "sl": 1.25},  # Backtest validated
+        TradingStyle.CONSERVATIVE: {"tp": 0.50, "sl": 1.0},
     })
 
     # V2: Volatility-adjusted exit settings

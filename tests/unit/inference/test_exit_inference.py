@@ -57,8 +57,8 @@ class TestPrecomputedExitProvider:
         params = provider.get_exit_params()
 
         assert params == provider.DEFAULT_PARAMS
-        assert params.profit_target == 0.50
-        assert params.stop_loss == 0.20
+        assert params.profit_target == 0.65
+        assert params.stop_loss == 1.25
         assert params.time_exit_dte == 21
 
     def test_get_sharpe_ratio(self, sample_params):
@@ -86,10 +86,10 @@ class TestPrecomputedExitProvider:
         assert provider_without.has_optimized_params() is False
 
     def test_default_params_are_correct(self):
-        """Verify DEFAULT_PARAMS has correct values from PRD."""
+        """Verify DEFAULT_PARAMS has correct backtest-validated values."""
         expected = ExitParams(
-            profit_target=0.50,  # 50% of max profit
-            stop_loss=0.20,  # 200% of credit
+            profit_target=0.65,  # 65% of max profit (backtest validated)
+            stop_loss=1.25,  # 125% of credit (backtest validated)
             time_exit_dte=21,  # 21 DTE
         )
 
