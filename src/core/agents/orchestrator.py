@@ -347,13 +347,14 @@ class AgentOrchestrator:
         tasks = [analyst.analyze(context) for analyst in self._analysts]
         messages = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Filter out exceptions and log them
+        # Filter out exceptions and log them with full error details
         valid_messages = []
         failed_analysts = []
         for i, msg in enumerate(messages):
             if isinstance(msg, Exception):
                 analyst_id = self._analysts[i].agent_id
-                print(f"Analyst {analyst_id} failed: {msg}")
+                error_type = type(msg).__name__
+                print(f"Analyst {analyst_id} failed ({error_type}): {msg}")
                 failed_analysts.append(analyst_id)
             elif isinstance(msg, AgentMessage):
                 valid_messages.append(msg)

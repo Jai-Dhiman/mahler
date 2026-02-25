@@ -406,7 +406,13 @@ class GreeksAnalyst(AnalystAgent):
             self.system_prompt,
         )
 
-        data = self.claude._parse_json_response(response)
+        try:
+            data = self.claude._parse_json_response(response)
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"greeks_analyst: LLM returned invalid JSON for {spread.underlying}: {e}. "
+                f"Response (first 200 chars): {response[:200]}"
+            ) from e
 
         # Build content summary
         delta_assessment = data.get("delta_assessment", "unknown")
