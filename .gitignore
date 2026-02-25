@@ -77,6 +77,9 @@ tmp/
 .claude/
 CLAUDE.md
 
+# Git worktrees
+.worktrees/
+
 .venv/
 
 results/
