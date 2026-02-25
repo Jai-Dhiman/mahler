@@ -582,10 +582,17 @@ async def _run_morning_scan(env):
     print("V2 Three-perspective risk manager initialized")
 
     # Combined size multiplier (risk + regime)
-    # Use the more conservative (lower) of the two multipliers
-    combined_size_multiplier = min(risk_state.size_multiplier, regime_multiplier)
-    if combined_size_multiplier < 1.0:
-        print(f"Size multiplier: {combined_size_multiplier:.2f} (risk: {risk_state.size_multiplier:.2f}, regime: {regime_multiplier:.2f})")
+    # Paper trading: bypass regime multiplier (not backtested) while still logging it
+    # Regime detection still runs and stores data for future validation
+    is_paper = env.get("ENVIRONMENT", "paper") == "paper"
+    if is_paper:
+        combined_size_multiplier = risk_state.size_multiplier
+        if regime_multiplier < 1.0:
+            print(f"Size multiplier: {combined_size_multiplier:.2f} (risk: {risk_state.size_multiplier:.2f}, regime: {regime_multiplier:.2f} [bypassed - paper trading])")
+    else:
+        combined_size_multiplier = min(risk_state.size_multiplier, regime_multiplier)
+        if combined_size_multiplier < 1.0:
+            print(f"Size multiplier: {combined_size_multiplier:.2f} (risk: {risk_state.size_multiplier:.2f}, regime: {regime_multiplier:.2f})")
 
     all_opportunities = []
 
