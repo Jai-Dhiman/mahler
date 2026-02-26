@@ -275,35 +275,53 @@ class D1Client:
         contracts: int,
         broker_order_id: str | None = None,
         status: TradeStatus = TradeStatus.OPEN,
+        agent_decision: str | None = None,
+        agent_contracts: int | None = None,
+        agent_confidence: float | None = None,
+        agent_thesis: str | None = None,
     ) -> str:
         """Create a new trade and return its ID.
 
         Args:
             status: Initial trade status. Use PENDING_FILL for auto-approved orders
                     that haven't been confirmed filled yet.
+            agent_decision: Shadow mode agent decision ('approve', 'modify', 'reject').
+            agent_contracts: Contracts the agent would have set.
+            agent_confidence: Agent confidence 0.0-1.0.
+            agent_thesis: Agent's reasoning summary.
         """
         trade_id = str(uuid4())
+
+        columns = [
+            "id", "recommendation_id", "opened_at", "status", "underlying",
+            "spread_type", "short_strike", "long_strike", "expiration",
+            "entry_credit", "contracts", "broker_order_id",
+        ]
+        params = [
+            trade_id, recommendation_id, datetime.now().isoformat(),
+            status.value, underlying, spread_type.value, short_strike,
+            long_strike, expiration, entry_credit, contracts, broker_order_id,
+        ]
+
+        if agent_decision is not None:
+            columns.append("agent_decision")
+            params.append(agent_decision)
+        if agent_contracts is not None:
+            columns.append("agent_contracts")
+            params.append(agent_contracts)
+        if agent_confidence is not None:
+            columns.append("agent_confidence")
+            params.append(agent_confidence)
+        if agent_thesis is not None:
+            columns.append("agent_thesis")
+            params.append(agent_thesis)
+
+        placeholders = ", ".join("?" for _ in columns)
+        column_str = ", ".join(columns)
+
         await self.run(
-            """
-            INSERT INTO trades (
-                id, recommendation_id, opened_at, status, underlying, spread_type,
-                short_strike, long_strike, expiration, entry_credit, contracts, broker_order_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                trade_id,
-                recommendation_id,
-                datetime.now().isoformat(),
-                status.value,
-                underlying,
-                spread_type.value,
-                short_strike,
-                long_strike,
-                expiration,
-                entry_credit,
-                contracts,
-                broker_order_id,
-            ],
+            f"INSERT INTO trades ({column_str}) VALUES ({placeholders})",
+            params,
         )
         return trade_id
 
@@ -461,7 +479,43 @@ class D1Client:
             exit_order_id=row.get("exit_order_id"),
             reflection=row["reflection"],
             lesson=row["lesson"],
+            agent_decision=row.get("agent_decision"),
+            agent_contracts=row.get("agent_contracts"),
+            agent_confidence=row.get("agent_confidence"),
+            agent_thesis=row.get("agent_thesis"),
         )
+
+    async def get_agent_shadow_stats(self) -> dict:
+        """Compare algorithmic vs agent-filtered performance.
+
+        Returns dict with 'algorithmic' (all closed trades) and
+        'agent_filtered' (only agent-approved/modified trades) stats.
+        """
+        all_trades = await self.execute(
+            """SELECT COUNT(*) as total,
+                      SUM(CASE WHEN profit_loss > 0 THEN 1 ELSE 0 END) as wins,
+                      SUM(profit_loss) as pnl
+               FROM trades WHERE status = 'closed'"""
+        )
+        agent_approved = await self.execute(
+            """SELECT COUNT(*) as total,
+                      SUM(CASE WHEN profit_loss > 0 THEN 1 ELSE 0 END) as wins,
+                      SUM(profit_loss) as pnl
+               FROM trades WHERE status = 'closed'
+                 AND agent_decision IN ('approve', 'modify')"""
+        )
+        agent_rejected = await self.execute(
+            """SELECT COUNT(*) as total,
+                      SUM(CASE WHEN profit_loss > 0 THEN 1 ELSE 0 END) as wins,
+                      SUM(profit_loss) as pnl
+               FROM trades WHERE status = 'closed'
+                 AND agent_decision = 'reject'"""
+        )
+        return {
+            "algorithmic": all_trades["results"][0] if all_trades["results"] else {},
+            "agent_filtered": agent_approved["results"][0] if agent_approved["results"] else {},
+            "agent_rejected": agent_rejected["results"][0] if agent_rejected["results"] else {},
+        }
 
     # Positions
 

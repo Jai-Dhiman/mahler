@@ -83,11 +83,11 @@ enum Commands {
         max_dte: i32,
 
         /// Minimum delta for short strike (absolute value)
-        #[arg(long, default_value = "0.20")]
+        #[arg(long, default_value = "0.05")]
         min_delta: f64,
 
         /// Maximum delta for short strike (absolute value)
-        #[arg(long, default_value = "0.30")]
+        #[arg(long, default_value = "0.15")]
         max_delta: f64,
 
         /// Minimum IV percentile for entry (0-100)

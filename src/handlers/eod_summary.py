@@ -945,6 +945,36 @@ async def _run_eod_summary(env):
         except Exception as e:
             print(f"Error fetching VIX for summary: {e}")
 
+    # Agent shadow mode comparison
+    shadow_stats = None
+    try:
+        shadow_stats = await db.get_agent_shadow_stats()
+        algo = shadow_stats.get("algorithmic", {})
+        filtered = shadow_stats.get("agent_filtered", {})
+        rejected = shadow_stats.get("agent_rejected", {})
+
+        algo_total = algo.get("total", 0) or 0
+        algo_wins = algo.get("wins", 0) or 0
+        algo_pnl = algo.get("pnl", 0) or 0
+        filtered_total = filtered.get("total", 0) or 0
+        filtered_wins = filtered.get("wins", 0) or 0
+        filtered_pnl = filtered.get("pnl", 0) or 0
+        rejected_total = rejected.get("total", 0) or 0
+        rejected_wins = rejected.get("wins", 0) or 0
+        rejected_pnl = rejected.get("pnl", 0) or 0
+
+        if algo_total > 0:
+            algo_wr = (algo_wins / algo_total) * 100
+            print(f"Shadow stats - Algorithmic: {algo_total} trades, {algo_wr:.1f}% WR, ${algo_pnl:.2f} P&L")
+            if filtered_total > 0:
+                filtered_wr = (filtered_wins / filtered_total) * 100
+                print(f"Shadow stats - Agent approved: {filtered_total} trades, {filtered_wr:.1f}% WR, ${filtered_pnl:.2f} P&L")
+            if rejected_total > 0:
+                rejected_wr = (rejected_wins / rejected_total) * 100
+                print(f"Shadow stats - Agent rejected: {rejected_total} trades, {rejected_wr:.1f}% WR, ${rejected_pnl:.2f} P&L")
+    except Exception as e:
+        print(f"Error fetching agent shadow stats: {e}")
+
     # Send Discord summary
     await discord.send_daily_summary(
         performance=performance,
@@ -954,6 +984,7 @@ async def _run_eod_summary(env):
         screening_summary=screening_summary,
         market_context=market_context_for_summary,
         position_details=position_details,
+        shadow_stats=shadow_stats,
     )
 
     # Reset daily KV stats for next day

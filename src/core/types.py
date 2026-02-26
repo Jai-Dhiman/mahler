@@ -139,6 +139,12 @@ class Trade:
     reflection: str | None = None
     lesson: str | None = None
 
+    # Agent shadow mode fields (recorded but don't gate execution)
+    agent_decision: str | None = None  # 'approve', 'modify', 'reject'
+    agent_contracts: int | None = None
+    agent_confidence: float | None = None
+    agent_thesis: str | None = None
+
 
 @dataclass
 class Position:

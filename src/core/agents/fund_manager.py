@@ -27,6 +27,9 @@ if TYPE_CHECKING:
     from core.risk.three_perspective import ThreePerspectiveResult
 
 
+# Backtest validation (2026-02-25, 19yr ORATS, SPY/QQQ/IWM):
+# Conservative filtering is the only value-adding AI filter (+3.9% to +23.4% WR delta).
+# Agent pipeline runs in shadow mode -- decisions logged but do not gate execution.
 FUND_MANAGER_SYSTEM = """You are the Fund Manager with final authority over all trades. You directly evaluate debate outcomes and make trading decisions -- there is no intermediate trader.
 
 You are NOT bound by prior agent consensus. Make your OWN assessment of the trade based on fundamentals, risk, and portfolio context. The debate informs you, but you decide independently.

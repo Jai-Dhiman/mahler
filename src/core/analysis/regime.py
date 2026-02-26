@@ -91,11 +91,13 @@ class MarketRegimeDetector:
     """
 
     # Position multipliers per regime
+    # Backtest validated (2026-02-25): all_on regime outperforms selective configs.
+    # SPY 167.9%, QQQ 144.6%, IWM 64.7% over 19 years.
     REGIME_MULTIPLIERS = {
         MarketRegime.BULL_LOW_VOL: 1.0,
-        MarketRegime.BULL_HIGH_VOL: 0.75,
-        MarketRegime.BEAR_LOW_VOL: 0.5,
-        MarketRegime.BEAR_HIGH_VOL: 0.40,
+        MarketRegime.BULL_HIGH_VOL: 1.0,
+        MarketRegime.BEAR_LOW_VOL: 1.0,
+        MarketRegime.BEAR_HIGH_VOL: 1.0,
     }
 
     # Feature names for output

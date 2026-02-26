@@ -10,7 +10,7 @@ Two modes of operation:
 2. Agent-Based Deliberation: LLM-powered debate between risk perspectives
 
 The weighted recommendation varies by market conditions:
-- VIX > 30: Conservative-heavy weighting (0.1, 0.3, 0.6)
+- VIX > 30: Moderate-conservative weighting (0.15, 0.45, 0.40) — bear regimes profitable per backtest
 - VIX > 20: Neutral-heavy weighting (0.2, 0.5, 0.3)
 - VIX <= 20: Balanced weighting (0.3, 0.5, 0.2)
 
@@ -110,9 +110,10 @@ class ThreePerspectiveConfig:
 
     # Weight distributions
     # Format: [aggressive, neutral, conservative]
+    # Backtest validated: bear regimes are profitable, less conservative in high VIX
     high_vix_weights: list[float] = field(
-        default_factory=lambda: [0.1, 0.3, 0.6]
-    )  # Conservative-heavy
+        default_factory=lambda: [0.15, 0.45, 0.40]
+    )  # Less conservative-heavy (bear regimes profitable per backtest)
     moderate_vix_weights: list[float] = field(
         default_factory=lambda: [0.2, 0.5, 0.3]
     )  # Neutral-heavy

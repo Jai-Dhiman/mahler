@@ -524,6 +524,7 @@ class DiscordClient:
         screening_summary: dict | None = None,
         market_context: dict | None = None,
         position_details: list[dict] | None = None,
+        shadow_stats: dict | None = None,
     ) -> str:
         """Send end-of-day summary.
 
@@ -630,6 +631,40 @@ class DiscordClient:
                 fields.append({
                     "name": "Open Position Status",
                     "value": "\n".join(pos_lines),
+                    "inline": False,
+                })
+
+        # Agent shadow mode comparison
+        if shadow_stats:
+            algo = shadow_stats.get("algorithmic", {})
+            filtered = shadow_stats.get("agent_filtered", {})
+            rejected = shadow_stats.get("agent_rejected", {})
+
+            algo_total = algo.get("total", 0) or 0
+            if algo_total > 0:
+                algo_wins = algo.get("wins", 0) or 0
+                algo_pnl = algo.get("pnl", 0) or 0
+                algo_wr = (algo_wins / algo_total) * 100
+
+                lines = [f"Algo: {algo_total} trades, {algo_wr:.0f}% WR, ${algo_pnl:,.2f}"]
+
+                filtered_total = filtered.get("total", 0) or 0
+                if filtered_total > 0:
+                    filtered_wins = filtered.get("wins", 0) or 0
+                    filtered_pnl = filtered.get("pnl", 0) or 0
+                    filtered_wr = (filtered_wins / filtered_total) * 100
+                    lines.append(f"Agent approve: {filtered_total} trades, {filtered_wr:.0f}% WR, ${filtered_pnl:,.2f}")
+
+                rejected_total = rejected.get("total", 0) or 0
+                if rejected_total > 0:
+                    rejected_wins = rejected.get("wins", 0) or 0
+                    rejected_pnl = rejected.get("pnl", 0) or 0
+                    rejected_wr = (rejected_wins / rejected_total) * 100
+                    lines.append(f"Agent reject: {rejected_total} trades, {rejected_wr:.0f}% WR, ${rejected_pnl:,.2f}")
+
+                fields.append({
+                    "name": "Algo vs Agent (Shadow)",
+                    "value": "\n".join(lines),
                     "inline": False,
                 })
 

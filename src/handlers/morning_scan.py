@@ -582,17 +582,11 @@ async def _run_morning_scan(env):
     print("V2 Three-perspective risk manager initialized")
 
     # Combined size multiplier (risk + regime)
-    # Paper trading: bypass regime multiplier (not backtested) while still logging it
-    # Regime detection still runs and stores data for future validation
+    # Backtest validated: all_on regime (1.0 multipliers) outperforms selective configs
     is_paper = env.get("ENVIRONMENT", "paper") == "paper"
-    if is_paper:
-        combined_size_multiplier = risk_state.size_multiplier
-        if regime_multiplier < 1.0:
-            print(f"Size multiplier: {combined_size_multiplier:.2f} (risk: {risk_state.size_multiplier:.2f}, regime: {regime_multiplier:.2f} [bypassed - paper trading])")
-    else:
-        combined_size_multiplier = min(risk_state.size_multiplier, regime_multiplier)
-        if combined_size_multiplier < 1.0:
-            print(f"Size multiplier: {combined_size_multiplier:.2f} (risk: {risk_state.size_multiplier:.2f}, regime: {regime_multiplier:.2f})")
+    combined_size_multiplier = min(risk_state.size_multiplier, regime_multiplier)
+    if combined_size_multiplier < 1.0:
+        print(f"Size multiplier: {combined_size_multiplier:.2f} (risk: {risk_state.size_multiplier:.2f}, regime: {regime_multiplier:.2f})")
 
     all_opportunities = []
 
@@ -931,43 +925,24 @@ async def _run_morning_scan(env):
                         print(f"Reducing position size: {adjusted_contracts} -> {new_adjusted} (V2 multiplier: {v2_size_mult:.2f})")
                         adjusted_contracts = new_adjusted
 
-            # Paper trading: AI agents are advisory, not gatekeepers
-            # Log confidence level but don't veto -- the rules-based screener
-            # already validated this trade. Agent data is stored for future
-            # backtest validation of whether AI filtering adds alpha.
-            fm_approved = (
-                v2_result.fund_manager_message
-                and v2_result.fund_manager_message.structured_data
-                and v2_result.fund_manager_message.structured_data.get("final_contracts", 0) > 0
+            # Agent shadow mode: record agent decisions without gating execution.
+            # All algorithmic trades execute to build IV history. Agent pipeline
+            # still runs, logging approve/reject for future comparison.
+            fm_data = (
+                v2_result.fund_manager_message.structured_data
+                if v2_result.fund_manager_message and v2_result.fund_manager_message.structured_data
+                else {}
             )
-            if analysis.confidence == Confidence.LOW:
-                if is_paper:
-                    print(f"Low confidence ({v2_result.confidence:.0%}) for {spread.underlying} - proceeding (paper trading, agents advisory)")
-                elif not fm_approved:
-                    print(f"Skipping low confidence trade: {spread.underlying}")
-                    skip_reasons["low_confidence"] = skip_reasons.get("low_confidence", 0) + 1
-                    await discord.send_trade_decision(
-                        underlying=spread.underlying,
-                        spread_type=spread.spread_type.value,
-                        short_strike=spread.short_strike,
-                        long_strike=spread.long_strike,
-                        expiration=spread.expiration,
-                        credit=spread.credit,
-                        decision="skipped",
-                        reason="Low confidence from AI analysis",
-                        ai_summary=v2_result.thesis,
-                        confidence=v2_result.confidence,
-                        iv_rank=iv_metrics.iv_rank,
-                    )
-                    continue
-                else:
-                    print(f"Fund manager override: accepting low-confidence trade for {spread.underlying}")
+            shadow_decision = fm_data.get("decision", "approve")
+            shadow_contracts = fm_data.get("final_contracts")
+            shadow_confidence = v2_result.confidence
+            shadow_thesis = (fm_data.get("final_thesis") or v2_result.thesis or "")[:500]
 
-            # Skip if recommendation is "skip"
-            if v2_result.recommendation == "skip":
-                print(f"Skipping trade per multi-agent recommendation: {spread.underlying}")
-                skip_reasons["agent_rejected"] = skip_reasons.get("agent_rejected", 0) + 1
-                # Notify about rejected trade with AI reasoning
+            print(f"Agent shadow: {shadow_decision} ({shadow_confidence:.0%}) for {spread.underlying}")
+
+            # Notify Discord about shadow rejections (for monitoring)
+            if v2_result.recommendation == "skip" or analysis.confidence == Confidence.LOW:
+                reason = "Low confidence" if analysis.confidence == Confidence.LOW else "Agent recommended skip"
                 await discord.send_trade_decision(
                     underlying=spread.underlying,
                     spread_type=spread.spread_type.value,
@@ -975,13 +950,12 @@ async def _run_morning_scan(env):
                     long_strike=spread.long_strike,
                     expiration=spread.expiration,
                     credit=spread.credit,
-                    decision="rejected",
-                    reason="Multi-agent analysis recommended skip",
+                    decision="shadow_reject",
+                    reason=f"[Shadow] {reason} - trade proceeds anyway",
                     ai_summary=v2_result.thesis,
                     confidence=v2_result.confidence,
                     iv_rank=iv_metrics.iv_rank,
                 )
-                continue
 
             # Get delta/theta from the scored spread or Greeks if available
             short_delta = None
@@ -1048,6 +1022,10 @@ async def _run_morning_scan(env):
                     contracts=adjusted_contracts,
                     broker_order_id=order.id,
                     status=TradeStatus.PENDING_FILL,
+                    agent_decision=shadow_decision,
+                    agent_contracts=shadow_contracts,
+                    agent_confidence=shadow_confidence,
+                    agent_thesis=shadow_thesis,
                 )
 
                 # Send autonomous notification (info-only, no buttons)

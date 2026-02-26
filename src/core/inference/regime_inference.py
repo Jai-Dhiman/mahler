@@ -21,12 +21,12 @@ class PrecomputedRegimeDetector:
     Compatible with Cloudflare Workers Python runtime.
     """
 
-    # Position multipliers per regime (same as MarketRegimeDetector)
+    # Backtest validated (2026-02-25): all_on regime outperforms selective configs.
     REGIME_MULTIPLIERS = {
         MarketRegime.BULL_LOW_VOL: 1.0,
-        MarketRegime.BULL_HIGH_VOL: 0.5,
-        MarketRegime.BEAR_LOW_VOL: 0.5,
-        MarketRegime.BEAR_HIGH_VOL: 0.25,
+        MarketRegime.BULL_HIGH_VOL: 1.0,
+        MarketRegime.BEAR_LOW_VOL: 1.0,
+        MarketRegime.BEAR_HIGH_VOL: 1.0,
     }
 
     FEATURE_NAMES = [

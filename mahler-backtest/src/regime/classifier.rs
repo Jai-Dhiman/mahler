@@ -37,15 +37,16 @@ impl MarketRegime {
     }
 
     /// Suggested position size multiplier.
+    /// Backtest validated (2026-02-25): all_on regime outperforms selective configs.
     pub fn position_size_multiplier(&self) -> f64 {
         match self {
             Self::BullCalm => 1.0,
-            Self::BullUncertain => 0.8,
-            Self::BearMild => 0.5,
-            Self::BearVolatile => 0.25,
-            Self::Crisis => 0.0, // No new positions
-            Self::Recovery => 0.5,
-            Self::Unknown => 0.5,
+            Self::BullUncertain => 1.0,
+            Self::BearMild => 1.0,
+            Self::BearVolatile => 1.0,
+            Self::Crisis => 1.0,
+            Self::Recovery => 1.0,
+            Self::Unknown => 1.0,
         }
     }
 
@@ -307,9 +308,10 @@ mod tests {
 
     #[test]
     fn test_regime_multiplier() {
+        // all_on: every regime uses 1.0 (backtest validated 2026-02-25)
         assert_eq!(MarketRegime::BullCalm.position_size_multiplier(), 1.0);
-        assert_eq!(MarketRegime::Crisis.position_size_multiplier(), 0.0);
-        assert!(MarketRegime::BearVolatile.position_size_multiplier() < 0.5);
+        assert_eq!(MarketRegime::Crisis.position_size_multiplier(), 1.0);
+        assert_eq!(MarketRegime::BearVolatile.position_size_multiplier(), 1.0);
     }
 
     #[test]

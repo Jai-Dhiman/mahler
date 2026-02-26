@@ -1,4 +1,11 @@
-"""Prompt templates for Claude AI analysis - V2 Multi-Agent System."""
+"""Prompt templates for Claude AI analysis - V2 Multi-Agent System.
+
+Backtest validation (2026-02-25):
+- 19 years ORATS data, 3 tickers (SPY/QQQ/IWM), 8 regime configs, 5 LLM prompts
+- all_on regime outperforms selective: SPY 167.9%, QQQ 144.6%, IWM 64.7%
+- Conservative prompt is the only value-adding AI filter (+3.9% to +23.4% WR delta)
+- Agent pipeline runs in shadow mode (decisions logged, not gating execution)
+"""
 
 # =============================================================================
 # ReAct Reasoning Format

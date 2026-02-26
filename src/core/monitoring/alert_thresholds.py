@@ -36,18 +36,18 @@ class PerformanceThresholds:
     - Max Drawdown: 4.35% (optimal), 4.10% (baseline)
     """
 
-    # Win rate thresholds
-    expected_win_rate: float = 70.0  # Backtest baseline %
+    # Win rate thresholds (lowered for multi-ticker including IWM)
+    expected_win_rate: float = 65.0  # Backtest baseline %
     win_rate_warning_threshold: float = 60.0  # Alert if rolling win rate drops below
     win_rate_lookback_trades: int = 20  # Number of recent trades to evaluate
 
-    # Profit factor thresholds
-    expected_profit_factor: float = 6.0  # Backtest optimal
+    # Profit factor thresholds (lowered for multi-ticker aggregate)
+    expected_profit_factor: float = 4.0  # Backtest aggregate
     profit_factor_warning_threshold: float = 2.0  # Alert if drops below
     profit_factor_lookback_trades: int = 20
 
     # Drawdown thresholds
-    backtest_max_drawdown: float = 4.35  # Backtest optimal max DD %
+    backtest_max_drawdown: float = 5.0  # Backtest max DD % (raised for multi-ticker)
     drawdown_warning_threshold: float = 5.0  # Alert at this level
     drawdown_critical_threshold: float = 10.0  # Critical alert level
 
