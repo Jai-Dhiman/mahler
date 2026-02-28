@@ -1417,6 +1417,191 @@ class DiscordClient:
             embeds=[embed],
         )
 
+    async def send_scan_summary(
+        self,
+        scan_time: str,
+        underlyings_scanned: int,
+        opportunities_found: int,
+        opportunities_filtered: int,
+        skip_reasons: dict,
+        market_context: dict,
+        trades_placed: int,
+        underlying_details: dict | None = None,
+        agent_shadow_stats: dict | None = None,
+        scan_timing: dict | None = None,
+        errors: dict | None = None,
+    ) -> str:
+        """Send scan summary notification. Always called at end of morning scan.
+
+        Adapts title/color based on whether trades were placed.
+        """
+        vix = market_context.get("vix", 0)
+
+        if trades_placed > 0:
+            color = 0x57F287  # Green
+            title = f"Morning Scan Complete - {trades_placed} Trade{'s' if trades_placed != 1 else ''} Placed"
+            description = (
+                f"Found {opportunities_found} opportunities, "
+                f"{opportunities_filtered} passed filters, "
+                f"{trades_placed} approved and placed."
+            )
+        else:
+            # Same VIX-based coloring as old no-trade notification
+            if vix >= 40:
+                color = 0xED4245  # Red
+            elif vix >= 30:
+                color = 0xF97316  # Orange
+            else:
+                color = 0x5865F2  # Blurple
+
+            if opportunities_found == 0:
+                title = f"No Trades - {scan_time.title()} Scan"
+                description = (
+                    f"Scanned {underlyings_scanned} underlyings but found no opportunities "
+                    "that passed initial screening criteria."
+                )
+            elif opportunities_filtered == 0:
+                title = f"No Trades - {scan_time.title()} Scan"
+                description = (
+                    f"Found {opportunities_found} opportunities across {underlyings_scanned} underlyings, "
+                    "but none passed the screening filters."
+                )
+            else:
+                title = f"No Trades - {scan_time.title()} Scan"
+                description = (
+                    f"Found {opportunities_found} opportunities, {opportunities_filtered} passed filters, "
+                    "but none were approved."
+                )
+
+        fields = []
+
+        # Market context
+        fields.append({
+            "name": "VIX",
+            "value": f"{vix:.1f}" if vix else "N/A",
+            "inline": True,
+        })
+
+        regime = market_context.get("regime", "unknown")
+        if regime:
+            regime_display = regime.replace("_", " ").title()
+            fields.append({
+                "name": "Market Regime",
+                "value": regime_display,
+                "inline": True,
+            })
+
+        combined_mult = market_context.get("combined_multiplier", 1.0)
+        if combined_mult < 1.0:
+            fields.append({
+                "name": "Size Multiplier",
+                "value": f"{combined_mult:.0%}",
+                "inline": True,
+            })
+
+        iv_percentiles = market_context.get("iv_percentile", {})
+        if iv_percentiles:
+            iv_text = " | ".join(f"{sym}: {pct:.0f}%" for sym, pct in iv_percentiles.items())
+            fields.append({
+                "name": "IV Percentile",
+                "value": iv_text,
+                "inline": False,
+            })
+
+        # Skip reasons
+        if skip_reasons:
+            reasons_text = "\n".join(
+                f"- {reason.replace('_', ' ').title()}: {count}"
+                for reason, count in skip_reasons.items()
+            )
+            fields.append({
+                "name": "Skip Reasons",
+                "value": reasons_text,
+                "inline": False,
+            })
+
+        # Agent shadow decisions
+        if agent_shadow_stats:
+            approves = agent_shadow_stats.get("approve", 0)
+            skips = agent_shadow_stats.get("skip", 0)
+            fields.append({
+                "name": "Agent Decisions (shadow)",
+                "value": f"Would approve: {approves} | Would skip: {skips}",
+                "inline": False,
+            })
+
+        # Errors
+        if errors:
+            errors_text = "\n".join(f"- {err}: {count}" for err, count in errors.items())
+            fields.append({
+                "name": "Errors",
+                "value": errors_text,
+                "inline": False,
+            })
+
+        # Timing
+        if scan_timing:
+            total = scan_timing.get("total_seconds", 0)
+            per_underlying = scan_timing.get("per_underlying", {})
+            agent_avg = scan_timing.get("agent_avg_seconds")
+
+            timing_parts = [f"Total: {total:.0f}s"]
+            if per_underlying:
+                per_parts = " | ".join(f"{sym}: {secs:.0f}s" for sym, secs in per_underlying.items())
+                timing_parts.append(per_parts)
+            if agent_avg is not None:
+                timing_parts.append(f"Agent pipeline: avg {agent_avg:.0f}s")
+
+            fields.append({
+                "name": "Timing",
+                "value": "\n".join(timing_parts),
+                "inline": False,
+            })
+
+        # Per-underlying details
+        if underlying_details:
+            underlying_text = []
+            for sym, details in underlying_details.items():
+                found = details.get("found", 0)
+                passed = details.get("passed", 0)
+                reason = details.get("reason", "")
+                if found == 0:
+                    underlying_text.append(f"**{sym}**: No opportunities")
+                elif reason:
+                    underlying_text.append(f"**{sym}**: {found} found, {passed} passed - {reason}")
+                else:
+                    underlying_text.append(f"**{sym}**: {found} found, {passed} passed")
+
+            if underlying_text:
+                fields.append({
+                    "name": "Per-Underlying",
+                    "value": "\n".join(underlying_text[:5]),
+                    "inline": False,
+                })
+
+        embed = {
+            "title": title,
+            "description": description,
+            "color": color,
+            "fields": fields,
+            "footer": {
+                "text": "No action required - market conditions or filters prevented trades"
+                if trades_placed == 0
+                else f"Scan complete. {trades_placed} order(s) placed.",
+            },
+        }
+
+        content_title = (
+            f"**{scan_time.title()} Scan Complete - {trades_placed} Trade{'s' if trades_placed != 1 else ''} Placed**"
+            if trades_placed > 0
+            else f"**{scan_time.title()} Scan Complete - No Viable Trades**"
+        )
+
+        return await self.send_message(
+            content=content_title,
+            embeds=[embed],
+        )
+
     async def send_strategy_recommendation(
         self,
         title: str,
