@@ -1165,25 +1165,41 @@ async def _run_morning_scan(env):
     except Exception as e:
         print(f"Error saving screening results: {e}")
 
-    # Send "no trade" notification if no trades were approved
-    if recommendations_sent == 0:
-        try:
-            market_context_for_notification = {
-                "vix": current_vix,
-                "iv_percentile": iv_percentiles,
-                "regime": regime_result.get("regime") if regime_result else None,
-                "combined_multiplier": combined_size_multiplier,
-            }
+    # Always send scan summary
+    try:
+        market_context_for_notification = {
+            "vix": current_vix,
+            "iv_percentile": iv_percentiles,
+            "regime": regime_result.get("regime") if regime_result else None,
+            "combined_multiplier": combined_size_multiplier,
+        }
 
-            await discord.send_no_trade_notification(
-                scan_time="morning",
-                underlyings_scanned=screening_stats["total_underlyings_scanned"],
-                opportunities_found=screening_stats["opportunities_found"],
-                opportunities_filtered=screening_stats["opportunities_passed_filters"],
-                skip_reasons=skip_reasons,
-                market_context=market_context_for_notification,
-                underlying_details=underlying_results,
-            )
-            print("Sent no-trade notification")
-        except Exception as e:
-            print(f"Error sending no-trade notification: {e}")
+        scan_timing = {
+            "total_seconds": time.time() - scan_start_time,
+            "per_underlying": {
+                sym: details.get("scan_seconds", 0)
+                for sym, details in underlying_results.items()
+            },
+            "agent_avg_seconds": (
+                sum(agent_pipeline_times) / len(agent_pipeline_times)
+                if agent_pipeline_times
+                else None
+            ),
+        }
+
+        await discord.send_scan_summary(
+            scan_time="morning",
+            underlyings_scanned=screening_stats["total_underlyings_scanned"],
+            opportunities_found=screening_stats["opportunities_found"],
+            opportunities_filtered=screening_stats["opportunities_passed_filters"],
+            skip_reasons=skip_reasons,
+            market_context=market_context_for_notification,
+            trades_placed=recommendations_sent,
+            underlying_details=underlying_results,
+            agent_shadow_stats=agent_shadow_stats if any(agent_shadow_stats.values()) else None,
+            scan_timing=scan_timing,
+            errors=scan_errors if scan_errors else None,
+        )
+        print(f"Sent scan summary (trades_placed={recommendations_sent})")
+    except Exception as e:
+        print(f"Error sending scan summary: {e}")
