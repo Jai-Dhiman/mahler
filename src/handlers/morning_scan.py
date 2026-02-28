@@ -7,6 +7,7 @@ Timing: Moved from 9:35 AM to 10:00 AM to avoid the first 30 minutes
 when spreads are wide and quotes are stale.
 """
 
+import time
 from datetime import datetime, timedelta
 
 from core import http
@@ -340,6 +341,7 @@ async def handle_morning_scan(env):
 
 async def _run_morning_scan(env):
     """Internal morning scan logic."""
+    scan_start_time = time.time()
 
     # Initialize clients
     db = D1Client(env.MAHLER_DB)
@@ -601,12 +603,16 @@ async def _run_morning_scan(env):
     skip_reasons: dict[str, int] = {}
     underlying_results: dict[str, dict] = {}
     iv_percentiles: dict[str, float] = {}
+    agent_shadow_stats: dict[str, int] = {"approve": 0, "skip": 0}
+    scan_errors: dict[str, int] = {}
+    agent_pipeline_times: list[float] = []
 
     # Scan each underlying
     for symbol in UNDERLYINGS:
         screening_stats["total_underlyings_scanned"] += 1
         underlying_results[symbol] = {"found": 0, "passed": 0, "reason": ""}
 
+        symbol_start = time.time()
         try:
             print(f"Scanning {symbol}...")
 
@@ -757,6 +763,9 @@ async def _run_morning_scan(env):
             skip_reasons["error"] = skip_reasons.get("error", 0) + 1
             await circuit_breaker.check_api_errors()
 
+        # Track per-underlying timing
+        underlying_results[symbol]["scan_seconds"] = time.time() - symbol_start
+
     # Sort all opportunities by score
     all_opportunities.sort(key=lambda x: x[0].score, reverse=True)
     print(f"[DEBUG] Total opportunities found across all symbols: {len(all_opportunities)}")
@@ -815,8 +824,12 @@ async def _run_morning_scan(env):
             )
 
             if size_result.contracts == 0:
-                print(f"Position size is 0 for {spread.underlying}: {size_result.reason}")
-                skip_reasons["position_size_zero"] = skip_reasons.get("position_size_zero", 0) + 1
+                reason_key = size_result.reason or "Position size zero"
+                # Clean up "Blocked by " prefix for readability
+                if reason_key.startswith("Blocked by "):
+                    reason_key = reason_key[len("Blocked by "):]
+                print(f"Position size is 0 for {spread.underlying}: {reason_key}")
+                skip_reasons[reason_key] = skip_reasons.get(reason_key, 0) + 1
                 continue
 
             # Apply graduated risk multiplier
@@ -856,6 +869,7 @@ async def _run_morning_scan(env):
             # Get portfolio Greeks if available
             portfolio_greeks = None  # TODO: Calculate from positions if needed
 
+            agent_start = time.time()
             v2_result, similar_trades = await _run_v2_analysis(
                 orchestrator=orchestrator,
                 spread=spread,
@@ -876,6 +890,7 @@ async def _run_morning_scan(env):
                 episodic_store=episodic_store,
                 memory_retriever=memory_retriever,
             )
+            agent_pipeline_times.append(time.time() - agent_start)
 
             print(f"Pipeline complete: recommendation={v2_result.recommendation}, confidence={v2_result.confidence:.0%}")
 
@@ -939,6 +954,10 @@ async def _run_morning_scan(env):
             shadow_thesis = (fm_data.get("final_thesis") or v2_result.thesis or "")[:500]
 
             print(f"Agent shadow: {shadow_decision} ({shadow_confidence:.0%}) for {spread.underlying}")
+            if shadow_decision == "approve":
+                agent_shadow_stats["approve"] += 1
+            else:
+                agent_shadow_stats["skip"] += 1
 
             # Notify Discord about shadow rejections (for monitoring)
             if v2_result.recommendation == "skip" or analysis.confidence == Confidence.LOW:
@@ -1093,15 +1112,18 @@ async def _run_morning_scan(env):
 
             except Exception as e:
                 print(f"Error placing order: {e}")
+                scan_errors["Order placement"] = scan_errors.get("Order placement", 0) + 1
 
         except ClaudeRateLimitError as e:
             print(f"Claude API rate limit error: {e}")
             await discord.send_api_token_alert("Claude", str(e))
+            scan_errors["Claude rate limit"] = scan_errors.get("Claude rate limit", 0) + 1
             # Continue processing other opportunities
         except Exception as e:
             import traceback
             print(f"Error processing opportunity: {e}")
             print(traceback.format_exc())
+            scan_errors["Pipeline error"] = scan_errors.get("Pipeline error", 0) + 1
 
     print(f"Morning scan complete. Sent {recommendations_sent} recommendations.")
 
