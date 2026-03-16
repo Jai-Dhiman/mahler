@@ -81,6 +81,32 @@ async def handle_afternoon_scan(env):
     try:
         await _run_afternoon_scan(env)
         job_success = True
+    except Exception as e:
+        import traceback
+        error_msg = f"{type(e).__name__}: {e}"
+        tb = traceback.format_exc()
+        print(f"Afternoon scan failed: {error_msg}\n{tb}")
+        try:
+            from core.notifications.discord import DiscordClient
+            discord = DiscordClient(
+                bot_token=env.DISCORD_BOT_TOKEN,
+                public_key=env.DISCORD_PUBLIC_KEY,
+                channel_id=env.DISCORD_CHANNEL_ID,
+            )
+            await discord.send_message(
+                content="**Afternoon Scan FAILED**",
+                embeds=[{
+                    "title": "Scan Error",
+                    "color": 0xED4245,
+                    "description": f"Afternoon scan crashed.\n\n**Error:** `{error_msg}`",
+                    "fields": [
+                        {"name": "Traceback (last 500 chars)", "value": f"```\n{tb[-500:]}\n```"},
+                    ],
+                }],
+            )
+        except Exception as notify_err:
+            print(f"Failed to send error notification: {notify_err}")
+        raise
     finally:
         await http.ping_heartbeat(heartbeat_url, "afternoon_scan", success=job_success)
 

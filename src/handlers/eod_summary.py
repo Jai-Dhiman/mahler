@@ -453,6 +453,32 @@ async def handle_eod_summary(env):
     try:
         await _run_eod_summary(env)
         job_success = True
+    except Exception as e:
+        import traceback
+        error_msg = f"{type(e).__name__}: {e}"
+        tb = traceback.format_exc()
+        print(f"EOD summary failed: {error_msg}\n{tb}")
+        try:
+            from core.notifications.discord import DiscordClient
+            discord = DiscordClient(
+                bot_token=env.DISCORD_BOT_TOKEN,
+                public_key=env.DISCORD_PUBLIC_KEY,
+                channel_id=env.DISCORD_CHANNEL_ID,
+            )
+            await discord.send_message(
+                content="**EOD Summary FAILED**",
+                embeds=[{
+                    "title": "Summary Error",
+                    "color": 0xED4245,
+                    "description": f"EOD summary crashed.\n\n**Error:** `{error_msg}`",
+                    "fields": [
+                        {"name": "Traceback (last 500 chars)", "value": f"```\n{tb[-500:]}\n```"},
+                    ],
+                }],
+            )
+        except Exception as notify_err:
+            print(f"Failed to send error notification: {notify_err}")
+        raise
     finally:
         await http.ping_heartbeat(heartbeat_url, "eod_summary", success=job_success)
 

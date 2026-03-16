@@ -334,6 +334,32 @@ async def handle_morning_scan(env):
     try:
         await _run_morning_scan(env)
         job_success = True
+    except Exception as e:
+        # Send error notification to Discord so failures are never silent
+        import traceback
+        error_msg = f"{type(e).__name__}: {e}"
+        tb = traceback.format_exc()
+        print(f"Morning scan failed: {error_msg}\n{tb}")
+        try:
+            discord = DiscordClient(
+                bot_token=env.DISCORD_BOT_TOKEN,
+                public_key=env.DISCORD_PUBLIC_KEY,
+                channel_id=env.DISCORD_CHANNEL_ID,
+            )
+            await discord.send_message(
+                content="**Morning Scan FAILED**",
+                embeds=[{
+                    "title": "Scan Error",
+                    "color": 0xED4245,  # Red
+                    "description": f"The morning scan crashed and did not complete.\n\n**Error:** `{error_msg}`",
+                    "fields": [
+                        {"name": "Traceback (last 500 chars)", "value": f"```\n{tb[-500:]}\n```"},
+                    ],
+                }],
+            )
+        except Exception as notify_err:
+            print(f"Failed to send error notification: {notify_err}")
+        raise
     finally:
         # Ping heartbeat with success/failure
         await http.ping_heartbeat(heartbeat_url, "morning_scan", success=job_success)
