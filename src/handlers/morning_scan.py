@@ -611,7 +611,7 @@ async def _run_morning_scan(env):
 
     # Combined size multiplier (risk + regime)
     # Backtest validated: all_on regime (1.0 multipliers) outperforms selective configs
-    is_paper = env.get("ENVIRONMENT", "paper") == "paper"
+    is_paper = getattr(env, "ENVIRONMENT", "paper") == "paper"
     combined_size_multiplier = min(risk_state.size_multiplier, regime_multiplier)
     if combined_size_multiplier < 1.0:
         print(f"Size multiplier: {combined_size_multiplier:.2f} (risk: {risk_state.size_multiplier:.2f}, regime: {regime_multiplier:.2f})")
