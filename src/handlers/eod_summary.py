@@ -17,7 +17,7 @@ from core.db.d1 import D1Client
 from core.db.kv import KVClient
 from core.db.r2 import R2Client
 from core.notifications.discord import DiscordClient
-from core.types import Position, TradeStatus
+from core.types import Position, SpreadType, TradeStatus
 
 # V2 Reflection Engine imports
 from core.reflection import (
@@ -151,6 +151,120 @@ async def reconcile_positions(
             })
 
     return discrepancies, broker_positions_list, db_positions_list
+
+
+async def auto_reconcile_broker_positions(
+    discrepancies: list[dict],
+    db: D1Client,
+    discord: DiscordClient,
+) -> int:
+    """Auto-create DB records for positions that exist at broker but not in DB.
+
+    Groups broker-only legs into spreads (short + long with same underlying
+    and expiration) and creates trade records so exit management can track them.
+
+    Returns:
+        Number of trades auto-reconciled.
+    """
+    # Filter to broker-only discrepancies
+    broker_only = [d for d in discrepancies if d["type"] == "broker_only"]
+    if not broker_only:
+        return 0
+
+    # Group legs by underlying + expiration
+    groups: dict[str, list[dict]] = {}
+    for d in broker_only:
+        details = d["details"]
+        key = f"{details['underlying']}:{details['expiration']}"
+        if key not in groups:
+            groups[key] = []
+        groups[key].append(details)
+
+    reconciled = 0
+    for group_key, legs in groups.items():
+        # Separate into short (negative qty) and long (positive qty) legs
+        short_legs = [l for l in legs if l["qty"] < 0]
+        long_legs = [l for l in legs if l["qty"] > 0]
+
+        if not short_legs or not long_legs:
+            print(f"Auto-reconcile: Cannot pair legs for {group_key} "
+                  f"(short={len(short_legs)}, long={len(long_legs)})")
+            continue
+
+        # Match short and long legs into spreads
+        # For credit spreads: short leg is closer to the money
+        for short_leg in short_legs:
+            # Find the matching long leg (same underlying, expiration, option type)
+            matching_long = None
+            for long_leg in long_legs:
+                if long_leg.get("option_type") == short_leg.get("option_type"):
+                    matching_long = long_leg
+                    break
+
+            if not matching_long:
+                print(f"Auto-reconcile: No matching long leg for {short_leg['underlying']} "
+                      f"${short_leg['strike']} short")
+                continue
+
+            # Remove matched long from pool
+            long_legs.remove(matching_long)
+
+            underlying = short_leg["underlying"]
+            expiration = short_leg["expiration"]
+            short_strike = short_leg["strike"]
+            long_strike = matching_long["strike"]
+            contracts = abs(short_leg["qty"])
+
+            # Determine spread type from option type and strike relationship
+            option_type = short_leg.get("option_type", "call")
+            if option_type == "put":
+                spread_type = SpreadType.BULL_PUT
+            else:
+                spread_type = SpreadType.BEAR_CALL
+
+            # Estimate credit from current market values (best we can do)
+            # For credit spreads, entry credit is unknown -- use 0 and note it
+            estimated_credit = 0.0
+
+            try:
+                trade_id = await db.create_trade(
+                    recommendation_id=None,
+                    underlying=underlying,
+                    spread_type=spread_type,
+                    short_strike=short_strike,
+                    long_strike=long_strike,
+                    expiration=expiration,
+                    entry_credit=estimated_credit,
+                    contracts=contracts,
+                    broker_order_id=None,
+                    status=TradeStatus.OPEN,
+                    agent_decision="auto_reconciled",
+                    agent_thesis=f"Auto-reconciled from broker position. Entry credit unknown.",
+                )
+
+                reconciled += 1
+                print(f"Auto-reconciled: {underlying} ${short_strike}/${long_strike} "
+                      f"exp {expiration} ({contracts} contracts) -> trade {trade_id}")
+
+            except Exception as e:
+                print(f"Error auto-reconciling {underlying} ${short_strike}/${long_strike}: {e}")
+
+    if reconciled > 0:
+        await discord.send_message(
+            content="**Auto-Reconciliation Complete**",
+            embeds=[{
+                "title": "Broker Positions Synced to DB",
+                "color": 0x57F287,  # Green
+                "description": (
+                    f"Created {reconciled} trade record(s) for positions found at "
+                    f"broker but missing from database.\n\n"
+                    f"**Note:** Entry credit is unknown for auto-reconciled trades. "
+                    f"Exit management (stop-loss, profit target) is now active."
+                ),
+            }],
+        )
+
+    return reconciled
 
 
 async def _run_weekly_optimization(
@@ -815,17 +929,38 @@ async def _run_eod_summary(env):
             for d in discrepancies:
                 print(f"  - {d['message']}")
 
-            await discord.send_reconciliation_alert(
-                discrepancies=discrepancies,
-                broker_positions=broker_positions_list,
-                db_positions=db_positions_list,
-            )
+            # Auto-reconcile: create DB records for broker-only positions
+            broker_only_count = sum(1 for d in discrepancies if d["type"] == "broker_only")
+            if broker_only_count > 0:
+                print(f"Attempting auto-reconciliation of {broker_only_count} broker-only positions...")
+                try:
+                    reconciled = await auto_reconcile_broker_positions(
+                        discrepancies=discrepancies,
+                        db=db,
+                        discord=discord,
+                    )
+                    if reconciled > 0:
+                        # Re-run reconciliation to check remaining discrepancies
+                        positions = await db.get_all_positions()
+                        discrepancies, broker_positions_list, db_positions_list = await reconcile_positions(
+                            alpaca, positions
+                        )
+                        print(f"Post-reconciliation: {len(discrepancies)} remaining discrepancies")
+                except Exception as e:
+                    print(f"Error during auto-reconciliation: {e}")
 
-            # Store reconciliation failure in KV for next day check
+            if discrepancies:
+                await discord.send_reconciliation_alert(
+                    discrepancies=discrepancies,
+                    broker_positions=broker_positions_list,
+                    db_positions=db_positions_list,
+                )
+
+            # Store reconciliation result in KV
             await kv.put_json(
                 f"reconciliation:{today}",
                 {
-                    "status": "failed",
+                    "status": "failed" if discrepancies else "auto_reconciled",
                     "discrepancy_count": len(discrepancies),
                     "discrepancies": discrepancies,
                     "acknowledged": False,
