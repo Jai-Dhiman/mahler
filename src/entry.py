@@ -1145,16 +1145,18 @@ async def on_scheduled(event, env, ctx):
         print(f"Cron triggered: {cron} at {datetime.now().isoformat()}")
 
         # Route based on cron pattern (using lazy imports to avoid startup CPU limit)
-        if cron == "0 15 * * MON-FRI":  # 10:00 AM ET (moved from 9:35 AM to avoid stale quotes)
+        # Times in UTC: EDT = UTC-4, EST = UTC-5
+        # Update both here AND wrangler.toml when DST changes
+        if cron == "0 14 * * MON-FRI":  # morning_scan: 10:00 AM ET
             handler = _import_handler("morning_scan")
             await handler(env)
-        elif cron == "0 17 * * MON-FRI":
+        elif cron == "0 16 * * MON-FRI":  # midday_check: 12:00 PM ET
             handler = _import_handler("midday_check")
             await handler(env)
-        elif cron == "30 20 * * MON-FRI":
+        elif cron == "30 19 * * MON-FRI":  # afternoon_scan: 3:30 PM ET
             handler = _import_handler("afternoon_scan")
             await handler(env)
-        elif cron == "15 21 * * MON-FRI":
+        elif cron == "15 20 * * MON-FRI":  # eod_summary: 4:15 PM ET
             handler = _import_handler("eod_summary")
             await handler(env)
         elif "*/5" in cron:

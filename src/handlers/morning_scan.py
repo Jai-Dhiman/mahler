@@ -1032,30 +1032,39 @@ async def _run_morning_scan(env):
             rec = await db.get_recommendation(rec_id)
 
             # V2: Place order directly (autonomous mode)
+            # Step 1: Build OCC symbols
+            exp_parts = spread.expiration.split("-")
+            exp_str = exp_parts[0][2:] + exp_parts[1] + exp_parts[2]
+            option_type = "P" if spread.spread_type == SpreadType.BULL_PUT else "C"
+            short_symbol = f"{spread.underlying}{exp_str}{option_type}{int(spread.short_strike * 1000):08d}"
+            long_symbol = f"{spread.underlying}{exp_str}{option_type}{int(spread.long_strike * 1000):08d}"
+
+            from core.broker.types import SpreadOrder
+            spread_order = SpreadOrder(
+                underlying=spread.underlying,
+                short_symbol=short_symbol,
+                long_symbol=long_symbol,
+                contracts=adjusted_contracts,
+                limit_price=spread.credit,
+            )
+
+            # Step 2: Place order at broker
+            order = None
             try:
-                # Build OCC symbols
-                exp_parts = spread.expiration.split("-")
-                exp_str = exp_parts[0][2:] + exp_parts[1] + exp_parts[2]
-                option_type = "P" if spread.spread_type == SpreadType.BULL_PUT else "C"
-                short_symbol = f"{spread.underlying}{exp_str}{option_type}{int(spread.short_strike * 1000):08d}"
-                long_symbol = f"{spread.underlying}{exp_str}{option_type}{int(spread.long_strike * 1000):08d}"
-
-                # Place order
-                from core.broker.types import SpreadOrder
-                spread_order = SpreadOrder(
-                    underlying=spread.underlying,
-                    short_symbol=short_symbol,
-                    long_symbol=long_symbol,
-                    contracts=adjusted_contracts,
-                    limit_price=spread.credit,
-                )
                 order = await alpaca.place_spread_order(spread_order)
+                print(f"Order placed at broker: {order.id}")
+            except Exception as e:
+                print(f"Error placing order at broker: {e}")
+                scan_errors["Order placement"] = scan_errors.get("Order placement", 0) + 1
 
-                # Update recommendation status
+            if order is None:
+                continue
+
+            # Step 3: Record trade in DB (order already placed -- must not lose track)
+            trade_id = None
+            try:
                 await db.update_recommendation_status(rec_id, RecommendationStatus.APPROVED)
 
-                # Create trade record with pending_fill status
-                # The position monitor will verify the order filled and update to 'open'
                 trade_id = await db.create_trade(
                     recommendation_id=rec_id,
                     underlying=spread.underlying,
@@ -1072,73 +1081,102 @@ async def _run_morning_scan(env):
                     agent_confidence=shadow_confidence,
                     agent_thesis=shadow_thesis,
                 )
+                print(f"Trade recorded in DB: {trade_id}, Order: {order.id}")
+            except Exception as e:
+                # CRITICAL: Order exists at broker but DB write failed.
+                # Cancel the order to prevent untracked positions.
+                import traceback
+                error_msg = f"{type(e).__name__}: {e}"
+                print(f"CRITICAL: DB write failed after order placed! Order: {order.id}, Error: {error_msg}")
+                print(traceback.format_exc())
+                scan_errors["DB write after order"] = scan_errors.get("DB write after order", 0) + 1
 
-                # Send autonomous notification (info-only, no buttons)
+                try:
+                    await alpaca.cancel_order(order.id)
+                    print(f"Cancelled orphaned order: {order.id}")
+                except Exception as cancel_err:
+                    print(f"FAILED to cancel orphaned order {order.id}: {cancel_err}")
+
+                await discord.send_message(
+                    content="**GHOST TRADE ALERT**",
+                    embeds=[{
+                        "title": "Order Placed But DB Write Failed",
+                        "color": 0xED4245,
+                        "description": (
+                            f"An order was placed at Alpaca but could not be recorded in the database. "
+                            f"Attempted to cancel the order.\n\n"
+                            f"**Order ID:** `{order.id}`\n"
+                            f"**Underlying:** {spread.underlying}\n"
+                            f"**Strikes:** ${spread.short_strike}/${spread.long_strike}\n"
+                            f"**Error:** `{error_msg}`"
+                        ),
+                    }],
+                )
+                continue
+
+            # Step 4: Notifications and memory (non-critical, errors don't affect trade)
+            try:
                 await discord.send_autonomous_notification(
                     rec=rec,
                     v2_confidence=v2_result.confidence,
                     v2_thesis=v2_result.thesis,
                     order_id=order.id,
                 )
-
-                recommendations_sent += 1
-                screening_stats["opportunities_approved"] += 1
-                print(f"Order placed (pending fill): {trade_id}, Order: {order.id}")
-
-                # Store episodic memory with trade ID
-                if episodic_store:
-                    try:
-                        memory_id = await _store_episodic_memory(
-                            episodic_store=episodic_store,
-                            trade_id=trade_id,
-                            spread=spread,
-                            result=v2_result,
-                            regime_result=regime_result,
-                            iv_metrics=iv_metrics,
-                            current_vix=current_vix,
-                        )
-                        print(f"Stored episodic memory: {memory_id}")
-                    except Exception as e:
-                        print(f"Error storing episodic memory: {e}")
-
-                # Store trajectory for learning
-                try:
-                    # Build three-perspective result if available
-                    three_persp_result = None
-                    if three_persp_manager and current_vix:
-                        three_persp_result = three_persp_manager.assess(
-                            spread=spread,
-                            account_equity=account.equity,
-                            current_positions=positions,
-                            current_vix=current_vix,
-                        )
-
-                    trajectory = TradeTrajectory.from_pipeline_result(
-                        underlying=spread.underlying,
-                        spread_type=spread.spread_type.value,
-                        short_strike=spread.short_strike,
-                        long_strike=spread.long_strike,
-                        expiration=spread.expiration,
-                        entry_credit=spread.credit,
-                        contracts=adjusted_contracts,
-                        analyst_messages=v2_result.analyst_messages,
-                        debate_messages=v2_result.debate_messages,
-                        synthesis_message=v2_result.synthesis_message,
-                        decision_output=v2_result.synthesis_message.structured_data if v2_result.synthesis_message else None,
-                        three_perspective=three_persp_result,
-                        market_regime=regime_result.get("regime") if regime_result else None,
-                        iv_rank=iv_metrics.iv_rank if iv_metrics else None,
-                        vix_at_entry=current_vix,
-                        trade_id=trade_id,
-                    )
-                    trajectory_id = await trajectory_store.store_trajectory(trajectory)
-                    print(f"Stored trajectory: {trajectory_id}")
-                except Exception as e:
-                    print(f"Error storing trajectory: {e}")
-
             except Exception as e:
-                print(f"Error placing order: {e}")
-                scan_errors["Order placement"] = scan_errors.get("Order placement", 0) + 1
+                print(f"Error sending trade notification: {e}")
+
+            recommendations_sent += 1
+            screening_stats["opportunities_approved"] += 1
+
+            # Store episodic memory with trade ID
+            if episodic_store:
+                try:
+                    memory_id = await _store_episodic_memory(
+                        episodic_store=episodic_store,
+                        trade_id=trade_id,
+                        spread=spread,
+                        result=v2_result,
+                        regime_result=regime_result,
+                        iv_metrics=iv_metrics,
+                        current_vix=current_vix,
+                    )
+                    print(f"Stored episodic memory: {memory_id}")
+                except Exception as e:
+                    print(f"Error storing episodic memory: {e}")
+
+            # Store trajectory for learning
+            try:
+                three_persp_result = None
+                if three_persp_manager and current_vix:
+                    three_persp_result = three_persp_manager.assess(
+                        spread=spread,
+                        account_equity=account.equity,
+                        current_positions=positions,
+                        current_vix=current_vix,
+                    )
+
+                trajectory = TradeTrajectory.from_pipeline_result(
+                    underlying=spread.underlying,
+                    spread_type=spread.spread_type.value,
+                    short_strike=spread.short_strike,
+                    long_strike=spread.long_strike,
+                    expiration=spread.expiration,
+                    entry_credit=spread.credit,
+                    contracts=adjusted_contracts,
+                    analyst_messages=v2_result.analyst_messages,
+                    debate_messages=v2_result.debate_messages,
+                    synthesis_message=v2_result.synthesis_message,
+                    decision_output=v2_result.synthesis_message.structured_data if v2_result.synthesis_message else None,
+                    three_perspective=three_persp_result,
+                    market_regime=regime_result.get("regime") if regime_result else None,
+                    iv_rank=iv_metrics.iv_rank if iv_metrics else None,
+                    vix_at_entry=current_vix,
+                    trade_id=trade_id,
+                )
+                trajectory_id = await trajectory_store.store_trajectory(trajectory)
+                print(f"Stored trajectory: {trajectory_id}")
+            except Exception as e:
+                print(f"Error storing trajectory: {e}")
 
         except ClaudeRateLimitError as e:
             print(f"Claude API rate limit error: {e}")

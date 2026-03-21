@@ -266,53 +266,76 @@ async def _run_afternoon_scan(env):
                     rec = await db.get_recommendation(rec_id)
 
                     # V2: Place order directly (autonomous mode)
+                    # Build OCC symbols
+                    exp_parts = spread.expiration.split("-")
+                    exp_str = exp_parts[0][2:] + exp_parts[1] + exp_parts[2]
+                    option_type = "P" if spread.spread_type == SpreadType.BULL_PUT else "C"
+                    short_symbol = f"{spread.underlying}{exp_str}{option_type}{int(spread.short_strike * 1000):08d}"
+                    long_symbol = f"{spread.underlying}{exp_str}{option_type}{int(spread.long_strike * 1000):08d}"
+
+                    spread_order = SpreadOrder(
+                        underlying=spread.underlying,
+                        short_symbol=short_symbol,
+                        long_symbol=long_symbol,
+                        contracts=size_result.contracts,
+                        limit_price=spread.credit,
+                    )
+
+                    # Place order at broker
+                    order = None
                     try:
-                        # Build OCC symbols
-                        exp_parts = spread.expiration.split("-")
-                        exp_str = exp_parts[0][2:] + exp_parts[1] + exp_parts[2]
-                        option_type = "P" if spread.spread_type == SpreadType.BULL_PUT else "C"
-                        short_symbol = f"{spread.underlying}{exp_str}{option_type}{int(spread.short_strike * 1000):08d}"
-                        long_symbol = f"{spread.underlying}{exp_str}{option_type}{int(spread.long_strike * 1000):08d}"
-
-                        # Place order
-                        spread_order = SpreadOrder(
-                            underlying=spread.underlying,
-                            short_symbol=short_symbol,
-                            long_symbol=long_symbol,
-                            contracts=size_result.contracts,
-                            limit_price=spread.credit,
-                        )
                         order = await alpaca.place_spread_order(spread_order)
-
-                        # Update recommendation status
-                        await db.update_recommendation_status(rec_id, RecommendationStatus.APPROVED)
-
-                        # Create trade record with pending_fill status
-                        trade_id = await db.create_trade(
-                            recommendation_id=rec_id,
-                            underlying=spread.underlying,
-                            spread_type=spread.spread_type,
-                            short_strike=spread.short_strike,
-                            long_strike=spread.long_strike,
-                            expiration=spread.expiration,
-                            entry_credit=spread.credit,
-                            contracts=size_result.contracts,
-                            broker_order_id=order.id,
-                            status=TradeStatus.PENDING_FILL,
-                        )
-
-                        # Send autonomous notification (info-only, no buttons)
-                        await discord.send_autonomous_notification(
-                            rec=rec,
-                            v2_confidence=result.confidence,
-                            v2_thesis=result.thesis,
-                            order_id=order.id,
-                        )
-
-                        print(f"Afternoon order placed (pending fill): {trade_id}, Order: {order.id}")
-
+                        print(f"Afternoon order placed at broker: {order.id}")
                     except Exception as e:
-                        print(f"Error placing afternoon order: {e}")
+                        print(f"Error placing afternoon order at broker: {e}")
+
+                    if order is not None:
+                        # Record in DB (order already placed -- must not lose track)
+                        try:
+                            await db.update_recommendation_status(rec_id, RecommendationStatus.APPROVED)
+                            trade_id = await db.create_trade(
+                                recommendation_id=rec_id,
+                                underlying=spread.underlying,
+                                spread_type=spread.spread_type,
+                                short_strike=spread.short_strike,
+                                long_strike=spread.long_strike,
+                                expiration=spread.expiration,
+                                entry_credit=spread.credit,
+                                contracts=size_result.contracts,
+                                broker_order_id=order.id,
+                                status=TradeStatus.PENDING_FILL,
+                            )
+                            print(f"Afternoon trade recorded: {trade_id}, Order: {order.id}")
+
+                            # Notification (non-critical)
+                            try:
+                                await discord.send_autonomous_notification(
+                                    rec=rec,
+                                    v2_confidence=result.confidence,
+                                    v2_thesis=result.thesis,
+                                    order_id=order.id,
+                                )
+                            except Exception as e:
+                                print(f"Error sending afternoon notification: {e}")
+
+                        except Exception as e:
+                            import traceback
+                            error_msg = f"{type(e).__name__}: {e}"
+                            print(f"CRITICAL: DB write failed after afternoon order! Order: {order.id}, Error: {error_msg}")
+                            print(traceback.format_exc())
+                            try:
+                                await alpaca.cancel_order(order.id)
+                                print(f"Cancelled orphaned afternoon order: {order.id}")
+                            except Exception as cancel_err:
+                                print(f"FAILED to cancel orphaned order {order.id}: {cancel_err}")
+                            await discord.send_message(
+                                content="**GHOST TRADE ALERT**",
+                                embeds=[{
+                                    "title": "Afternoon Order Placed But DB Write Failed",
+                                    "color": 0xED4245,
+                                    "description": f"**Order ID:** `{order.id}`\n**Underlying:** {spread.underlying}\n**Error:** `{error_msg}`",
+                                }],
+                            )
 
             except ClaudeRateLimitError as e:
                 print(f"Claude API rate limit error: {e}")
