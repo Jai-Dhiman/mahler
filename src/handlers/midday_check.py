@@ -215,37 +215,47 @@ async def _run_midday_check(env):
 
         if size_result.contracts > 0:
             try:
-                # Build agent context for V2 analysis
-                context = build_agent_context(
-                    spread=spread,
-                    underlying_price=underlying_price,
-                    iv_metrics=iv_metrics,
-                    term_structure=None,
-                    mean_reversion=None,
-                    regime=None,
-                    regime_probability=None,
-                    current_vix=None,
-                    vix_3m=None,
-                    price_bars=None,
-                    positions=positions,
-                    portfolio_greeks=None,
-                    account_equity=account.equity,
-                    buying_power=account.buying_power,
-                    daily_pnl=0,
-                    weekly_pnl=0,
-                    playbook_rules=playbook_rules,
-                    similar_trades=[],
-                    scan_type="midday",
-                )
+                # Agent pipeline controlled by env var
+                agent_enabled = getattr(env, "AGENT_PIPELINE", "disabled") == "enabled"
 
-                # Run V2 multi-agent analysis
-                result = await orchestrator.run_pipeline(context)
-                confidence = _map_result_to_confidence(result)
+                if agent_enabled:
+                    context = build_agent_context(
+                        spread=spread,
+                        underlying_price=underlying_price,
+                        iv_metrics=iv_metrics,
+                        term_structure=None,
+                        mean_reversion=None,
+                        regime=None,
+                        regime_probability=None,
+                        current_vix=None,
+                        vix_3m=None,
+                        price_bars=None,
+                        positions=positions,
+                        portfolio_greeks=None,
+                        account_equity=account.equity,
+                        buying_power=account.buying_power,
+                        daily_pnl=0,
+                        weekly_pnl=0,
+                        playbook_rules=playbook_rules,
+                        similar_trades=[],
+                        scan_type="midday",
+                    )
 
-                # Skip if recommendation is "skip" or low confidence
-                if result.recommendation == "skip" or confidence == Confidence.LOW:
-                    print(f"Skipping trade: recommendation={result.recommendation}, confidence={result.confidence:.0%}")
+                    result = await orchestrator.run_pipeline(context)
+                    confidence = _map_result_to_confidence(result)
+
+                    if result.recommendation == "skip" or confidence == Confidence.LOW:
+                        print(f"Skipping trade: recommendation={result.recommendation}, confidence={result.confidence:.0%}")
+                        rec_thesis = None  # Signal to skip
+                    else:
+                        rec_thesis = result.thesis
+                    rec_confidence = confidence
                 else:
+                    print(f"Agent pipeline disabled, proceeding with algorithmic midday trade")
+                    rec_thesis = f"Algorithmic midday trade: {spread.underlying} {spread.spread_type.value}"
+                    rec_confidence = Confidence.MEDIUM
+
+                if rec_thesis is not None:
                     rec_id = await db.create_recommendation(
                         underlying=spread.underlying,
                         spread_type=spread.spread_type,
@@ -262,15 +272,14 @@ async def _run_midday_check(env):
                         theta=(spread.short_contract.greeks.theta
                               if spread.short_contract and spread.short_contract.greeks
                               else None),
-                        thesis=result.thesis,
-                        confidence=confidence,
+                        thesis=rec_thesis,
+                        confidence=rec_confidence,
                         suggested_contracts=size_result.contracts,
                         analysis_price=spread.credit,
                     )
 
                     rec = await db.get_recommendation(rec_id)
 
-                    # V2: Place order directly (autonomous mode)
                     # Build OCC symbols
                     exp_parts = spread.expiration.split("-")
                     exp_str = exp_parts[0][2:] + exp_parts[1] + exp_parts[2]
@@ -312,12 +321,11 @@ async def _run_midday_check(env):
                             )
                             print(f"Midday trade recorded: {trade_id}, Order: {order.id}")
 
-                            # Notification (non-critical)
                             try:
                                 await discord.send_autonomous_notification(
                                     rec=rec,
-                                    v2_confidence=result.confidence,
-                                    v2_thesis=result.thesis,
+                                    v2_confidence=rec_confidence.value if hasattr(rec_confidence, 'value') else 0.5,
+                                    v2_thesis=rec_thesis,
                                     order_id=order.id,
                                 )
                             except Exception as e:
