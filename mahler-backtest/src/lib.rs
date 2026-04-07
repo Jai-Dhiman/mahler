@@ -18,3 +18,4 @@ pub use regime::{MarketRegime, RegimeClassifier};
 pub use metrics::{PerformanceMetrics, MetricsCalculator};
 
 pub mod engine_core;
+pub mod strategy;
