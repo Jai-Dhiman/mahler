@@ -6,9 +6,11 @@
 //! - Circuit breakers (daily/weekly loss limits, drawdown, VIX)
 
 pub mod circuit_breakers;
+pub mod gate;
 pub mod portfolio_greeks;
 pub mod position_sizer;
 
 pub use circuit_breakers::{CircuitBreaker, CircuitBreakerConfig, CircuitBreakerStatus};
+pub use gate::{DefaultRiskGate, RiskGate};
 pub use portfolio_greeks::{PortfolioGreeks, PortfolioGreeksConfig};
 pub use position_sizer::{PortfolioState, PositionSizer, PositionSizerConfig, SizingResult};

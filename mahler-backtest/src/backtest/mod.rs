@@ -16,5 +16,6 @@ pub use commission::{Commission, CommissionModel};
 pub use engine::{BacktestConfig, BacktestEngine, BacktestResult, EquityPoint};
 pub use slippage::{Slippage, SlippageModel};
 pub use trade::{
-    ExitReason, Position, PositionLeg, PositionStatus, SpreadType, Trade, TradeDirection,
+    CreditSpreadBuilder, ExitReason, Position, PositionLeg, PositionStatus, SpreadType, Trade,
+    TradeDirection,
 };

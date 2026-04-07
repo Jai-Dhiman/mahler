@@ -27,10 +27,17 @@ use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 use mahler_backtest::{
-    BacktestConfig, BacktestEngine, DataIntegrityValidator, GreeksValidator, MetricsCalculator,
+    DataIntegrityValidator, GreeksValidator, MetricsCalculator,
     ParameterGrid, SlippageModel, WalkForwardOptimizer,
 };
-use mahler_backtest::data::DataLoader;
+use mahler_backtest::backtest::CommissionModel;
+use mahler_backtest::broker::backtest::SimulatedBroker;
+use mahler_backtest::data::{DataLoader, HistoricalDataSource};
+use mahler_backtest::engine_core::engine::Engine;
+use mahler_backtest::risk::circuit_breakers::CircuitBreakerConfig;
+use mahler_backtest::risk::gate::DefaultRiskGate;
+use mahler_backtest::strategy::put_spread::{PutCreditSpreadStrategy, PutSpreadConfig};
+use mahler_backtest::analytics::SpreadScreenerConfig;
 use mahler_backtest::walkforward::periods::WalkForwardPeriodsConfig;
 
 #[derive(Parser)]
@@ -306,28 +313,38 @@ fn run_backtest(
         }
     };
 
-    let config = BacktestConfig {
-        initial_equity: equity.into(),
+    let initial_equity = rust_decimal::Decimal::from(equity);
+
+    let strategy_config = PutSpreadConfig {
         profit_target_pct: profit_target,
         stop_loss_pct: stop_loss,
-        min_dte,
-        max_dte,
-        min_delta,
-        max_delta,
         min_iv_percentile,
-        max_risk_per_trade_pct: max_risk_per_trade,
-        max_portfolio_risk_pct: max_portfolio_risk,
-        slippage,
-        use_scaled_position_sizing: use_scaled_sizing,
-        max_correlated_exposure_pct: max_correlated_exposure,
-        max_single_position_pct: max_single_position,
-        ..Default::default()
+        screener: SpreadScreenerConfig {
+            min_dte,
+            max_dte,
+            min_short_delta: min_delta,
+            max_short_delta: max_delta,
+            ..SpreadScreenerConfig::default()
+        },
+        ..PutSpreadConfig::default()
     };
 
-    let start_time = Instant::now();
-    let mut engine = BacktestEngine::new(config, data_dir);
+    let data_source = match HistoricalDataSource::new(data_dir, ticker, start_date, end_date) {
+        Ok(ds) => ds,
+        Err(e) => {
+            eprintln!("Failed to load data: {:?}", e);
+            std::process::exit(1);
+        }
+    };
 
-    match engine.run(ticker, start_date, end_date) {
+    let commission = CommissionModel::default();
+    let broker = SimulatedBroker::new(slippage, commission.clone());
+    let strategy = PutCreditSpreadStrategy::new(strategy_config);
+    let risk_gate = DefaultRiskGate::new(CircuitBreakerConfig::default(), initial_equity);
+
+    let start_time = Instant::now();
+
+    match Engine::run(data_source, strategy, broker, risk_gate, initial_equity, commission) {
         Ok(result) => {
             let elapsed = start_time.elapsed();
             println!("\n{}", result.summary());

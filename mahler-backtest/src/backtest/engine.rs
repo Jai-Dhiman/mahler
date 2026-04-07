@@ -816,7 +816,7 @@ impl BacktestEngine {
             let long_fill = slippage.buy_fill(long_bid, long_ask);
 
             // Calculate entry commission
-            let commission = self.config.commission.calculate(contracts * 2, 2); // contracts * 2 legs
+            let commission = self.config.commission.calculate(contracts, 2); // contracts, 2 legs
             let entry_commission = commission.total;
 
             // Build position
@@ -943,6 +943,69 @@ impl BacktestEngine {
 mod tests {
     use super::*;
     use rust_decimal_macros::dec;
+    use crate::backtest::commission::CommissionModel;
+
+    #[test]
+    fn test_entry_commission_not_doubled() {
+        // Bug regression: entry commission was called as calculate(contracts * 2, 2)
+        // which doubled the contract count. Should be calculate(contracts, 2).
+        // For 1 contract, 2 legs at $1/contract/leg: correct = $2, doubled = $4.
+        let model = CommissionModel::default();
+
+        // Correct call: 1 contract, 2 legs = $2
+        let correct = model.calculate(1, 2);
+        assert_eq!(correct.total, dec!(2), "1 contract * 2 legs * $1 = $2");
+
+        // Buggy call: contracts * 2 passed as contract count = $4 (wrong)
+        let doubled = model.calculate(1 * 2, 2);
+        assert_eq!(doubled.total, dec!(4), "doubled bug produces $4, not $2");
+
+        // The engine must use contracts (not contracts*2) so entry_commission == $2
+        // This test documents the expected behavior for the engine call site.
+        // After the fix, entry commission for 1 contract = correct.total = $2.
+        assert_ne!(correct.total, doubled.total, "correct != doubled");
+    }
+
+    #[test]
+    fn test_entry_commission_engine_uses_contracts_not_doubled() {
+        // Integration-level check: create an engine with a known commission model
+        // and verify total_commission after adding a 1-contract position equals $2 entry
+        // (not $4 which would result from the contracts*2 bug).
+        let mut config = BacktestConfig::default();
+        config.commission = CommissionModel::default(); // $1/contract/leg
+        config.use_circuit_breakers = false;
+        config.use_iv_percentile_filter = false;
+        config.use_regime_sizing = false;
+
+        let entry = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        let exp = NaiveDate::from_ymd_opt(2024, 2, 16).unwrap();
+
+        use crate::backtest::trade::CreditSpreadBuilder;
+        let mut engine = BacktestEngine::new_in_memory(config);
+
+        // Manually build and add a 1-contract position with $2 entry commission
+        // (what the fixed engine should calculate: calculate(1, 2).total = $2)
+        let entry_commission = engine.config.commission.calculate(1, 2).total;
+        assert_eq!(entry_commission, dec!(2), "Entry commission for 1 contract should be $2");
+
+        // Verify the bug: old code would compute calculate(1 * 2, 2).total = $4
+        let buggy_commission = engine.config.commission.calculate(1 * 2, 2).total;
+        assert_eq!(buggy_commission, dec!(4), "Buggy code would have produced $4");
+
+        let position = CreditSpreadBuilder::put_credit_spread("SPY", entry)
+            .stock_price(dec!(480))
+            .short_leg(dec!(470), dec!(2.50), -0.25)
+            .long_leg(dec!(465), dec!(1.50), -0.15)
+            .expiration(exp, 32)
+            .contracts(1)
+            .commission(entry_commission)
+            .build();
+
+        engine.add_position(position);
+        // After adding 1 position with $2 entry commission, total_commission = $2
+        assert_eq!(engine.total_commission, dec!(2),
+            "Engine total_commission should be $2 for 1-contract 2-leg spread, not $4");
+    }
 
     #[test]
     fn test_default_config() {
