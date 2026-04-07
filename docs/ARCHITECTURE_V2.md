@@ -3,8 +3,37 @@
 ## Architecture Design Document
 
 **Version**: 2.0
-**Status**: Design Phase
-**Last Updated**: 2026-01-27
+**Status**: Partially Implemented — see Current State below
+**Last Updated**: 2026-04-07
+
+---
+
+## Current Implementation State (2026-04-07)
+
+This document describes the full V2 vision. What is currently built and running:
+
+**Layer 1 (Backtesting) — IMPLEMENTED**
+- Trait-based `Engine::run()` with `DataSource`, `Strategy`, `Broker`, `RiskGate` traits
+- `PutCreditSpreadStrategy` with `PutSpreadConfig` (DTE, delta, PT/SL, IV filter)
+- `WalkForwardOptimizer` using the trait-based engine for grid search
+- CLI: `mahler-backtest run` and `mahler-backtest optimize`
+
+**Layer 5 (Circuit Breakers) — IMPLEMENTED**
+- `DefaultRiskGate` with daily/drawdown circuit breakers
+- Position sizing, max positions, portfolio heat limits
+- Hard-coded, cannot be overridden
+
+**Algorithmic scan handlers — IMPLEMENTED (Python, Cloudflare Workers)**
+- `morning_scan.py`, `afternoon_scan.py`, `midday_check.py`
+- Regime detection, IV analysis, spread scoring, position sizing
+- All trade decisions are algorithmic (rule-based), not AI-driven
+
+**Layers 2 & 3 (Multi-Agent + Memory) — REMOVED**
+- The multi-agent debate pipeline (IVAnalyst, BullResearcher, etc.) was implemented
+  behind an `AGENT_PIPELINE="enabled"` flag and removed on 2026-04-07.
+- The current system is fully algorithmic. Agent-based trade analysis is not active.
+- `core/agents/`, `core/memory/` modules still exist in the codebase but are not
+  called from any handler.
 
 ---
 
