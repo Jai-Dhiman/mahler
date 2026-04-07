@@ -490,7 +490,7 @@ impl CreditSpreadBuilder {
             net_credit,
             max_loss,
             max_profit,
-            current_value: Decimal::ZERO, // Cost to close at entry = 0
+            current_value: net_credit, // Cost to close at entry = net_credit received
             entry_commission: self.entry_commission,
             exit_commission: Decimal::ZERO,
             status: PositionStatus::Open,
@@ -549,6 +549,41 @@ mod tests {
         assert_eq!(position.net_credit, dec!(1000)); // (2.50 - 1.50) * 10 * 100
         assert_eq!(position.max_loss, dec!(4000)); // (5 * 10 * 100) - 1000
         assert!(position.is_open());
+    }
+
+    #[test]
+    fn test_new_position_current_value_equals_net_credit() {
+        // Bug regression: CreditSpreadBuilder::build() set current_value = Decimal::ZERO.
+        // On day 1, unrealized_pnl = net_credit - 0 - entry_commission, overstating profit.
+        // The correct initial current_value is net_credit (cost to immediately buy back).
+        let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        let exp = NaiveDate::from_ymd_opt(2024, 2, 16).unwrap();
+
+        let position = CreditSpreadBuilder::put_credit_spread("SPY", date)
+            .stock_price(dec!(480))
+            .short_leg(dec!(470), dec!(2.50), -0.25)
+            .long_leg(dec!(465), dec!(1.50), -0.15)
+            .expiration(exp, 32)
+            .contracts(1)
+            .build();
+
+        // net_credit = (2.50 - 1.50) * 100 * 1 = $100
+        assert_eq!(position.net_credit, dec!(100));
+
+        // current_value must equal net_credit at open (cost to immediately close = credit received)
+        assert_eq!(
+            position.current_value,
+            dec!(100),
+            "Newly opened position current_value should equal net_credit ($100), not $0"
+        );
+
+        // unrealized_pnl on open = net_credit - current_value - entry_commission
+        // = 100 - 100 - 0 = 0 (no market movement yet, no commission)
+        assert_eq!(
+            position.unrealized_pnl(),
+            dec!(0),
+            "unrealized_pnl at open should be $0, not $100"
+        );
     }
 
     #[test]
