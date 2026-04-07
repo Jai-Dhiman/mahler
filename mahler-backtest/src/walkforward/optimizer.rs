@@ -11,8 +11,13 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use crate::backtest::{BacktestConfig, BacktestResult};
-use crate::data::OptionsSnapshot;
+use crate::analytics::SpreadScreenerConfig;
+use crate::backtest::{BacktestConfig, BacktestResult, CommissionModel, SlippageModel};
+use crate::broker::backtest::SimulatedBroker;
+use crate::data::HistoricalDataSource;
+use crate::engine_core::engine::Engine;
+use crate::risk::{circuit_breakers::CircuitBreakerConfig, gate::DefaultRiskGate};
+use crate::strategy::put_spread::{PutCreditSpreadStrategy, PutSpreadConfig};
 
 use super::periods::{WalkForwardPeriod, WalkForwardPeriods, WalkForwardPeriodsConfig};
 
@@ -112,15 +117,21 @@ pub struct ParameterSet {
 }
 
 impl ParameterSet {
-    /// Apply this parameter set to a backtest config.
-    pub fn apply_to_config(&self, config: &mut BacktestConfig) {
-        config.min_dte = self.dte_min;
-        config.max_dte = self.dte_max;
-        config.min_delta = self.delta_min;
-        config.max_delta = self.delta_max;
-        config.profit_target_pct = self.profit_target;
-        config.stop_loss_pct = self.stop_loss;
-        config.min_iv_percentile = self.iv_percentile;
+    /// Build a PutSpreadConfig from this parameter set.
+    pub fn to_put_spread_config(&self) -> PutSpreadConfig {
+        PutSpreadConfig {
+            profit_target_pct: self.profit_target,
+            stop_loss_pct: self.stop_loss,
+            min_iv_percentile: self.iv_percentile,
+            screener: SpreadScreenerConfig {
+                min_dte: self.dte_min,
+                max_dte: self.dte_max,
+                min_short_delta: self.delta_min,
+                max_short_delta: self.delta_max,
+                ..SpreadScreenerConfig::default()
+            },
+            ..PutSpreadConfig::default()
+        }
     }
 
     /// Create a unique key for this parameter set.
@@ -464,7 +475,8 @@ pub struct WalkForwardOptimizer {
     data_dir: String,
     periods_config: WalkForwardPeriodsConfig,
     param_grid: ParameterGrid,
-    base_config: BacktestConfig,
+    initial_equity: Decimal,
+    commission: CommissionModel,
 }
 
 impl WalkForwardOptimizer {
@@ -474,7 +486,8 @@ impl WalkForwardOptimizer {
             data_dir: data_dir.to_string(),
             periods_config: WalkForwardPeriodsConfig::default(),
             param_grid: ParameterGrid::default(),
-            base_config: BacktestConfig::default(),
+            initial_equity: Decimal::from(100_000),
+            commission: CommissionModel::default(),
         }
     }
 
@@ -490,12 +503,6 @@ impl WalkForwardOptimizer {
         self
     }
 
-    /// Set base backtest configuration.
-    pub fn with_base_config(mut self, config: BacktestConfig) -> Self {
-        self.base_config = config;
-        self
-    }
-
     /// Run walk-forward optimization with parallel execution.
     pub fn optimize(
         &self,
@@ -503,7 +510,6 @@ impl WalkForwardOptimizer {
         start_date: NaiveDate,
         end_date: NaiveDate,
     ) -> Result<WalkForwardResult, String> {
-        use crate::backtest::BacktestEngine;
         use crate::data::DataLoader;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -566,21 +572,39 @@ impl WalkForwardOptimizer {
             // OPTIMIZATION 2: Parallel parameter search with Rayon
             let progress = AtomicUsize::new(0);
             let total = param_combinations.len();
-            let base_config = self.base_config.clone();
+            let initial_equity = self.initial_equity;
+            let commission = self.commission.clone();
 
             let results: Vec<(ParameterSet, f64, usize)> = param_combinations
                 .par_iter()
                 .map(|params| {
-                    let mut config = base_config.clone();
-                    params.apply_to_config(&mut config);
-
-                    let mut engine = BacktestEngine::new_in_memory(config);
-                    let result = engine.run_with_data(
-                        ticker,
-                        &train_snapshots,
-                        period.train_start,
-                        period.train_end,
-                    );
+                    let data_source = HistoricalDataSource::from_snapshots(train_snapshots.clone());
+                    let commission_clone = commission.clone();
+                    let broker = SimulatedBroker::new(SlippageModel::default(), commission_clone.clone());
+                    let strategy = PutCreditSpreadStrategy::new(params.to_put_spread_config());
+                    let risk_gate = DefaultRiskGate::new(CircuitBreakerConfig::default(), initial_equity);
+                    let result = Engine::run(data_source, strategy, broker, risk_gate, initial_equity, commission_clone)
+                        .unwrap_or_else(|_| BacktestResult {
+                            config: BacktestConfig::default(),
+                            tickers: vec![ticker.to_string()],
+                            start_date: period.train_start,
+                            end_date: period.train_end,
+                            trades: vec![],
+                            equity_curve: vec![],
+                            final_equity: initial_equity,
+                            total_return_pct: 0.0,
+                            trading_days: 0,
+                            peak_equity: initial_equity,
+                            max_drawdown: Decimal::ZERO,
+                            max_drawdown_pct: 0.0,
+                            total_trades: 0,
+                            winning_trades: 0,
+                            losing_trades: 0,
+                            total_pnl: Decimal::ZERO,
+                            gross_profit: Decimal::ZERO,
+                            gross_loss: Decimal::ZERO,
+                            total_commission: Decimal::ZERO,
+                        });
 
                     // Progress tracking
                     let done = progress.fetch_add(1, Ordering::Relaxed) + 1;
@@ -616,17 +640,32 @@ impl WalkForwardOptimizer {
             );
 
             // Run validation and test with best params
-            let mut config = base_config.clone();
-            best_params.apply_to_config(&mut config);
+            let train_result = {
+                let data_source = HistoricalDataSource::from_snapshots(train_snapshots.clone());
+                let broker = SimulatedBroker::new(SlippageModel::default(), self.commission.clone());
+                let strategy = PutCreditSpreadStrategy::new(best_params.to_put_spread_config());
+                let risk_gate = DefaultRiskGate::new(CircuitBreakerConfig::default(), self.initial_equity);
+                Engine::run(data_source, strategy, broker, risk_gate, self.initial_equity, self.commission.clone())
+                    .map_err(|e| format!("Engine error: {}", e))?
+            };
 
-            let mut engine = BacktestEngine::new_in_memory(config.clone());
-            let train_result = engine.run_with_data(ticker, &train_snapshots, period.train_start, period.train_end);
+            let validate_result = {
+                let data_source = HistoricalDataSource::from_snapshots(validate_snapshots.clone());
+                let broker = SimulatedBroker::new(SlippageModel::default(), self.commission.clone());
+                let strategy = PutCreditSpreadStrategy::new(best_params.to_put_spread_config());
+                let risk_gate = DefaultRiskGate::new(CircuitBreakerConfig::default(), self.initial_equity);
+                Engine::run(data_source, strategy, broker, risk_gate, self.initial_equity, self.commission.clone())
+                    .map_err(|e| format!("Engine error: {}", e))?
+            };
 
-            let mut engine = BacktestEngine::new_in_memory(config.clone());
-            let validate_result = engine.run_with_data(ticker, &validate_snapshots, period.validate_start, period.validate_end);
-
-            let mut engine = BacktestEngine::new_in_memory(config);
-            let test_result = engine.run_with_data(ticker, &test_snapshots, period.test_start, period.test_end);
+            let test_result = {
+                let data_source = HistoricalDataSource::from_snapshots(test_snapshots.clone());
+                let broker = SimulatedBroker::new(SlippageModel::default(), self.commission.clone());
+                let strategy = PutCreditSpreadStrategy::new(best_params.to_put_spread_config());
+                let risk_gate = DefaultRiskGate::new(CircuitBreakerConfig::default(), self.initial_equity);
+                Engine::run(data_source, strategy, broker, risk_gate, self.initial_equity, self.commission.clone())
+                    .map_err(|e| format!("Engine error: {}", e))?
+            };
 
             period_results.push(PeriodResult {
                 period: period.clone(),
@@ -760,12 +799,15 @@ mod tests {
             iv_percentile: 60.0,
         };
 
-        let mut config = BacktestConfig::default();
-        params.apply_to_config(&mut config);
+        let config = params.to_put_spread_config();
 
-        assert_eq!(config.min_dte, 25);
-        assert_eq!(config.max_dte, 40);
+        assert_eq!(config.screener.min_dte, 25);
+        assert_eq!(config.screener.max_dte, 40);
         assert_eq!(config.profit_target_pct, 60.0);
+        assert_eq!(config.stop_loss_pct, 150.0);
+        assert_eq!(config.min_iv_percentile, 60.0);
+        assert_eq!(config.screener.min_short_delta, 0.08);
+        assert_eq!(config.screener.max_short_delta, 0.12);
     }
 
     #[test]

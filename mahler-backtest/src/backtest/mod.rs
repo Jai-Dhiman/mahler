@@ -13,7 +13,7 @@ pub mod slippage;
 pub mod trade;
 
 pub use commission::{Commission, CommissionModel};
-pub use engine::{BacktestConfig, BacktestEngine, BacktestResult, EquityPoint};
+pub use engine::{BacktestConfig, BacktestResult, EquityPoint};
 pub use slippage::{Slippage, SlippageModel};
 pub use trade::{
     CreditSpreadBuilder, ExitReason, Position, PositionLeg, PositionStatus, SpreadType, Trade,

@@ -11,7 +11,6 @@ import time
 from datetime import datetime, timedelta
 
 from core import http
-from core.ai.claude import ClaudeRateLimitError
 from core.analysis.greeks import (
     calculate_second_order_greeks,
     calculate_spread_second_order_greeks,
@@ -41,23 +40,6 @@ from core.risk.circuit_breaker import CircuitBreaker, RiskLevel
 from core.risk.position_sizer import PositionSizer
 from core.types import Confidence, RecommendationStatus, SpreadType, TradeStatus
 
-# V2 Multi-Agent System imports
-from core.agents import (
-    AgentOrchestrator,
-    DebateConfig,
-    IVAnalyst,
-    TechnicalAnalyst,
-    MacroAnalyst,
-    GreeksAnalyst,
-    BullResearcher,
-    BearResearcher,
-    DebateFacilitator,
-    build_agent_context,
-    PipelineResult,
-)
-from core.memory.vectorize import EpisodicMemoryStore
-from core.memory.retriever import MemoryRetriever
-
 # V2 Three-Perspective Risk and Trajectory Store
 from core.risk.three_perspective import ThreePerspectiveRiskManager
 from core.learning import TrajectoryStore, TradeTrajectory
@@ -70,204 +52,6 @@ UNDERLYINGS = ["SPY", "QQQ", "IWM", "TLT", "GLD"]
 
 # Maximum recommendations per scan
 MAX_RECOMMENDATIONS = 3
-
-
-def _create_v2_orchestrator(router, debate_rounds: int = 2) -> AgentOrchestrator:
-    """Create a configured V2 agent orchestrator with all analysts and debate agents.
-
-    Args:
-        router: LLMRouter instance for multi-model routing
-        debate_rounds: Number of debate rounds (default 2)
-
-    Returns:
-        Configured AgentOrchestrator ready for pipeline execution
-    """
-    orchestrator = AgentOrchestrator(
-        claude=router.get_client("facilitator"),
-        debate_config=DebateConfig(
-            max_rounds=debate_rounds,
-            min_rounds=1,
-            consensus_threshold=0.7,
-        ),
-    )
-
-    # Register analyst agents (routed to Haiku)
-    orchestrator.register_analyst(IVAnalyst(router=router))
-    orchestrator.register_analyst(TechnicalAnalyst(router=router))
-    orchestrator.register_analyst(MacroAnalyst(router=router))
-    orchestrator.register_analyst(GreeksAnalyst(router=router))
-
-    # Register debate agents (routed to Sonnet)
-    orchestrator.register_debater(BullResearcher(router=router), "bull")
-    orchestrator.register_debater(BearResearcher(router=router), "bear")
-
-    # Set facilitator for synthesis (routed to Sonnet)
-    orchestrator.set_facilitator(DebateFacilitator(router=router))
-
-    # Wire up Fund Manager for full pipeline (routed to Sonnet)
-    from core.agents.fund_manager import FundManagerAgent
-
-    orchestrator.set_fund_manager(FundManagerAgent(router=router))
-
-    return orchestrator
-
-
-async def _run_v2_analysis(
-    orchestrator: AgentOrchestrator,
-    spread,
-    underlying_price: float,
-    iv_metrics,
-    term_structure,
-    mean_reversion,
-    regime_result: dict | None,
-    current_vix: float | None,
-    vix_3m: float | None,
-    price_bars: list[dict] | None,
-    positions: list,
-    portfolio_greeks,
-    account,
-    daily_pnl: float,
-    weekly_pnl: float,
-    playbook_rules: list,
-    episodic_store: EpisodicMemoryStore | None,
-    memory_retriever: MemoryRetriever | None,
-):
-    """Run V2 multi-agent analysis pipeline for a spread.
-
-    Args:
-        orchestrator: Configured AgentOrchestrator
-        spread: CreditSpread to analyze
-        ... (market data, portfolio context)
-        episodic_store: EpisodicMemoryStore for similar trade retrieval and storage
-        memory_retriever: MemoryRetriever for rule and context retrieval
-
-    Returns:
-        Tuple of (PipelineResult, similar_trades list)
-    """
-    # Retrieve similar trades from episodic memory (if available)
-    similar_trades = []
-    if memory_retriever:
-        retrieved_context = await memory_retriever.retrieve_context(
-            underlying=spread.underlying,
-            spread_type=spread.spread_type.value,
-            market_regime=regime_result.get("regime") if regime_result else None,
-            iv_rank=iv_metrics.iv_rank if iv_metrics else None,
-            vix=current_vix,
-        )
-        similar_trades = retrieved_context.similar_trades
-
-    # Build agent context
-    context = build_agent_context(
-        spread=spread,
-        underlying_price=underlying_price,
-        iv_metrics=iv_metrics,
-        term_structure=term_structure,
-        mean_reversion=mean_reversion,
-        regime=regime_result.get("regime") if regime_result else None,
-        regime_probability=regime_result.get("probability") if regime_result else None,
-        current_vix=current_vix,
-        vix_3m=vix_3m,
-        price_bars=price_bars,
-        positions=positions,
-        portfolio_greeks=portfolio_greeks,
-        account_equity=account.equity,
-        buying_power=account.buying_power,
-        daily_pnl=daily_pnl,
-        weekly_pnl=weekly_pnl,
-        playbook_rules=playbook_rules,
-        similar_trades=similar_trades,
-        scan_type="morning",
-    )
-
-    # Run the multi-agent pipeline
-    result = await orchestrator.run_pipeline(context)
-
-    return result, similar_trades
-
-
-def _map_v2_result_to_analysis(result: PipelineResult):
-    """Map V2 PipelineResult to TradeAnalysis-compatible format.
-
-    Args:
-        result: PipelineResult from orchestrator
-
-    Returns:
-        Object with thesis and confidence attributes matching TradeAnalysis
-    """
-    from dataclasses import dataclass
-
-    @dataclass
-    class V2Analysis:
-        thesis: str
-        confidence: Confidence
-
-    # Map V2 confidence (0.0-1.0) to Confidence enum
-    if result.confidence >= 0.7:
-        confidence = Confidence.HIGH
-    elif result.confidence >= 0.4:
-        confidence = Confidence.MEDIUM
-    else:
-        confidence = Confidence.LOW
-
-    return V2Analysis(
-        thesis=result.thesis,
-        confidence=confidence,
-    )
-
-
-async def _store_episodic_memory(
-    episodic_store: EpisodicMemoryStore,
-    trade_id: str | None,
-    spread,
-    result: PipelineResult,
-    regime_result: dict | None,
-    iv_metrics,
-    current_vix: float | None,
-) -> str | None:
-    """Store episodic memory record for a trade.
-
-    Args:
-        episodic_store: EpisodicMemoryStore instance
-        trade_id: Trade ID if trade was executed
-        spread: CreditSpread
-        result: PipelineResult from pipeline
-        regime_result: Market regime dict
-        iv_metrics: IV metrics
-        current_vix: VIX at entry
-
-    Returns:
-        Memory ID if stored, None otherwise
-    """
-    # Build predicted outcome from synthesis
-    predicted_outcome = None
-    if result.synthesis_message and result.synthesis_message.structured_data:
-        data = result.synthesis_message.structured_data
-        predicted_outcome = {
-            "recommendation": result.recommendation,
-            "confidence": result.confidence,
-            "expected_profit_probability": data.get("position_size_multiplier", 0.5),
-            "key_bull_points": data.get("key_bull_points", []),
-            "key_bear_points": data.get("key_bear_points", []),
-            "thesis": result.thesis,
-        }
-
-    memory_id = await episodic_store.store_memory(
-        trade_id=trade_id,
-        underlying=spread.underlying,
-        spread_type=spread.spread_type.value,
-        short_strike=spread.short_strike,
-        long_strike=spread.long_strike,
-        expiration=spread.expiration,
-        analyst_messages=result.analyst_messages,
-        debate_messages=result.debate_messages,
-        synthesis_message=result.synthesis_message,
-        market_regime=regime_result.get("regime") if regime_result else None,
-        iv_rank=iv_metrics.iv_rank if iv_metrics else None,
-        vix_at_entry=current_vix,
-        predicted_outcome=predicted_outcome,
-    )
-
-    return memory_id
 
 
 async def _refresh_dynamic_betas(
@@ -406,36 +190,6 @@ async def _run_morning_scan(env):
         public_key=env.DISCORD_PUBLIC_KEY,
         channel_id=env.DISCORD_CHANNEL_ID,
     )
-
-    from core.ai.router import LLMRouter
-    router = LLMRouter(api_key=env.ANTHROPIC_API_KEY)
-
-    # V2 Multi-Agent System initialization
-    debate_rounds = int(getattr(env, "MULTI_AGENT_DEBATE_ROUNDS", "2"))
-
-    print(f"V2 Multi-Agent System (debate_rounds={debate_rounds})")
-    orchestrator = _create_v2_orchestrator(router, debate_rounds=debate_rounds)
-
-    # Initialize episodic memory if bindings are available
-    episodic_store = None
-    memory_retriever = None
-    if hasattr(env, "EPISODIC_MEMORY") and hasattr(env, "AI"):
-        episodic_store = EpisodicMemoryStore(
-            vectorize_binding=env.EPISODIC_MEMORY,
-            ai_binding=env.AI,
-            d1_binding=env.MAHLER_DB,
-        )
-        memory_retriever = MemoryRetriever(
-            d1_binding=env.MAHLER_DB,
-            episodic_store=episodic_store,
-        )
-        print("V2 Episodic memory initialized")
-    else:
-        print("V2 Running without episodic memory (bindings not configured)")
-
-    # Initialize trajectory store for learning
-    trajectory_store = TrajectoryStore(env.MAHLER_DB)
-    print("V2 Trajectory store initialized")
 
     # Initialize three-perspective risk manager
     three_persp_manager = None
@@ -629,9 +383,7 @@ async def _run_morning_scan(env):
     skip_reasons: dict[str, int] = {}
     underlying_results: dict[str, dict] = {}
     iv_percentiles: dict[str, float] = {}
-    agent_shadow_stats: dict[str, int] = {"approve": 0, "skip": 0}
     scan_errors: dict[str, int] = {}
-    agent_pipeline_times: list[float] = []
 
     # Scan each underlying
     for symbol in UNDERLYINGS:
@@ -863,124 +615,13 @@ async def _run_morning_scan(env):
             if adjusted_contracts < size_result.contracts:
                 print(f"Adjusted contracts: {size_result.contracts} -> {adjusted_contracts} (multiplier: {combined_size_multiplier:.2f})")
 
-            # Build IV analysis context for AI
-            iv_analysis_context = []
-            ts_result = iv_context.get("term_structure")
-            mr_result = iv_context.get("mean_reversion")
-
-            if ts_result:
-                iv_analysis_context.append(
-                    f"Term structure: {ts_result.regime.value} (30/90 ratio: {ts_result.ratio_30_90:.2f})"
-                )
-            if mr_result:
-                iv_analysis_context.append(
-                    f"IV mean reversion: {mr_result.signal.value} (z-score: {mr_result.z_score:.2f})"
-                )
-
-            # Multi-Agent Analysis Pipeline
-            # Controlled by AGENT_PIPELINE env var: "enabled" runs full pipeline,
-            # anything else skips it to save Claude API costs.
-            agent_enabled = getattr(env, "AGENT_PIPELINE", "disabled") == "enabled"
             shadow_decision = "approve"
             shadow_contracts = None
             shadow_confidence = 0.0
             shadow_thesis = ""
 
-            if agent_enabled:
-                print(f"Running multi-agent analysis for {spread.underlying}...")
-
-                daily_stats = await kv.get_daily_stats()
-                daily_pnl = daily_stats.get("realized_pnl", 0)
-                weekly_pnl = weekly_stats.get("realized_pnl", 0) if weekly_stats else 0
-
-                price_bars = None
-                try:
-                    price_bars = await alpaca.get_historical_bars(spread.underlying, timeframe="1Day", limit=50)
-                except Exception as e:
-                    print(f"Could not fetch price bars: {e}")
-
-                portfolio_greeks = None
-
-                agent_start = time.time()
-                v2_result, similar_trades = await _run_v2_analysis(
-                    orchestrator=orchestrator,
-                    spread=spread,
-                    underlying_price=underlying_price,
-                    iv_metrics=iv_metrics,
-                    term_structure=ts_result,
-                    mean_reversion=mr_result,
-                    regime_result=regime_result,
-                    current_vix=current_vix,
-                    vix_3m=vix3m,
-                    price_bars=price_bars,
-                    positions=positions,
-                    portfolio_greeks=portfolio_greeks,
-                    account=account,
-                    daily_pnl=daily_pnl,
-                    weekly_pnl=weekly_pnl,
-                    playbook_rules=playbook_rules,
-                    episodic_store=episodic_store,
-                    memory_retriever=memory_retriever,
-                )
-                agent_pipeline_times.append(time.time() - agent_start)
-
-                print(f"Pipeline complete: recommendation={v2_result.recommendation}, confidence={v2_result.confidence:.0%}")
-
-                # Log agent pipeline decisions to Discord
-                try:
-                    def serialize_message(msg):
-                        if msg is None:
-                            return None
-                        return {
-                            "agent_id": msg.agent_id,
-                            "content": msg.content,
-                            "confidence": msg.confidence,
-                            "structured_data": msg.structured_data,
-                        }
-
-                    pipeline_dict = {
-                        "analyst_messages": [serialize_message(m) for m in (v2_result.analyst_messages or [])],
-                        "debate_messages": [serialize_message(m) for m in (v2_result.debate_messages or [])],
-                        "synthesis_message": serialize_message(v2_result.synthesis_message),
-                        "trader_message": serialize_message(v2_result.trader_message),
-                        "fund_manager_message": serialize_message(v2_result.fund_manager_message),
-                    }
-                    await discord.send_agent_pipeline_log(
-                        underlying=spread.underlying,
-                        spread_type=spread.spread_type.value,
-                        pipeline_result=pipeline_dict,
-                    )
-                except Exception as e:
-                    print(f"Error sending agent pipeline log: {e}")
-
-                # Record shadow decision
-                fm_data = (
-                    v2_result.fund_manager_message.structured_data
-                    if v2_result.fund_manager_message and v2_result.fund_manager_message.structured_data
-                    else {}
-                )
-                shadow_decision = fm_data.get("decision", "approve")
-                shadow_contracts = fm_data.get("final_contracts")
-                shadow_confidence = v2_result.confidence
-                shadow_thesis = (fm_data.get("final_thesis") or v2_result.thesis or "")[:500]
-
-                print(f"Agent shadow: {shadow_decision} ({shadow_confidence:.0%}) for {spread.underlying}")
-                if shadow_decision == "approve":
-                    agent_shadow_stats["approve"] += 1
-                else:
-                    agent_shadow_stats["skip"] += 1
-            else:
-                print(f"Agent pipeline disabled, proceeding with algorithmic trade for {spread.underlying}")
-                v2_result = None
-
-            # Build thesis and confidence for the recommendation record
-            if v2_result is not None:
-                analysis = _map_v2_result_to_analysis(v2_result)
-                rec_thesis = analysis.thesis
-                rec_confidence = analysis.confidence
-            else:
-                rec_thesis = f"Algorithmic trade: {spread.underlying} {spread.spread_type.value}"
-                rec_confidence = Confidence.MEDIUM
+            rec_thesis = f"Algorithmic trade: {spread.underlying} {spread.spread_type.value}"
+            rec_confidence = Confidence.MEDIUM
 
             # Get delta/theta from the scored spread or Greeks if available
             short_delta = None
@@ -1098,8 +739,8 @@ async def _run_morning_scan(env):
             try:
                 await discord.send_autonomous_notification(
                     rec=rec,
-                    v2_confidence=v2_result.confidence if v2_result else 0.0,
-                    v2_thesis=v2_result.thesis if v2_result else rec_thesis,
+                    v2_confidence=0.0,
+                    v2_thesis=rec_thesis,
                     order_id=order.id,
                 )
             except Exception as e:
@@ -1108,62 +749,6 @@ async def _run_morning_scan(env):
             recommendations_sent += 1
             screening_stats["opportunities_approved"] += 1
 
-            # Store episodic memory with trade ID (only if agents ran)
-            if episodic_store and v2_result is not None:
-                try:
-                    memory_id = await _store_episodic_memory(
-                        episodic_store=episodic_store,
-                        trade_id=trade_id,
-                        spread=spread,
-                        result=v2_result,
-                        regime_result=regime_result,
-                        iv_metrics=iv_metrics,
-                        current_vix=current_vix,
-                    )
-                    print(f"Stored episodic memory: {memory_id}")
-                except Exception as e:
-                    print(f"Error storing episodic memory: {e}")
-
-            # Store trajectory for learning (only if agents ran)
-            if v2_result is not None:
-                try:
-                    three_persp_result = None
-                    if three_persp_manager and current_vix:
-                        three_persp_result = three_persp_manager.assess(
-                            spread=spread,
-                            account_equity=account.equity,
-                            current_positions=positions,
-                            current_vix=current_vix,
-                        )
-
-                    trajectory = TradeTrajectory.from_pipeline_result(
-                        underlying=spread.underlying,
-                        spread_type=spread.spread_type.value,
-                        short_strike=spread.short_strike,
-                        long_strike=spread.long_strike,
-                        expiration=spread.expiration,
-                        entry_credit=spread.credit,
-                        contracts=adjusted_contracts,
-                        analyst_messages=v2_result.analyst_messages,
-                        debate_messages=v2_result.debate_messages,
-                        synthesis_message=v2_result.synthesis_message,
-                        decision_output=v2_result.synthesis_message.structured_data if v2_result.synthesis_message else None,
-                        three_perspective=three_persp_result,
-                        market_regime=regime_result.get("regime") if regime_result else None,
-                        iv_rank=iv_metrics.iv_rank if iv_metrics else None,
-                        vix_at_entry=current_vix,
-                        trade_id=trade_id,
-                    )
-                    trajectory_id = await trajectory_store.store_trajectory(trajectory)
-                    print(f"Stored trajectory: {trajectory_id}")
-                except Exception as e:
-                    print(f"Error storing trajectory: {e}")
-
-        except ClaudeRateLimitError as e:
-            print(f"Claude API rate limit error: {e}")
-            await discord.send_api_token_alert("Claude", str(e))
-            scan_errors["Claude rate limit"] = scan_errors.get("Claude rate limit", 0) + 1
-            # Continue processing other opportunities
         except Exception as e:
             import traceback
             print(f"Error processing opportunity: {e}")
@@ -1225,11 +810,6 @@ async def _run_morning_scan(env):
                 sym: details.get("scan_seconds", 0)
                 for sym, details in underlying_results.items()
             },
-            "agent_avg_seconds": (
-                sum(agent_pipeline_times) / len(agent_pipeline_times)
-                if agent_pipeline_times
-                else None
-            ),
         }
 
         await discord.send_scan_summary(
@@ -1241,7 +821,7 @@ async def _run_morning_scan(env):
             market_context=market_context_for_notification,
             trades_placed=recommendations_sent,
             underlying_details=underlying_results,
-            agent_shadow_stats=agent_shadow_stats if any(agent_shadow_stats.values()) else None,
+            agent_shadow_stats=None,
             scan_timing=scan_timing,
             errors=scan_errors if scan_errors else None,
         )

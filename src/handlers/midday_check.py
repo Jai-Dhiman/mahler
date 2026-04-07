@@ -7,7 +7,6 @@ looks for new setups if capacity available.
 from datetime import datetime, timedelta
 
 from core import http
-from core.ai.claude import ClaudeRateLimitError
 from core.analysis.iv_rank import calculate_iv_metrics
 from core.analysis.screener import OptionsScreener, ScreenerConfig
 from core.broker.alpaca import AlpacaClient
@@ -19,55 +18,8 @@ from core.risk.circuit_breaker import CircuitBreaker
 from core.risk.position_sizer import PositionSizer
 from core.types import Confidence, RecommendationStatus, SpreadType, TradeStatus
 
-# V2 Multi-Agent System imports
-from core.agents import (
-    AgentOrchestrator,
-    DebateConfig,
-    IVAnalyst,
-    TechnicalAnalyst,
-    MacroAnalyst,
-    GreeksAnalyst,
-    BullResearcher,
-    BearResearcher,
-    DebateFacilitator,
-    build_agent_context,
-)
-
 UNDERLYINGS = ["SPY", "QQQ", "IWM"]
 MAX_RECOMMENDATIONS = 2  # Fewer than morning scan
-
-
-def _create_orchestrator(router, debate_rounds: int = 2) -> AgentOrchestrator:
-    """Create a configured agent orchestrator."""
-    from core.agents.fund_manager import FundManagerAgent
-
-    orchestrator = AgentOrchestrator(
-        claude=router.get_client("facilitator"),
-        debate_config=DebateConfig(
-            max_rounds=debate_rounds,
-            min_rounds=1,
-            consensus_threshold=0.7,
-        ),
-    )
-    orchestrator.register_analyst(IVAnalyst(router=router))
-    orchestrator.register_analyst(TechnicalAnalyst(router=router))
-    orchestrator.register_analyst(MacroAnalyst(router=router))
-    orchestrator.register_analyst(GreeksAnalyst(router=router))
-    orchestrator.register_debater(BullResearcher(router=router), "bull")
-    orchestrator.register_debater(BearResearcher(router=router), "bear")
-    orchestrator.set_facilitator(DebateFacilitator(router=router))
-    orchestrator.set_fund_manager(FundManagerAgent(router=router))
-    return orchestrator
-
-
-def _map_result_to_confidence(result) -> Confidence:
-    """Map pipeline result confidence to Confidence enum."""
-    if result.confidence >= 0.7:
-        return Confidence.HIGH
-    elif result.confidence >= 0.4:
-        return Confidence.MEDIUM
-    else:
-        return Confidence.LOW
 
 
 async def handle_midday_check(env):
@@ -137,13 +89,6 @@ async def _run_midday_check(env):
         public_key=env.DISCORD_PUBLIC_KEY,
         channel_id=env.DISCORD_CHANNEL_ID,
     )
-
-    from core.ai.router import LLMRouter
-    router = LLMRouter(api_key=env.ANTHROPIC_API_KEY)
-
-    # V2 Multi-Agent System
-    debate_rounds = int(getattr(env, "MULTI_AGENT_DEBATE_ROUNDS", "2"))
-    orchestrator = _create_orchestrator(router, debate_rounds=debate_rounds)
 
     # Check if market is open
     if not await alpaca.is_market_open():
@@ -215,45 +160,8 @@ async def _run_midday_check(env):
 
         if size_result.contracts > 0:
             try:
-                # Agent pipeline controlled by env var
-                agent_enabled = getattr(env, "AGENT_PIPELINE", "disabled") == "enabled"
-
-                if agent_enabled:
-                    context = build_agent_context(
-                        spread=spread,
-                        underlying_price=underlying_price,
-                        iv_metrics=iv_metrics,
-                        term_structure=None,
-                        mean_reversion=None,
-                        regime=None,
-                        regime_probability=None,
-                        current_vix=None,
-                        vix_3m=None,
-                        price_bars=None,
-                        positions=positions,
-                        portfolio_greeks=None,
-                        account_equity=account.equity,
-                        buying_power=account.buying_power,
-                        daily_pnl=0,
-                        weekly_pnl=0,
-                        playbook_rules=playbook_rules,
-                        similar_trades=[],
-                        scan_type="midday",
-                    )
-
-                    result = await orchestrator.run_pipeline(context)
-                    confidence = _map_result_to_confidence(result)
-
-                    if result.recommendation == "skip" or confidence == Confidence.LOW:
-                        print(f"Skipping trade: recommendation={result.recommendation}, confidence={result.confidence:.0%}")
-                        rec_thesis = None  # Signal to skip
-                    else:
-                        rec_thesis = result.thesis
-                    rec_confidence = confidence
-                else:
-                    print(f"Agent pipeline disabled, proceeding with algorithmic midday trade")
-                    rec_thesis = f"Algorithmic midday trade: {spread.underlying} {spread.spread_type.value}"
-                    rec_confidence = Confidence.MEDIUM
+                rec_thesis = f"Algorithmic midday trade: {spread.underlying} {spread.spread_type.value}"
+                rec_confidence = Confidence.MEDIUM
 
                 if rec_thesis is not None:
                     rec_id = await db.create_recommendation(
@@ -350,9 +258,6 @@ async def _run_midday_check(env):
                                 }],
                             )
 
-            except ClaudeRateLimitError as e:
-                print(f"Claude API rate limit error: {e}")
-                await discord.send_api_token_alert("Claude", str(e))
             except Exception as e:
                 print(f"Error processing opportunity: {e}")
 

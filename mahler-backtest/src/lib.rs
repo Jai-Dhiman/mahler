@@ -10,7 +10,7 @@ pub mod walkforward;
 // Re-export commonly used types
 pub use data::{OptionQuote, OptionType, OptionsChain, OptionsSnapshot};
 pub use validation::{BlackScholes, DataIntegrityValidator, GreeksValidator};
-pub use backtest::{BacktestConfig, BacktestEngine, BacktestResult, Position, SlippageModel, Trade};
+pub use backtest::{BacktestConfig, BacktestResult, Position, SlippageModel, Trade};
 pub use risk::{CircuitBreaker, PortfolioGreeks, PositionSizer};
 pub use analytics::{IVTermStructureAnalyzer, SpreadScreener, SpreadCandidate};
 pub use walkforward::{WalkForwardOptimizer, WalkForwardResult, ParameterGrid};
