@@ -16,3 +16,5 @@ pub use analytics::{IVTermStructureAnalyzer, SpreadScreener, SpreadCandidate};
 pub use walkforward::{WalkForwardOptimizer, WalkForwardResult, ParameterGrid};
 pub use regime::{MarketRegime, RegimeClassifier};
 pub use metrics::{PerformanceMetrics, MetricsCalculator};
+
+pub mod engine_core;
