@@ -1,0 +1,11 @@
+.worktrees/
+.git/
+docs/
+*.md
+!config/SOUL.md
+.dev.vars
+.env
+__pycache__/
+*.pyc
+node_modules/
+.wrangler/

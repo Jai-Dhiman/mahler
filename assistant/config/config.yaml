@@ -1,0 +1,12 @@
+model:
+  default: "x-ai/grok-4.1-fast"
+  provider: "openrouter"
+
+terminal:
+  backend: local
+
+# Discord settings (token, home_channel, allowed_users are set via env vars)
+discord:
+  require_mention: true
+  auto_thread: false
+  reactions: true
