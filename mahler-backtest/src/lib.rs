@@ -20,3 +20,4 @@ pub use metrics::{PerformanceMetrics, MetricsCalculator};
 pub mod engine_core;
 pub mod strategy;
 pub mod broker;
+pub mod portfolio;
