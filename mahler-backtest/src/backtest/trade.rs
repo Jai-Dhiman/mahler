@@ -222,11 +222,35 @@ impl Position {
     }
 
     /// Update position with new market data.
+    ///
+    /// If any leg has no matching quote in the snapshot, current_value is preserved
+    /// unchanged rather than being zeroed. Zeroing on missing quotes would produce
+    /// phantom unrealized P&L equal to the full net_credit.
     pub fn update_mtm(&mut self, quotes: &[&OptionQuote]) {
         let mut total_value = Decimal::ZERO;
+        let mut all_found = true;
 
+        for leg in &self.legs {
+            if let Some(quote) = quotes.iter().find(|q| {
+                q.strike == leg.strike
+                    && q.option_type == leg.option_type
+                    && q.expiration == leg.expiration
+            }) {
+                let leg_value = quote.mid * Decimal::from(leg.contracts) * Decimal::from(100);
+                total_value += leg_value;
+            } else {
+                all_found = false;
+                break;
+            }
+        }
+
+        if !all_found {
+            // Preserve previous current_value when quotes are incomplete
+            return;
+        }
+
+        // Update leg prices and deltas now that we know all quotes are present
         for leg in &mut self.legs {
-            // Find matching quote
             if let Some(quote) = quotes.iter().find(|q| {
                 q.strike == leg.strike
                     && q.option_type == leg.option_type
@@ -234,12 +258,6 @@ impl Position {
             }) {
                 leg.current_price = quote.mid;
                 leg.current_delta = quote.greeks.delta;
-
-                // Value = price * contracts * 100
-                // For short positions, we need to pay to close (negative value)
-                // For long positions, we receive when closing (positive value)
-                let leg_value = quote.mid * Decimal::from(leg.contracts) * Decimal::from(100);
-                total_value += leg_value;
             }
         }
 
@@ -531,6 +549,37 @@ mod tests {
         assert_eq!(position.net_credit, dec!(1000)); // (2.50 - 1.50) * 10 * 100
         assert_eq!(position.max_loss, dec!(4000)); // (5 * 10 * 100) - 1000
         assert!(position.is_open());
+    }
+
+    #[test]
+    fn test_update_mtm_preserves_current_value_when_quotes_missing() {
+        // Bug regression: update_mtm initialized total_value = 0 and only updated it
+        // when matching quotes were found. With an empty snapshot, current_value was
+        // zeroed — producing phantom unrealized P&L equal to the full net_credit.
+        let entry = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        let exp = NaiveDate::from_ymd_opt(2024, 2, 16).unwrap();
+
+        let mut position = CreditSpreadBuilder::put_credit_spread("SPY", entry)
+            .stock_price(dec!(480))
+            .short_leg(dec!(470), dec!(2.50), -0.25)
+            .long_leg(dec!(465), dec!(1.50), -0.15)
+            .expiration(exp, 32)
+            .contracts(1)
+            .build();
+
+        // Manually set a known current_value (e.g., after prior MTM update)
+        position.current_value = dec!(80);
+
+        // Call update_mtm with an empty slice (no matching quotes)
+        let empty_quotes: Vec<&crate::data::OptionQuote> = vec![];
+        position.update_mtm(&empty_quotes);
+
+        // current_value must be preserved, not zeroed
+        assert_eq!(
+            position.current_value,
+            dec!(80),
+            "update_mtm with missing quotes must preserve previous current_value, not zero it"
+        );
     }
 
     #[test]
