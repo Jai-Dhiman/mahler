@@ -45,7 +45,7 @@ pub struct LegIntent {
 }
 
 /// What action the order performs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum OrderAction {
     Open,
     Close {
