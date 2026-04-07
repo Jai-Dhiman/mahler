@@ -2438,3 +2438,163 @@ cd /Users/jdhiman/Documents/mahler/mahler-backtest && git add tests/determinism.
 | Determinism guarantee | Task 11 |
 | Explicit error handling (no unwrap_or_default) | Task 6 (data loader tightening) |
 | Walk-forward optimizer adaptation | Deferred to follow-up task (optimizer still works with old engine; adapting it is a separate vertical slice) |
+
+---
+
+## Challenge Review
+
+**Reviewed:** 2026-04-06
+**Plan:** docs/plans/2026-04-06-trader-joe-engine.md
+**Spec:** docs/specs/2026-04-06-trader-joe-engine-design.md
+
+### CEO Pass
+
+**Premise:** Sound. The monolithic engine genuinely blocks adding new strategies and prevents live trading. The refactor addresses the right structural problem. No simpler alternative achieves the stated goals -- you cannot get backtest/live parity without abstracting the data source and broker.
+
+**Real pain:** Without this, every strategy change requires modifying the engine (src/backtest/engine.rs:663-803). The system cannot evolve. The silent zero-fill issue on financial data (src/data/loader.rs:432-451) is a correctness risk for any backtest results.
+
+**Scope:**
+- The plan correctly defers Alpaca integration, project renaming, and Python removal. Good.
+- Walk-forward optimizer deferral is noted but the spec says "adapted in this phase." See finding below.
+- 18 files touched (11 new, 7 modified). Justified given the scope of extracting 4 traits from a 940-line monolith.
+
+**12-Month alignment:**
+```
+CURRENT STATE                  THIS PLAN                    12-MONTH IDEAL
+Monolithic backtester      ->  Trait-based engine       ->  Same strategies running
+with hardcoded strategy        with pluggable strategies    on live broker (Alpaca/IBKR)
+                               and backtest/live parity     with validated parameters
+```
+Directly on the path. No tech debt created that conflicts with the 12-month ideal.
+
+**Alternatives:** The spec documents the NautilusTrader message-bus alternative and explains why trait-based was chosen (single-threaded, debuggability, same parity). Adequate.
+
+### Engineering Pass
+
+#### Architecture
+
+[RISK] (confidence: 7/10) -- **`pub mod core` shadows Rust's `core` crate.** Verified by test: defining `mod core` in a crate prevents `core::option::Option` from resolving. The existing crate does not use `core::` imports directly, and `cargo check` passes with a `mod core` added, but derive macros from dependencies (serde, polars) may internally expand to `core::` references. Today it compiles; tomorrow a dependency update could break it. **Rename to `engine` or `trading_engine` to eliminate the risk entirely.** If you keep `core`, any `core::` reference must be written as `::core::` which is fragile.
+
+[RISK] (confidence: 8/10) -- **Exit orders bypass the broker entirely.** In Task 8's engine (line 1959-1969), `OrderAction::Close` directly calls `portfolio.close_position()` without going through the broker for fill simulation. This means exits use the position's current MTM value as the exit price, not a slippage-adjusted fill. In the old engine (src/backtest/engine.rs:619-639), exits also used `unrealized_pnl()` directly, so this is consistent with existing behavior -- but it means the new architecture's "same code for backtest and live" promise has a hole: in live mode, exits *must* go through the broker to get real fills. **Fallback:** Accept for Phase 1 since it matches the old engine. Add a TODO comment noting this must change for Phase 2.
+
+[RISK] (confidence: 9/10) -- **Hardcoded exit commission `Decimal::from(2)`.** Task 8's engine (lines 1961, 2001) hardcodes exit commission as `Decimal::from(2)`. The old engine calculates this from `CommissionModel::calculate(position.total_contracts(), position.num_legs())`. With 10 contracts and 2 legs, the old engine would charge $20; the new engine charges $2. This will produce materially different backtest results. **Fallback:** Pass `CommissionModel` to the engine or compute exit commission from the Broker.
+
+[RISK] (confidence: 7/10) -- **Position sizing dropped from RiskGate.** The spec says "Engine retains position sizing limits (per-trade, portfolio, correlation)." The old engine (src/backtest/engine.rs:733-802) uses `PositionSizer` to calculate contract count and reject oversized trades. The new `DefaultRiskGate` (Task 5) only checks circuit breakers -- it does not integrate `PositionSizer`. Position sizing effectively vanishes in the refactor. **Fallback:** Either add `PositionSizer` to `DefaultRiskGate::check()`, or move position sizing into the strategy (but the spec explicitly says the engine owns it).
+
+#### Module Depth Audit
+
+| Module | Interface Size | Implementation Size | Verdict |
+|--------|---------------|-------------------|---------|
+| `core::events` | 7 types, ~10 methods | ~120 LOC of struct defs | SHALLOW -- this is a type bag, which is fine for its role |
+| `core::engine` | 1 function (`Engine::run`) | ~100 LOC loop + 2 helper fns | THIN by design, correct |
+| `strategy::put_spread` | 2 trait methods | ~150 LOC of screening/exit logic | DEEP, correct |
+| `portfolio::tracker` | 6 public methods | ~200 LOC of position lifecycle | DEEP, correct |
+| `broker::backtest` | 1 trait method | ~50 LOC | THIN, correct for wrapper |
+| `risk::gate` | 2 trait methods | ~30 LOC | SHALLOW -- only checks circuit breakers, should also check position sizing per spec |
+| `data::HistoricalDataSource` | 1 trait method + 2 constructors | Wraps DataLoader (350 LOC) | DEEP, correct |
+
+[OBS] -- `risk::gate` is shallower than intended. The spec says it composes circuit breakers + position sizer. The plan only implements circuit breakers.
+
+#### Code Quality
+
+[RISK] (confidence: 8/10) -- **`build_position_from_fill` always calls `put_credit_spread()`.** Task 8's `build_position_from_fill` (line 2051) hardcodes `CreditSpreadBuilder::put_credit_spread()` regardless of the order's `spread_type`. When a call credit spread strategy is added, this function will silently create wrong positions. **Fallback:** Match on `order.spread_type` to select the correct builder method.
+
+[OBS] -- Task 1 tests (lines 37-128) are shape tests -- they verify struct construction and field access, not behavior. This is acceptable for a type-definition task since there is no behavior to test beyond construction. But they will pass without implementation if the struct fields happen to have the right defaults. The `test_order_intent_exit` test with pattern matching on `OrderAction::Close` is the strongest of the bunch.
+
+#### Test Philosophy Audit
+
+[OBS] -- Tests in Tasks 6, 8, 10, and 11 depend on parquet data files existing at `data/orats/`. They use `match source { Ok(..) => ..., Err(_) => eprintln!("Skipping") }` to handle missing data gracefully. This means CI without data files will silently skip the most important tests. This is acceptable for now given the 4.1 GB data size, but note that the core integration tests are effectively manual-only.
+
+[OBS] -- Task 10 has no automated test -- it's a manual `cargo run` invocation. This is a pragmatic choice since the CLI is thin, but it means a regression in CLI-to-engine wiring won't be caught automatically. Task 11's determinism test partially covers this.
+
+#### Vertical Slice Audit
+
+[RISK] (confidence: 6/10) -- **Task 1 has 6 tests in Step 1 before implementation.** Strictly this violates the "one test, one impl, one commit" rule. However, these are type-definition tests for a single `events.rs` file -- splitting into 6 separate tasks would be overhead without benefit since the types are mutually dependent (e.g., `FillEvent` contains `OrderIntent`). **This is acceptable as-is** given the types are all defined in one file and tested together.
+
+[OBS] -- Tasks 3, 4, 5, and 7 similarly bundle 2-3 tests per task. Same reasoning applies -- they test a single module's public interface and the behaviors are tightly coupled.
+
+#### Test Coverage Gaps
+
+```
+[+] src/core/engine.rs (Engine::run)
+    |
+    +-- [TESTED]  NoOp strategy path -- Task 8 test
+    +-- [TESTED]  Put spread strategy path -- Task 8 test, Task 11
+    +-- [GAP]     Exit order when position not found (position_id mismatch)
+    +-- [GAP]     Broker error on entry order (logged but not tested)
+    +-- [GAP]     Empty data source (zero events) -- would return Ok with defaults
+
+[+] src/strategy/put_spread.rs (PutCreditSpreadStrategy)
+    |
+    +-- [TESTED]  Entry generation -- Task 7
+    +-- [TESTED]  Max positions check -- Task 7
+    +-- [TESTED]  Profit target exit -- Task 7
+    +-- [GAP]     Stop loss exit
+    +-- [GAP]     Time exit (21 DTE)
+    +-- [GAP]     Expiration exit (ITM vs worthless)
+    +-- [GAP]     IV filter blocking entry
+
+[+] src/portfolio/tracker.rs (PortfolioTracker)
+    |
+    +-- [TESTED]  Initial state -- Task 4
+    +-- [TESTED]  Add position -- Task 4
+    +-- [TESTED]  Close position -- Task 4
+    +-- [TESTED]  Equity curve recording -- Task 4
+    +-- [GAP]     update_mtm with real quotes
+    +-- [GAP]     close_all_remaining
+    +-- [GAP]     Drawdown tracking across multiple days
+
+[+] src/risk/gate.rs (DefaultRiskGate)
+    |
+    +-- [TESTED]  Normal conditions allow -- Task 5
+    +-- [TESTED]  Daily loss halts -- Task 5
+    +-- [GAP]     VIX halt
+    +-- [GAP]     Weekly loss halt
+    +-- [GAP]     Drawdown halt
+    +-- [GAP]     Exit orders always allowed
+```
+
+[RISK] (confidence: 7/10) -- Strategy exit paths (stop loss, time exit, expiration) are not tested. These are critical behaviors for a trading system. The integration test (Task 11) will exercise some of these over 7 months of data, but specific edge cases (stop loss at exactly 125%, expiration on the last day) won't be verified.
+
+#### Failure Modes
+
+[OBS] -- If Task 8's engine loop encounters a `BrokerError` on entry, it logs and continues (`info!("Broker error: {}", e)`). This is correct behavior -- a single failed fill shouldn't halt the backtest. The log is at `info` level; consider `warn` since failed fills are noteworthy.
+
+[OBS] -- `HistoricalDataSource::new()` loads all snapshots into memory upfront (via `loader.load_snapshots()`). For SPY 2007-2026 (19 years), this could be several GB in memory. The old engine had the same pattern. Acceptable for now but will need streaming for larger datasets.
+
+#### Spec vs. Plan Drift
+
+[RISK] (confidence: 9/10) -- **Spec says "Explicit error handling (no unwrap_or_default)" but the plan defers this.** The spec's "Key Decision: Explicit Data Errors" section says `dataframe_to_snapshot()` should return `Err` instead of `unwrap_or(0.0)`. The plan's Spec Coverage table maps this to "Task 6 (data loader tightening)" but Task 6's actual implementation does not modify `data/loader.rs` -- it only adds `DataSource` trait and `HistoricalDataSource` wrapper to `data/mod.rs`. The `unwrap_or(0.0)` calls in `loader.rs` remain untouched. This is a spec requirement that the plan claims to cover but doesn't.
+
+[RISK] (confidence: 9/10) -- **Spec says walk-forward optimizer should be "adapted in this phase" but the plan explicitly defers it.** The spec's Open Questions section defaults to "Adapted in this phase" because "It is tightly coupled to BacktestEngine and will break if the engine is replaced without updating it." The plan defers it with the note "optimizer still works with old engine." This is true only because Task 9 keeps the old engine alive (`pub mod engine; // Keep for now`). This is a coherent decision but contradicts the spec's default answer.
+
+### Presumption Inventory
+
+| Assumption | Verdict | Reason |
+|---|---|---|
+| `pub mod core` compiles without breaking existing code | SAFE | Verified: `cargo check` passes with `mod core` added. No `use core::` in existing code. |
+| `ExitReason` derives `Copy` (used in pattern matching in `OrderAction`) | SAFE | Verified: `#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]` on line 40 of trade.rs |
+| `OptionsSnapshot` implements `Clone` (needed for `HistoricalDataSource::next_event`) | SAFE | Verified: `#[derive(Debug, Clone, Default)]` on line 207 of types.rs |
+| Group A tasks can all modify `src/lib.rs` in parallel | VALIDATE | Each adds one `pub mod X;` line. Non-conflicting content but git will see merge conflicts on adjacent lines. Build agent must apply sequentially or merge. |
+| `SpreadScreener` works correctly when `iv_percentile` is `None` | SAFE | Verified: line 146-149 of spread_screener.rs shows `if let Some(pct) = iv_percentile { ... }` guard |
+| The old `BacktestEngine` can coexist with new `Engine` in the same crate | SAFE | Different modules, no name collisions. Verified the old engine is only used in main.rs and walkforward. |
+| `Position::new_id()` is deterministic across runs | RISKY | Uses `AtomicU64` counter starting at 1. IDs will be deterministic within a single run but the global counter persists across tests in the same process. Not a correctness issue but could cause confusing test failures if tests depend on specific IDs. |
+
+### Summary
+
+```
+[BLOCKER] count: 0
+[RISK]    count: 7
+[QUESTION] count: 0
+```
+
+Risks ranked by severity:
+1. **Hardcoded exit commission $2** (confidence: 9/10) -- Will produce materially wrong backtest results vs old engine. Easy fix.
+2. **Position sizing dropped from RiskGate** (confidence: 7/10) -- Spec says engine owns it, plan doesn't implement it. Causes oversized positions.
+3. **`build_position_from_fill` hardcodes put spread** (confidence: 8/10) -- Won't matter until second strategy is added but violates the pluggable design intent.
+4. **Spec drift on explicit data errors** (confidence: 9/10) -- Claimed but not implemented. Acceptable to defer explicitly.
+5. **Spec drift on walk-forward optimizer** (confidence: 9/10) -- Contradicts spec default. Coherent decision but should be made explicit.
+6. **`pub mod core` naming** (confidence: 7/10) -- Compiles today, future risk from dependency updates.
+7. **Exit orders bypass broker** (confidence: 8/10) -- Matches old behavior, needs fixing for Phase 2.
+
+VERDICT: PROCEED_WITH_CAUTION -- Fix the hardcoded exit commission (risk #1) during Task 8 implementation. Monitor position sizing gap (risk #2) and decide during execution whether to add it to DefaultRiskGate or defer. The remaining risks are documented and acceptable for Phase 1.
