@@ -1,153 +1,149 @@
-import imaplib
-import email
-import email.header
-import email.utils
-import email.message
+import json
 import re
 import ssl
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from typing import Optional
 
 from email_types import EmailMessage
 
 
-def _decode_header_value(raw_value: Optional[str]) -> str:
-    if not raw_value:
-        return ""
-    parts = email.header.decode_header(raw_value)
-    decoded_parts = []
-    for fragment, charset in parts:
-        if isinstance(fragment, bytes):
-            if charset:
-                decoded_parts.append(fragment.decode(charset, errors="replace"))
-            else:
-                decoded_parts.append(fragment.decode("utf-8", errors="replace"))
-        else:
-            decoded_parts.append(fragment)
-    return "".join(decoded_parts)
+def _build_https_opener() -> urllib.request.OpenerDirector:
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = True
+    ctx.verify_mode = ssl.CERT_REQUIRED
+    opener = urllib.request.OpenerDirector()
+    opener.add_handler(urllib.request.HTTPSHandler(context=ctx))
+    opener.add_handler(urllib.request.UnknownHandler())
+    return opener
+
+
+_OPENER = _build_https_opener()
+
+_TOKEN_ENDPOINT = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
+_GRAPH_BASE = "https://graph.microsoft.com/v1.0/me"
+
+
+def refresh_access_token(client_id: str, client_secret: str, refresh_token: str) -> str:
+    """Exchange a refresh token for a new access token. Raises on auth failure."""
+    body = urllib.parse.urlencode({
+        "grant_type": "refresh_token",
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "refresh_token": refresh_token,
+        "scope": "https://graph.microsoft.com/Mail.ReadWrite offline_access",
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        _TOKEN_ENDPOINT,
+        data=body,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+
+    try:
+        with _OPENER.open(req) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Outlook token refresh failed: {exc.code} {body_text}") from exc
+
+    access_token = data.get("access_token")
+    if not access_token:
+        raise RuntimeError(f"No access_token in Outlook token response: {data}")
+    return access_token
+
+
+def _graph_get(url: str, access_token: str) -> dict:
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {access_token}"})
+    try:
+        with _OPENER.open(req) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Graph API request failed: {exc.code} {body_text}") from exc
+
+
+def _mark_read(message_id: str, access_token: str) -> None:
+    url = f"{_GRAPH_BASE}/messages/{message_id}"
+    data = json.dumps({"isRead": True}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        },
+        method="PATCH",
+    )
+    try:
+        with _OPENER.open(req):
+            pass
+    except urllib.error.HTTPError:
+        pass  # marking read is best-effort
 
 
 def _strip_html(html: str) -> str:
     return re.sub(r"<[^>]+>", "", html)
 
 
-def _extract_body_preview(msg: email.message.Message) -> str:
-    plain_body: Optional[str] = None
-    html_body: Optional[str] = None
-
-    if msg.is_multipart():
-        for part in msg.walk():
-            content_type = part.get_content_type()
-            if content_type == "text/plain" and plain_body is None:
-                payload = part.get_payload(decode=True)
-                if payload:
-                    charset = part.get_content_charset() or "utf-8"
-                    try:
-                        plain_body = payload.decode(charset, errors="replace")
-                    except (LookupError, UnicodeDecodeError):
-                        plain_body = payload.decode("latin-1", errors="replace")
-            elif content_type == "text/html" and html_body is None:
-                payload = part.get_payload(decode=True)
-                if payload:
-                    charset = part.get_content_charset() or "utf-8"
-                    try:
-                        html_body = payload.decode(charset, errors="replace")
-                    except (LookupError, UnicodeDecodeError):
-                        html_body = payload.decode("latin-1", errors="replace")
-    else:
-        content_type = msg.get_content_type()
-        payload = msg.get_payload(decode=True)
-        if payload:
-            charset = msg.get_content_charset() or "utf-8"
-            try:
-                text = payload.decode(charset, errors="replace")
-            except (LookupError, UnicodeDecodeError):
-                text = payload.decode("latin-1", errors="replace")
-            if content_type == "text/plain":
-                plain_body = text
-            elif content_type == "text/html":
-                html_body = text
-
-    if plain_body is not None:
-        return plain_body.strip()[:500]
-    if html_body is not None:
-        return _strip_html(html_body).strip()[:500]
-    return ""
-
-
 def _parse_received_at(date_str: Optional[str]) -> str:
-    if date_str:
-        try:
-            dt = email.utils.parsedate_to_datetime(date_str)
-            return dt.astimezone(timezone.utc).isoformat()
-        except Exception:
-            pass
-    return datetime.now(tz=timezone.utc).isoformat()
+    if not date_str:
+        return datetime.now(tz=timezone.utc).isoformat()
+    try:
+        dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return datetime.now(tz=timezone.utc).isoformat()
 
 
 def _fetch_from_folder(
-    imap: imaplib.IMAP4_SSL,
-    folder_name: str,
+    folder_path: str,
+    access_token: str,
     is_junk: bool,
+    max_results: int = 50,
 ) -> list[EmailMessage]:
+    """Fetch unread messages from a Graph API mail folder."""
+    params = urllib.parse.urlencode({
+        "$filter": "isRead eq false",
+        "$select": "id,subject,from,receivedDateTime,body,internetMessageId,internetMessageHeaders",
+        "$top": str(max_results),
+    })
+    url = f"{_GRAPH_BASE}/{folder_path}/messages?{params}"
+
     try:
-        status, _ = imap.select(folder_name, readonly=False)
-    except imaplib.IMAP4.error:
+        data = _graph_get(url, access_token)
+    except RuntimeError:
         return []
 
-    if status != "OK":
-        return []
-
-    status, data = imap.search(None, "UNSEEN")
-    if status != "OK" or not data or not data[0]:
-        return []
-
-    uid_list = data[0].split()
-    if not uid_list:
-        return []
-
+    messages = data.get("value", [])
     results: list[EmailMessage] = []
 
-    for uid in uid_list:
+    for msg in messages:
         try:
-            status, msg_data = imap.fetch(uid, "(RFC822)")
-            if status != "OK" or not msg_data:
-                continue
+            msg_id = msg.get("internetMessageId", "").strip("<>") or f"outlook:{msg['id']}"
 
-            raw_email: Optional[bytes] = None
-            for part in msg_data:
-                if isinstance(part, tuple):
-                    raw_email = part[1]
-                    break
+            from_obj = msg.get("from", {}).get("emailAddress", {})
+            from_name = from_obj.get("name", "")
+            from_email = from_obj.get("address", "")
+            from_addr = f"{from_name} <{from_email}>" if from_name else from_email
 
-            if raw_email is None:
-                continue
+            subject = msg.get("subject", "")
+            received_at = _parse_received_at(msg.get("receivedDateTime"))
 
-            msg = email.message_from_bytes(raw_email)
+            body_obj = msg.get("body", {})
+            raw_body = body_obj.get("content", "")
+            if body_obj.get("contentType", "text") == "html":
+                raw_body = _strip_html(raw_body)
+            body_preview = raw_body.strip()[:500]
 
-            imap.store(uid, "+FLAGS", "\\Seen")
-
-            raw_message_id = msg.get("Message-ID", "").strip()
-            if raw_message_id:
-                message_id = raw_message_id.strip("<>")
-            else:
-                message_id = f"outlook:{uid.decode()}"
-
-            raw_from = _decode_header_value(msg.get("From", ""))
-            name, addr = email.utils.parseaddr(raw_from)
-            if addr:
-                from_addr = f"{name} <{addr}>" if name else addr
-            else:
-                from_addr = raw_from
-
-            subject = _decode_header_value(msg.get("Subject", ""))
-            received_at = _parse_received_at(msg.get("Date"))
-            body_preview = _extract_body_preview(msg)
-
-            headers: dict = {k.lower(): v for k, v in msg.items()}
+            raw_headers = msg.get("internetMessageHeaders", [])
+            headers = {h["name"].lower(): h["value"] for h in raw_headers}
 
             result: EmailMessage = {
-                "message_id": message_id,
+                "message_id": msg_id,
                 "source": "outlook",
                 "from_addr": from_addr,
                 "subject": subject,
@@ -157,6 +153,7 @@ def _fetch_from_folder(
                 "headers": headers,
             }
             results.append(result)
+            _mark_read(msg["id"], access_token)
 
         except Exception:
             continue
@@ -165,23 +162,16 @@ def _fetch_from_folder(
 
 
 def fetch_unread_emails(
-    host: str, email_addr: str, app_password: str
+    client_id: str,
+    client_secret: str,
+    refresh_token: str,
+    max_results: int = 50,
 ) -> list[EmailMessage]:
-    """Fetch unread emails from Outlook INBOX and Junk folders via IMAP SSL.
-    Marks fetched messages as seen. Raises on connection/auth failure."""
-    imap = imaplib.IMAP4_SSL(host, 993)
-    try:
-        try:
-            imap.login(email_addr, app_password)
-        except imaplib.IMAP4.error as exc:
-            raise RuntimeError(f"IMAP login failed for {email_addr}: {exc}") from exc
+    """Fetch unread emails from Outlook INBOX and Junk via Microsoft Graph API.
+    Marks fetched messages as read. Raises on auth failure."""
+    access_token = refresh_access_token(client_id, client_secret, refresh_token)
 
-        results: list[EmailMessage] = []
-        results.extend(_fetch_from_folder(imap, "INBOX", is_junk=False))
-        results.extend(_fetch_from_folder(imap, "Junk", is_junk=True))
-        return results
-    finally:
-        try:
-            imap.logout()
-        except Exception:
-            pass
+    results: list[EmailMessage] = []
+    results.extend(_fetch_from_folder("mailFolders/inbox", access_token, is_junk=False, max_results=max_results))
+    results.extend(_fetch_from_folder("mailFolders/junkemail", access_token, is_junk=True, max_results=max_results))
+    return results
