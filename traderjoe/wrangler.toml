@@ -1,63 +1,33 @@
-name = "mahler"
-main = "src/entry.py"
+name = "trader-joe"
+main = "trader-joe/build/worker/shim.mjs"
 compatibility_date = "2024-12-01"
-compatibility_flags = ["python_workers"]
+
+[build]
+command = "cd trader-joe && cargo install worker-build --version 0.4.0 && worker-build --release"
 
 [observability]
 enabled = true
 
-# Cron triggers for scheduled workers
-# Times are in UTC (ET = UTC-4 during EDT, UTC-5 during EST)
-# DST note: Update these when clocks change (2nd Sun Mar, 1st Sun Nov)
-# Research: First 30 min (9:30-10:00 AM) have wider spreads and stale quotes
 [triggers]
 crons = [
-    "0 14 * * MON-FRI",      # morning_scan: 10:00 AM ET (14:00 UTC during EDT)
-    "0 16 * * MON-FRI",      # midday_check: 12:00 PM ET (16:00 UTC during EDT)
-    "30 19 * * MON-FRI",     # afternoon_scan: 3:30 PM ET (19:30 UTC during EDT)
-    "15 20 * * MON-FRI",     # eod_summary: 4:15 PM ET (20:15 UTC during EDT)
-    "*/5 14-20 * * MON-FRI", # position_monitor: every 5 min (10 AM - 4 PM ET)
+    "0 14 * * MON-FRI",
+    "*/5 14-20 * * MON-FRI",
+    "15 20 * * MON-FRI",
 ]
 
-# D1 SQLite database for persistent storage
 [[d1_databases]]
-binding = "MAHLER_DB"
+binding = "DB"
 database_name = "mahler-db"
 database_id = "b6cb2eac-2903-46bd-baea-b4ff2dc904d0"
 migrations_dir = "src/migrations"
 
-# KV namespace for fast state (circuit breakers, rate limits)
 [[kv_namespaces]]
-binding = "MAHLER_KV"
+binding = "KV"
 id = "4e63db1305a1424ead3565522a47b5f4"
 
-# Single R2 bucket for all storage (models + archive)
-# Create with: wrangler r2 bucket create mahler-bucket
-# Structure:
-#   - models/regime/latest.json, models/weights/latest.json, models/exit/latest.json
-#   - archive/snapshots/{date}/daily.json, archive/options_chains/..., archive/backups/...
-[[r2_buckets]]
-binding = "MAHLER_BUCKET"
-bucket_name = "mahler-bucket"
-
-# Environment variables (non-secret)
-# CPU time limit (paid plan allows up to 300000ms / 5 minutes)
 [limits]
 cpu_ms = 120_000
-
-# Vectorize for episodic memory similarity search
-[[vectorize]]
-binding = "EPISODIC_MEMORY"
-index_name = "mahler-episodic"
-
-# Workers AI for embeddings
-[ai]
-binding = "AI"
 
 [vars]
 ENVIRONMENT = "paper"
 LOG_LEVEL = "INFO"
-AUTO_APPROVE_TRADES = "true"  # V2: Enable autonomous execution (no manual approval)
-
-# Multi-Agent System Configuration
-MULTI_AGENT_DEBATE_ROUNDS = "1"  # Number of debate rounds between bull/bear
