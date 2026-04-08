@@ -34,14 +34,14 @@ import outlook_client
 
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 _DEFAULT_MODEL = "x-ai/grok-4.1-fast"
-_OUTLOOK_IMAP_HOST = "outlook.office365.com"
 
 _REQUIRED_ENV = [
     "GMAIL_CLIENT_ID",
     "GMAIL_CLIENT_SECRET",
     "GMAIL_REFRESH_TOKEN",
-    "OUTLOOK_EMAIL",
-    "OUTLOOK_APP_PASSWORD",
+    "OUTLOOK_CLIENT_ID",
+    "OUTLOOK_CLIENT_SECRET",
+    "OUTLOOK_REFRESH_TOKEN",
     "CF_ACCOUNT_ID",
     "CF_D1_DATABASE_ID",
     "CF_API_TOKEN",
@@ -272,9 +272,9 @@ def main(argv: list[str] | None = None) -> None:
     outlook_error: Exception | None = None
     try:
         outlook_emails = outlook_client.fetch_unread_emails(
-            host=_OUTLOOK_IMAP_HOST,
-            email_addr=env["OUTLOOK_EMAIL"],
-            app_password=env["OUTLOOK_APP_PASSWORD"],
+            client_id=env["OUTLOOK_CLIENT_ID"],
+            client_secret=env["OUTLOOK_CLIENT_SECRET"],
+            refresh_token=env["OUTLOOK_REFRESH_TOKEN"],
         )
     except Exception as exc:
         outlook_error = exc
