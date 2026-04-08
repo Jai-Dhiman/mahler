@@ -3749,6 +3749,52 @@ impl AlpacaClient {
         Ok(())
     }
 
+    /// Place a closing (buy-to-close) order for an existing credit spread.
+    ///
+    /// Reverses the opening legs: buy-to-close the short, sell-to-close the long.
+    pub async fn place_closing_spread_order(&self, order: &SpreadOrder) -> Result<Order> {
+        let url = format!("{}/v2/orders", self.base_url);
+        let body = serde_json::to_string(&serde_json::json!({
+            "type": "limit",
+            "time_in_force": "day",
+            "order_class": "mleg",
+            "limit_price": format!("{:.2}", order.limit_price),
+            "legs": [
+                {
+                    "symbol": order.short_occ_symbol,
+                    "ratio_qty": order.contracts.to_string(),
+                    "side": "buy_to_close",
+                    "position_effect": "close"
+                },
+                {
+                    "symbol": order.long_occ_symbol,
+                    "ratio_qty": order.contracts.to_string(),
+                    "side": "sell_to_close",
+                    "position_effect": "close"
+                }
+            ]
+        }))
+        .map_err(|e| worker::Error::RustError(e.to_string()))?;
+
+        let mut headers = self.auth_headers()?;
+        headers.set("Content-Type", "application/json")?;
+
+        let mut init = RequestInit::new();
+        init.with_method(Method::Post)
+            .with_headers(headers)
+            .with_body(Some(body.into()));
+
+        let req = Request::new_with_init(&url, &init)?;
+        let mut resp = Fetch::Request(req).send().await?;
+        let json: Value = resp.json().await?;
+
+        Ok(Order {
+            id: json["id"].as_str().unwrap_or("").to_string(),
+            status: OrderStatus::Pending,
+            filled_price: None,
+        })
+    }
+
     pub async fn get_order(&self, order_id: &str) -> Result<Order> {
         let url = format!("{}/v2/orders/{}", self.base_url, order_id);
         let json: Value = self.get(&url).await?;
@@ -3950,7 +3996,7 @@ pub async fn run(env: &Env) -> Result<()> {
     if risk_state.level == RiskLevel::Halted {
         let reason = risk_state.reason.as_deref().unwrap_or("risk threshold exceeded");
         console_log!("Risk evaluation halted: {}", reason);
-        let mut new_state = crate::db::kv::CircuitBreakerState {
+        let new_state = crate::db::kv::CircuitBreakerState {
             halted: true,
             reason: Some(reason.to_string()),
             triggered_at: Some(Utc::now().to_rfc3339()),
@@ -4107,12 +4153,13 @@ pub async fn run(env: &Env) -> Result<()> {
     }
 
     let duration_ms = (Utc::now() - start).num_milliseconds();
+    let vix_value = vix_data.as_ref().map(|v| v.vix);
     db.log_scan(
         "morning",
         cfg.underlyings.len() as i64,
         0, // opportunities_found simplified
         trades_placed as i64,
-        vix_data.map(|v| v.vix),
+        vix_value,
         false,
         duration_ms,
         None,
@@ -4123,7 +4170,7 @@ pub async fn run(env: &Env) -> Result<()> {
         cfg.underlyings.len() as i64,
         0,
         trades_placed as i64,
-        vix_data.map(|v| v.vix),
+        vix_value,
     ).await.ok();
 
     console_log!("Morning scan complete. Placed {} trade(s) in {}ms", trades_placed, duration_ms);
@@ -4250,7 +4297,8 @@ Expected: FAIL — `check_exit_conditions` not defined.
 ```rust
 use worker::{console_log, Env, Result};
 
-use crate::broker::alpaca::AlpacaClient;
+use crate::broker::alpaca::{build_occ_symbol, AlpacaClient};
+use crate::broker::types::SpreadOrder;
 use crate::config::SpreadConfig;
 use crate::db::d1::D1Client;
 use crate::db::kv::KvClient;
@@ -4353,10 +4401,48 @@ pub async fn run(env: &Env) -> Result<()> {
                 dte,
             );
 
-            // Close the spread: buy back short, sell long
+            // Place closing order at broker: buy-to-close short, sell-to-close long
+            let option_type_str = match trade.spread_type {
+                crate::types::SpreadType::BullPut => "P",
+                crate::types::SpreadType::BearCall => "C",
+            };
+            let short_occ = build_occ_symbol(&trade.underlying, &trade.expiration, option_type_str, trade.short_strike);
+            let long_occ = build_occ_symbol(&trade.underlying, &trade.expiration, option_type_str, trade.long_strike);
+
+            let close_order = SpreadOrder {
+                underlying: trade.underlying.clone(),
+                short_occ_symbol: short_occ,
+                long_occ_symbol: long_occ,
+                contracts: trade.contracts,
+                limit_price: current_debit,
+            };
+
+            let placed = match alpaca.place_closing_spread_order(&close_order).await {
+                Ok(o) => o,
+                Err(e) => {
+                    console_log!("Failed to place closing order for trade {}: {:?}", trade.id, e);
+                    discord.send_error(
+                        &format!("Exit Order Failed: {}", trade.underlying),
+                        &format!("{:?}", e),
+                    ).await.ok();
+                    continue;
+                }
+            };
+
             let net_pnl = (trade.entry_credit - current_debit) * 100.0 * trade.contracts as f64;
 
-            db.close_trade(&trade.id, current_debit, &exit_reason, net_pnl).await?;
+            // Ghost-trade prevention: if DB write fails after close order placed, alert immediately
+            if let Err(e) = db.close_trade(&trade.id, current_debit, &exit_reason, net_pnl).await {
+                console_log!(
+                    "CRITICAL: DB close_trade failed for trade {} after close order {}. Manual intervention required.",
+                    trade.id, placed.id
+                );
+                discord.send_error(
+                    "DB WRITE FAILED AFTER CLOSE ORDER",
+                    &format!("Trade {} / Order {}: {:?}. Position may be double-closed.", trade.id, placed.id, e),
+                ).await.ok();
+                continue;
+            }
 
             discord.send_position_exit(
                 &trade.underlying,
@@ -5070,4 +5156,4 @@ Morning scan computes `starting_daily` locally but never saves it to KV. `DailyS
 1. Should Task 1 delete the entire `src/` Python tree (per spec) rather than a subset?
 2. Should Alpaca multi-leg options order format be verified against Alpaca API docs before Task 15?
 
-VERDICT: NEEDS_REWORK — [BLOCKER 1: fix vix_data use-after-move in morning_scan.rs; BLOCKER 2: add broker closing order placement to position_monitor before db.close_trade()]
+VERDICT: PROCEED_WITH_CAUTION — [Both blockers resolved in plan. Risks to monitor during execution: worker-rs 0.4 API compatibility (verify cargo build in Task 3); VIXY ETF is not spot VIX; Task 1 should delete entire src/ Python tree per spec; unwrap_or_default() on iv_history violates project preference.]
