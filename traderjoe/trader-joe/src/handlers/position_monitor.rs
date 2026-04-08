@@ -130,16 +130,24 @@ pub async fn run(env: &Env) -> Result<()> {
 
             let net_pnl = (trade.entry_credit - current_debit) * 100.0 * trade.contracts as f64;
 
-            if let Err(e) = db.close_trade(&trade.id, current_debit, &exit_reason, net_pnl).await {
-                console_log!(
-                    "CRITICAL: DB close_trade failed for trade {} after close order {}.",
-                    trade.id, placed.id
-                );
-                discord.send_error(
-                    "DB WRITE FAILED AFTER CLOSE ORDER",
-                    &format!("Trade {} / Order {}: {:?}. Position may be double-closed.", trade.id, placed.id, e),
-                ).await.ok();
-                continue;
+            match db.close_trade(&trade.id, current_debit, &exit_reason, net_pnl).await {
+                Err(e) => {
+                    console_log!(
+                        "CRITICAL: DB close_trade failed for trade {} after close order {}.",
+                        trade.id, placed.id
+                    );
+                    discord.send_error(
+                        "DB WRITE FAILED AFTER CLOSE ORDER",
+                        &format!("Trade {} / Order {}: {:?}. Position may be double-closed.", trade.id, placed.id, e),
+                    ).await.ok();
+                    continue;
+                }
+                Ok(false) => {
+                    // Another concurrent invocation already closed this trade — skip notification.
+                    console_log!("Trade {} already closed by concurrent invocation, skipping.", trade.id);
+                    continue;
+                }
+                Ok(true) => {}
             }
 
             discord.send_position_exit(

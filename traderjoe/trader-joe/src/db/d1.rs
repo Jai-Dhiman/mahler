@@ -116,19 +116,22 @@ impl D1Client {
         Ok(rows.iter().filter_map(TradeRow::from_d1_row).collect())
     }
 
+    /// Close a trade. Returns Ok(true) if the row was updated, Ok(false) if it
+    /// was already closed (concurrent invocation beat us — caller should skip
+    /// the Discord notification to avoid double-reporting).
     pub async fn close_trade(
         &self,
         trade_id: &str,
         exit_price: f64,
         exit_reason: &ExitReason,
         net_pnl: f64,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         use chrono::Utc;
         let now = Utc::now().to_rfc3339();
-        self.db
+        let result = self.db
             .prepare(
                 "UPDATE trades SET status = 'closed', exit_price = ?, exit_time = ?,
-                exit_reason = ?, net_pnl = ? WHERE id = ?",
+                exit_reason = ?, net_pnl = ? WHERE id = ? AND status = 'open'",
             )
             .bind(&[
                 exit_price.into(),
@@ -139,7 +142,12 @@ impl D1Client {
             ])?
             .run()
             .await?;
-        Ok(())
+        let written = result.meta()
+            .ok()
+            .flatten()
+            .and_then(|m| m.rows_written)
+            .unwrap_or(0);
+        Ok(written > 0)
     }
 
     pub async fn mark_trade_filled(&self, trade_id: &str, fill_price: f64) -> Result<()> {

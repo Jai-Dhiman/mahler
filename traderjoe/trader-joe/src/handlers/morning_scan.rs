@@ -131,7 +131,13 @@ pub async fn run(env: &Env) -> Result<()> {
             continue;
         }
 
-        let history = db.get_iv_history(symbol, 252).await.unwrap_or_default();
+        let history = match db.get_iv_history(symbol, 252).await {
+            Ok(h) => h,
+            Err(e) => {
+                console_log!("Failed to fetch IV history for {}: {:?}", symbol, e);
+                continue;
+            }
+        };
 
         let atm_iv = chain.contracts.iter()
             .filter(|c| (c.strike - chain.underlying_price).abs() < chain.underlying_price * 0.02)
