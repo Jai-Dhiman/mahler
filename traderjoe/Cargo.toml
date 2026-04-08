@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "mahler-backtest",
+    "trader-joe",
+]
+resolver = "2"
