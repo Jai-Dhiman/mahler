@@ -4813,3 +4813,261 @@ Trigger a test run:
 ```bash
 wrangler dev --test-scheduled
 ```
+
+---
+
+## Challenge Review
+
+### CEO Pass
+
+#### 1. Premise Challenge
+
+**Right problem?** Yes. The Python Worker with 8,000 lines of ML complexity that autoresearch confirms doesn't beat fixed parameters is genuinely over-engineered. The Pyodide WASM runtime is memory-hungry and slow. Replacing it with a lean Rust Worker is the correct call.
+
+**Real pain?** Concrete: the system is unreliable because dead code paths (agents, memory, three-perspective) add cognitive overhead with zero measured edge. Regime detector runs stale frozen weights. The pain is real.
+
+**Direct path?** Yes. The plan directly implements the minimal system the autoresearch validates. No proxy problem being solved.
+
+**Existing coverage?** `mahler-backtest/` already uses Rust with the same domain types. The workspace approach correctly extends an existing pattern.
+
+#### 2. Scope Check
+
+The only deferrable item is bear_call spreads — the backtest validates put spreads primarily, and bear calls add screener complexity with unvalidated edge. The spec resolves this as "include both, filter by score." Acceptable.
+
+The hardest problem (worker-rs WASM compatibility with no async runtime for tests, D1 binding API correctness) is addressed via pure-function extraction. The plan does not avoid it.
+
+#### 3. Twelve-Month Alignment
+
+```
+CURRENT STATE                     THIS PLAN                    12-MONTH IDEAL
+8k-line Python, dead ML code  →   ~1.5k Rust, fixed params  →  Same Rust system
+Unreliable, stale ML weights       Pure functions, testable     with better IV
+Pyodide WASM, slow startup         WASM Rust, fast startup      data sources
+Dead agents/memory code            Deleted entirely             and live VIX feed
+```
+
+This plan moves directly toward the ideal. The only tech debt created is the VIX proxy (VIXY ETF instead of spot VIX) — noted below.
+
+#### 4. Alternatives Check
+
+The spec discusses the Rust WASM approach and why it fits (same Pyodide runtime model, worker-rs bindings, shared workspace). The rationale is embedded in the spec's "Chosen Approach" section, which is sufficient.
+
+---
+
+### Engineering Pass
+
+#### 5. Architecture
+
+**Data flow:**
+```
+cron trigger -> lib.rs router -> handler::run(&env)
+                                     |
+                           KV: circuit breaker check
+                                     |
+                         Alpaca: market open / account / VIX
+                                     |
+                           CircuitBreaker::evaluate()
+                                     |
+                         Alpaca: get_options_chain(symbol)
+                                     |
+                        OptionsScreener::screen_chain()
+                                     |
+                      PositionSizer::calculate_for_underlying()
+                                     |
+                         Alpaca: place_spread_order()
+                                     |
+                        D1: create_trade() [ghost trade prevention]
+                                     |
+                        Discord: send_trade_placed()
+```
+
+**Security:** No user input flows to SQL or shell. D1 uses parameterized queries throughout. No injection vectors found.
+
+**Scaling:** Scans 3 underlyings sequentially. Each fetches a 1000-contract options chain. No unbounded loops or fan-out patterns that break under load.
+
+**Deployment:** If wrangler deploy succeeds but migration hasn't run, D1 queries fail loudly. Acceptable failure mode.
+
+#### 6. Module Depth Audit
+
+| Module | Exports | Hides | Verdict |
+|--------|---------|-------|---------|
+| analysis/greeks.rs | 3 fns | Hart(1968) CDF, BS formula, date parsing | DEEP |
+| analysis/iv_rank.rs | 1 fn + IVMetrics | rank vs percentile distinction, clamping | DEEP |
+| analysis/screener.rs | screen_chain() | DTE/liquidity/delta/credit filters, scoring | DEEP |
+| risk/circuit_breaker.rs | evaluate() | 5 thresholds, size multiplier logic | DEEP |
+| risk/position_sizer.rs | calculate(), calculate_for_underlying() | 3 limits, VIX reduction | DEEP |
+| broker/alpaca.rs | 8 methods | Alpaca REST, OCC format, auth headers | DEEP |
+| db/d1.rs | 7 methods | D1 bind/execute, JS-Rust conversion, deserialization | DEEP |
+| db/kv.rs | 6 methods | KV serialization, TTL management, key construction | DEEP |
+| notifications/discord.rs | 5 domain methods + send() | Discord embed JSON format, color codes | DEEP |
+| types.rs | structs/enums + CreditSpread methods | none | SHALLOW (justified: pure data types) |
+| config.rs | SpreadConfig + 2 methods | exit condition math, parameter constants | DEEP |
+
+#### 7. Code Quality
+
+**[BLOCKER] (confidence: 10/10) — Task 16: vix_data use-after-move (compile error)**
+
+`vix_data: Option<VixData>` is an owned value. The plan calls `.map()` on it twice:
+
+```
+db.log_scan(..., vix_data.map(|v| v.vix), ...).await.ok();       // moves vix_data
+discord.send_scan_summary(..., vix_data.map(|v| v.vix)).await.ok(); // ERROR: moved
+```
+
+`Option<VixData>` is not `Copy`. Fix: extract `let vix_value = vix_data.as_ref().map(|v| v.vix);` before both calls.
+
+**[BLOCKER] (confidence: 10/10) — Task 17: position monitor marks trades closed without placing broker closing orders**
+
+`position_monitor.rs` detects exits and calls `db.close_trade()` but never calls `alpaca.place_spread_order()`. The comment "Close the spread: buy back short, sell long" has no broker call following it. The actual options position at Alpaca remains open indefinitely while D1 reports it closed — orphaned positions accumulate.
+
+Fix: before `db.close_trade()`, construct and place a closing `SpreadOrder` with `side: "buy_to_close"` / `side: "sell_to_close"`. Apply the same ghost-trade-prevention pattern: cancel if D1 write fails.
+
+**[RISK] (confidence: 8/10) — Task 1 leaves ~200KB of dead Python files; spec requires deleting all**
+
+The spec says: `traderjoe/src/ (Python tree) | Delete all Python handlers and core modules | Delete`
+
+Task 1's deletion list omits:
+- `src/handlers/morning_scan.py` (34.8K), `position_monitor.py` (53.5K), `eod_summary.py` (44.7K), `health.py`
+- `src/entry.py`
+- `src/core/analysis/greeks.py`, `iv_rank.py`, `screener.py`, `indicators.py`
+- `src/core/broker/`, `src/core/db/`, `src/core/notifications/`
+- `src/core/risk/circuit_breaker.py`, `src/core/risk/position_sizer.py`
+- `src/core/backtesting/`, `src/core/monitoring/`, `src/core/inference/`, `src/core/learning/`, `src/core/reflection/`, `src/core/ai/`
+
+Update Task 1 to delete `src/handlers/`, `src/core/`, and `src/entry.py` entirely, or add a step that does `rm -rf src/handlers/ src/core/ src/entry.py`.
+
+**[RISK] (confidence: 8/10) — VIX source is VIXY (ETF proxy), not spot VIX**
+
+`alpaca.rs` fetches VIXY price as a VIX proxy. VIXY systematically trades below spot VIX due to futures contango and roll costs. During flash crashes where circuit breaker matters most, VIXY < spot VIX. A halt threshold of 50 based on VIXY price may miss a genuine VIX=55 spike. Consider lowering vix_halt to 40 or documenting this limitation explicitly.
+
+**[RISK] (confidence: 8/10) — Worker-rs 0.4 API compatibility unverified**
+
+Three specific usages need verification before execution:
+1. `i64.into()` → `JsValue` — JS numbers are f64; i64 may require explicit cast `(val as f64).into()`
+2. `result.results::<serde_json::Value>()` — verify generic D1 results API exists in 0.4
+3. `worker::js_sys::Math::random()` — verify js_sys is re-exported in worker-rs 0.4
+
+Mitigation: add `cargo build --package trader-joe` to Task 3's verification step.
+
+**[RISK] (confidence: 7/10) — build_occ_symbol panics on malformed expiration strings**
+
+```rust
+let parts: Vec<&str> = expiration.split('-').collect();
+let yy = &parts[0][2..];  // panics if parts[0] < 2 chars
+let mm = parts[1];         // panics if fewer than 2 segments
+let dd = parts[2];         // panics if fewer than 3 segments
+```
+
+Only valid inputs are tested. Add a guard: if `parts.len() != 3 || parts[0].len() < 4`, return a `Result::Err` or a sentinel string rather than panicking.
+
+**[RISK] (confidence: 8/10) — iv_history fetch uses unwrap_or_default() violating CLAUDE.md**
+
+```rust
+let history = db.get_iv_history(symbol, 252).await.unwrap_or_default();
+```
+
+CLAUDE.md: "User prefers to use explicit exception handling rather than fallback mechanisms." This silently uses neutral IV metrics when D1 is unavailable. Should propagate the error or send a Discord alert.
+
+**[RISK] (confidence: 7/10) — get_spread_debit() has no test and silently skips without Discord alert**
+
+This is the critical function determining exit P&L. If it returns None, positions are silently skipped with only a console_log. A position that consistently fails price lookup will never be closed. Should Discord-alert when a trade's price is unavailable.
+
+**[OBS] — mut new_state in morning_scan.rs is unnecessary (Rust warning)**
+
+**[OBS] — contracts.max(1) in position_sizer.rs is unreachable dead code**
+
+The `if contracts <= 0 { return SizeResult::zero(...) }` check before it catches all zero cases.
+
+#### 8. Test Philosophy Audit
+
+All tests for pure functions test behavior through public interfaces with no internal mocking. Handler tests correctly extract pure functions for unit testing (async handlers require CF Worker runtime, which is correct to bypass).
+
+**[RISK] (confidence: 7/10) — Screener test higher_iv_percentile_scores_higher has conditional assertion**
+
+```rust
+if !low_results.is_empty() && !high_results.is_empty() {
+    assert!(high_results[0].score > low_results[0].score, ...);
+}
+```
+
+If both result sets are empty, the test passes vacuously. Move the assertion outside the `if` block, or assert `!results.is_empty()` first.
+
+#### 9. Vertical Slice Audit
+
+All 19 tasks follow one-test -> one-implementation -> one-commit. No horizontal slicing detected.
+
+**[OBS] — Task 18 modifies two files in one commit (eod_summary.rs + d1.rs)**
+
+`get_trades_closed_on` should have been in Task 12. Both files are required for the same behavior, so the bundled commit is acceptable. Minor spec-coverage gap.
+
+#### 10. Test Coverage Gaps
+
+```
+handlers/position_monitor.rs
+  check_exit_conditions(): [TESTED] all 4 branches
+  get_spread_debit():       [GAP] no test — critical path for exit P&L
+
+broker/alpaca.rs
+  build_occ_symbol():  [TESTED] 3 valid cases / [GAP] malformed expiration panic
+  get_options_chain(): [GAP] no test (requires HTTP — acceptable)
+
+analysis/screener.rs
+  screen_chain():
+    delta out of range:      [TESTED]
+    valid spread found:      [TESTED]
+    IV percentile scoring:   [TESTED with conditional assertion - weak]
+    credit < 10% of width:   [GAP]
+    no expirations in range: [GAP]
+```
+
+#### 11. Failure Modes
+
+**BLOCKER (repeated):** Position monitor marks trades closed in D1 without placing broker closing orders.
+
+**[RISK] — Ghost trade protection only in morning_scan, not position_monitor**
+
+When closing order placement is added to position_monitor (per BLOCKER fix), apply the same pattern: if `db.close_trade()` fails after the closing order is placed, alert Discord and log for manual intervention.
+
+**[RISK] — daily_stats.starting_equity never written to KV**
+
+Morning scan computes `starting_daily` locally but never saves it to KV. `DailyStats.starting_equity` is always 0 in storage. The circuit breaker baseline is computed once per morning scan and lost when the handler exits. Functionally acceptable (position_monitor doesn't run CB evaluation), but the field is effectively dead storage.
+
+---
+
+### Presumption Inventory
+
+| Assumption | Verdict | Reason |
+|-----------|---------|--------|
+| `worker = "0.4"` has stable D1/KV API matching plan code | VALIDATE | Worker-rs releases rapidly; verify before Task 3 |
+| `i64.into()` -> JsValue compiles in wasm_bindgen | VALIDATE | JS numbers are f64; i64 may need explicit cast |
+| `worker::js_sys::Math::random()` accessible without extra features | VALIDATE | Depends on js_sys re-export in worker-rs 0.4 |
+| VIXY ETF price is sufficient proxy for spot VIX circuit breaker | RISKY | VIXY systematically trades below spot VIX via futures discount |
+| Alpaca `order_class: "mleg"` is correct format for credit spread orders | VALIDATE | Verify against Alpaca options API docs before Task 15 |
+| mahler-backtest workspace member compiles unchanged after adding workspace Cargo.toml | SAFE | Workspace root only adds parent; existing crate untouched |
+| Task 1 deletion list covers all files spec requires removed | RISKY | Confirmed: ~200KB of Python files remain after Task 1 |
+| chrono wasmbind feature correctly enables Utc::now() in WASM | VALIDATE | Listed in Cargo.toml; confirm it works with worker-rs 0.4 |
+| D1 binding name "DB" and KV binding name "KV" match wrangler.toml | SAFE | Confirmed: wrangler.toml plan uses exactly "DB" and "KV" |
+
+---
+
+### Summary
+
+**[BLOCKER] count: 2**
+1. `vix_data` use-after-move in `morning_scan.rs` — compile error (Task 16)
+2. `position_monitor.rs` marks trades closed in D1 without placing broker closing orders (Task 17)
+
+**[RISK] count: 8**
+1. Worker-rs 0.4 API compatibility — verify before Task 3
+2. VIXY ETF is not spot VIX — circuit breaker halt threshold will be inaccurate during actual spikes
+3. Task 1 leaves ~200KB of dead Python files that spec requires deleted
+4. `build_occ_symbol` panics on malformed expiration strings
+5. `iv_history` unwrap_or_default() violates CLAUDE.md explicit-exception preference
+6. `get_spread_debit()` silently skips positions without Discord alert — no test, no alerting
+7. Screener test `higher_iv_percentile_scores_higher` has conditional assertion that can pass vacuously
+8. `daily_stats.starting_equity` never written to KV — dead storage
+
+**[QUESTION] count: 2**
+1. Should Task 1 delete the entire `src/` Python tree (per spec) rather than a subset?
+2. Should Alpaca multi-leg options order format be verified against Alpaca API docs before Task 15?
+
+VERDICT: NEEDS_REWORK — [BLOCKER 1: fix vix_data use-after-move in morning_scan.rs; BLOCKER 2: add broker closing order placement to position_monitor before db.close_trade()]
