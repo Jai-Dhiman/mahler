@@ -26,5 +26,13 @@ COPY --chown=hermes:hermes config/config.yaml /home/hermes/.hermes/config.yaml
 COPY --chown=hermes:hermes entrypoint.sh /home/hermes/entrypoint.sh
 RUN chmod +x /home/hermes/entrypoint.sh
 
+# Copy custom skills
+COPY --chown=hermes:hermes config/skills/email-triage /home/hermes/.hermes/skills/email-triage
+COPY --chown=hermes:hermes config/skills/urgent-alert /home/hermes/.hermes/skills/urgent-alert
+
+# Copy priority map to Hermes workspace
+RUN mkdir -p /home/hermes/.hermes/workspace
+COPY --chown=hermes:hermes config/priority-map.md /home/hermes/.hermes/workspace/priority-map.md
+
 # Entrypoint writes env vars to ~/.hermes/.env then starts gateway
 CMD ["/home/hermes/entrypoint.sh"]
