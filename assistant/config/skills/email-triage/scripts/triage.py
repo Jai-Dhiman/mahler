@@ -77,12 +77,12 @@ def _load_priority_map() -> str:
         with open(p, "r", encoding="utf-8") as f:
             return f.read()
 
-    hermes_path = Path("~/.hermes/workspace/priority-map.md").expanduser()
+    hermes_path = Path("/home/hermes/.hermes/workspace/priority-map.md")
     if hermes_path.exists():
         with open(hermes_path, "r", encoding="utf-8") as f:
             return f.read()
 
-    fallback = Path(__file__).parent.parent.parent / "priority-map.md"
+    fallback = Path(__file__).parent.parent / "priority-map.md"
     with open(fallback, "r", encoding="utf-8") as f:
         return f.read()
 
