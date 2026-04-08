@@ -1,5 +1,5 @@
 -- trader-joe tables
--- Adds three tables to mahler-db alongside assistant tables (email_triage_log, triage_state)
+-- Adds three tables to mahler-db alongside existing assistant tables
 -- Run with: wrangler d1 execute mahler-db --file=src/migrations/0017_trader_joe_tables.sql
 
 -- All placed trades, full lifecycle from entry to exit
