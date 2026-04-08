@@ -274,16 +274,33 @@ pub async fn run(env: &Env) -> Result<()> {
     Ok(())
 }
 
-/// Minimal UUID v4 for Cloudflare Workers (no rand crate needed for WASM).
+/// UUID v4 using crypto.getRandomValues() for collision safety under concurrent
+/// Workers invocations. Math.random() is a PRNG and can produce duplicate IDs
+/// if multiple trades are placed within the same millisecond.
 fn uuid_v4() -> String {
-    use worker::js_sys::Math;
+    use worker::js_sys::{global, Reflect, Uint8Array, Function};
+    use worker::wasm_bindgen::JsValue;
+    use worker::wasm_bindgen::JsCast;
+
+    let buf = Uint8Array::new_with_length(16);
+    let crypto = Reflect::get(&global(), &JsValue::from_str("crypto"))
+        .expect("crypto not available");
+    let get_random = Reflect::get(&crypto, &JsValue::from_str("getRandomValues"))
+        .expect("crypto.getRandomValues not available");
+    get_random
+        .dyn_ref::<Function>()
+        .expect("getRandomValues is not a function")
+        .call1(&crypto, &buf)
+        .expect("getRandomValues failed");
+
+    let bytes = buf.to_vec();
     format!(
-        "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
-        (Math::random() * 0xffff_ffff_u64 as f64) as u64,
-        (Math::random() * 0xffff_u64 as f64) as u64,
-        (Math::random() * 0x0fff_u64 as f64) as u64,
-        ((Math::random() * 0x3fff_u64 as f64) as u64) | 0x8000,
-        (Math::random() * 0x0000_ffff_ffff_u64 as f64) as u64
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-4{:01x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0], bytes[1], bytes[2], bytes[3],
+        bytes[4], bytes[5],
+        bytes[6] & 0x0f, bytes[7],
+        (bytes[8] & 0x3f) | 0x80, bytes[9],
+        bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
     )
 }
 

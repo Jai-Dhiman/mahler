@@ -74,6 +74,14 @@ impl AlpacaClient {
     }
 
     pub async fn get_vix(&self) -> Result<Option<VixData>> {
+        // VIXY is a short-term VIX futures ETF, not spot VIX. It is affected by
+        // futures roll costs and contango/backwardation, and can diverge from spot
+        // VIX by 20-40% during high-volatility events. The circuit breaker thresholds
+        // (vix_halt=50, vix_caution=30) and position sizer thresholds (40/50) were
+        // calibrated against spot VIX. VIXY typically trades at a discount to spot
+        // VIX, so these thresholds err on the side of caution (under-react to rising
+        // vol). Alpaca does not expose a spot VIX endpoint; migrate to
+        // /v2/indices/snapshots?symbols=VIX if Alpaca adds index data access.
         let url = format!(
             "{}/v2/stocks/snapshots?symbols=VIXY,UVXY&feed=iex",
             self.data_url
