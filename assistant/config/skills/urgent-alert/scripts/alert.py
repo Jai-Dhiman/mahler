@@ -47,6 +47,7 @@ def post_alert(webhook_url: str, payload: dict) -> None:
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(webhook_url, data=data, method="POST")
     req.add_header("Content-Type", "application/json")
+    req.add_header("User-Agent", "DiscordBot (mahler, 1.0)")
 
     try:
         with _OPENER.open(req) as resp:
