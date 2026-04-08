@@ -1,0 +1,3 @@
+iter	commit	test_sharpe	delta	status	win_rate	trades	sharpe_degradation	description
+0	3f396ee	0.10	--	baseline	51.0%	5606	32.6%	profit_target=50, stop_loss=125, dte=30-60, delta=0.20-0.30, iv=off
+1	keep	0.14	+0.04	keep	57.7%	6091	25.6%	profit_target=25
