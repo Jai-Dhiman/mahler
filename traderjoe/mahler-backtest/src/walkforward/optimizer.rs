@@ -43,8 +43,8 @@ pub struct ParameterGrid {
 impl Default for ParameterGrid {
     fn default() -> Self {
         Self {
-            dte_min: vec![21],
-            dte_max: vec![45],
+            dte_min: vec![30],
+            dte_max: vec![60],
             delta_min: vec![0.20],
             delta_max: vec![0.30],
             profit_target: vec![25.0],
