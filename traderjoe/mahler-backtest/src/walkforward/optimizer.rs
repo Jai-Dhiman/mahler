@@ -47,7 +47,7 @@ impl Default for ParameterGrid {
             dte_max: vec![60],
             delta_min: vec![0.20],
             delta_max: vec![0.30],
-            profit_target: vec![25.0],
+            profit_target: vec![100.0],
             stop_loss: vec![125.0],
             iv_percentile: vec![0.0],
         }
