@@ -16,21 +16,27 @@ def _import_handler(name: str):
     """Import a handler function lazily."""
     if name == "morning_scan":
         from handlers.morning_scan import handle_morning_scan
+
         return handle_morning_scan
     elif name == "midday_check":
         from handlers.midday_check import handle_midday_check
+
         return handle_midday_check
     elif name == "afternoon_scan":
         from handlers.afternoon_scan import handle_afternoon_scan
+
         return handle_afternoon_scan
     elif name == "eod_summary":
         from handlers.eod_summary import handle_eod_summary
+
         return handle_eod_summary
     elif name == "position_monitor":
         from handlers.position_monitor import handle_position_monitor
+
         return handle_position_monitor
     elif name == "health":
         from handlers.health import handle_health
+
         return handle_health
     else:
         raise ValueError(f"Unknown handler: {name}")
@@ -117,27 +123,27 @@ async def on_fetch(request, env):
 
         if "/test/v2-pipeline" in url:
             # Test V2 multi-agent pipeline with a mock spread
+            from core.agents import (
+                AgentOrchestrator,
+                BearResearcher,
+                BullResearcher,
+                DebateConfig,
+                DebateFacilitator,
+                GreeksAnalyst,
+                IVAnalyst,
+                MacroAnalyst,
+                RiskState,
+                TechnicalAnalyst,
+                TradingDecisionAgent,
+                build_agent_context,
+            )
             from core.ai.router import LLMRouter
             from core.broker.alpaca import AlpacaClient
             from core.db.d1 import D1Client
             from core.db.kv import KVClient
-            from core.agents import (
-                AgentOrchestrator,
-                DebateConfig,
-                IVAnalyst,
-                TechnicalAnalyst,
-                MacroAnalyst,
-                GreeksAnalyst,
-                BullResearcher,
-                BearResearcher,
-                DebateFacilitator,
-                TradingDecisionAgent,
-                RiskState,
-                build_agent_context,
-            )
             from core.memory.retriever import MemoryRetriever
-            from core.risk.three_perspective import ThreePerspectiveRiskManager
             from core.risk.position_sizer import PositionSizer
+            from core.risk.three_perspective import ThreePerspectiveRiskManager
             from core.types import SpreadType
 
             output = {"status": "running", "stages": {}}
@@ -173,8 +179,8 @@ async def on_fetch(request, env):
                     )
 
                 # Find a suitable spread for testing
-                from core.analysis.screener import OptionsScreener, ScreenerConfig
                 from core.analysis.iv_rank import IVMetrics
+                from core.analysis.screener import OptionsScreener, ScreenerConfig
 
                 # Estimate IV metrics
                 iv_metrics = IVMetrics(
@@ -189,7 +195,9 @@ async def on_fetch(request, env):
 
                 if not opportunities:
                     return Response(
-                        json.dumps({"error": "No opportunities found", "chain_size": len(chain.contracts)}),
+                        json.dumps(
+                            {"error": "No opportunities found", "chain_size": len(chain.contracts)}
+                        ),
                         status=200,
                         headers={"Content-Type": "application/json"},
                     )
@@ -225,9 +233,13 @@ async def on_fetch(request, env):
                 orchestrator.register_debater(BearResearcher(router=router), "bear")
                 orchestrator.set_facilitator(DebateFacilitator(router=router))
                 from core.agents.fund_manager import FundManagerAgent
+
                 orchestrator.set_fund_manager(FundManagerAgent(router=router))
 
-                output["stages"]["orchestrator_init"] = {"status": "ok", "debate_rounds": debate_rounds}
+                output["stages"]["orchestrator_init"] = {
+                    "status": "ok",
+                    "debate_rounds": debate_rounds,
+                }
 
                 # Build agent context
                 context = build_agent_context(
@@ -258,7 +270,9 @@ async def on_fetch(request, env):
                     "confidence": result.confidence,
                     "thesis": result.thesis[:200] if result.thesis else None,
                     "analyst_count": len(result.analyst_messages),
-                    "debate_rounds": len(result.debate_messages) // 2 if result.debate_messages else 0,
+                    "debate_rounds": len(result.debate_messages) // 2
+                    if result.debate_messages
+                    else 0,
                     "duration_ms": result.duration_ms,
                 }
 
@@ -320,6 +334,7 @@ async def on_fetch(request, env):
 
             except Exception as e:
                 import traceback
+
                 output["status"] = "error"
                 output["error"] = str(e)
                 output["traceback"] = traceback.format_exc()
@@ -333,36 +348,36 @@ async def on_fetch(request, env):
             # Full V2 pipeline with traced output - bypasses screener with
             # a manually-constructed spread from real chain data to ensure
             # the agents get a debatable opportunity.
-            from core.ai.router import LLMRouter
-            from core.broker.alpaca import AlpacaClient
-            from core.db.d1 import D1Client
-            from core.db.kv import KVClient
             from core.agents import (
                 AgentOrchestrator,
-                DebateConfig,
-                IVAnalyst,
-                TechnicalAnalyst,
-                MacroAnalyst,
-                GreeksAnalyst,
-                BullResearcher,
                 BearResearcher,
+                BullResearcher,
+                DebateConfig,
                 DebateFacilitator,
-                TradingDecisionAgent,
+                GreeksAnalyst,
+                IVAnalyst,
+                MacroAnalyst,
                 RiskState,
+                TechnicalAnalyst,
+                TradingDecisionAgent,
                 build_agent_context,
             )
-            from core.memory.retriever import MemoryRetriever
-            from core.risk.three_perspective import ThreePerspectiveRiskManager
-            from core.risk.position_sizer import PositionSizer
-            from core.types import CreditSpread, OptionContract, Greeks, SpreadType
+            from core.ai.router import LLMRouter
+            from core.analysis.greeks import days_to_expiry
             from core.analysis.iv_rank import (
-                IVMetrics,
                 IVMeanReversion,
+                IVMetrics,
                 IVTermStructure,
                 TermStructurePoint,
                 calculate_iv_metrics,
             )
-            from core.analysis.greeks import days_to_expiry
+            from core.broker.alpaca import AlpacaClient
+            from core.db.d1 import D1Client
+            from core.db.kv import KVClient
+            from core.memory.retriever import MemoryRetriever
+            from core.risk.position_sizer import PositionSizer
+            from core.risk.three_perspective import ThreePerspectiveRiskManager
+            from core.types import CreditSpread, Greeks, OptionContract, SpreadType
 
             try:
                 # Initialize clients
@@ -429,8 +444,7 @@ async def on_fetch(request, env):
                 # better theta and credit, and use wider spreads ($5+).
                 # Try bear call first (aligns with elevated VIX), then bull put.
                 valid_expirations = [
-                    exp for exp in chain.expirations
-                    if 35 <= days_to_expiry(exp) <= 75
+                    exp for exp in chain.expirations if 35 <= days_to_expiry(exp) <= 75
                 ]
 
                 best_spread = None
@@ -449,7 +463,9 @@ async def on_fetch(request, env):
                             continue
                         if short_call.open_interest < 100 or short_call.volume < 20:
                             continue
-                        short_delta = abs(short_call.delta) if short_call.delta is not None else None
+                        short_delta = (
+                            abs(short_call.delta) if short_call.delta is not None else None
+                        )
                         if short_delta is None:
                             continue
                         # Closer to money for better theta and credit
@@ -459,9 +475,9 @@ async def on_fetch(request, env):
                         for width in [5.0, 4.0, 3.0]:
                             target_strike = short_call.strike + width
                             long_candidates = [
-                                c for c in calls
-                                if abs(c.strike - target_strike) < 0.5
-                                and c.ask > 0
+                                c
+                                for c in calls
+                                if abs(c.strike - target_strike) < 0.5 and c.ask > 0
                             ]
                             if not long_candidates:
                                 continue
@@ -478,18 +494,24 @@ async def on_fetch(request, env):
                             long_theta = abs(long_call.theta) if long_call.theta else 0
                             net_theta = short_theta - long_theta
                             max_loss_per_contract = (actual_width - credit) * 100
-                            theta_ratio = (net_theta * 100 / max_loss_per_contract * 100) if max_loss_per_contract > 0 else 0
+                            theta_ratio = (
+                                (net_theta * 100 / max_loss_per_contract * 100)
+                                if max_loss_per_contract > 0
+                                else 0
+                            )
 
-                            spread_debug["candidates"].append({
-                                "strikes": f"{short_call.strike}/{long_call.strike}",
-                                "exp": exp,
-                                "credit": round(credit, 3),
-                                "credit_pct": round(credit_pct * 100, 1),
-                                "short_delta": round(short_delta, 3),
-                                "width": actual_width,
-                                "net_theta": round(net_theta, 4),
-                                "theta_ratio_pct": round(theta_ratio, 2),
-                            })
+                            spread_debug["candidates"].append(
+                                {
+                                    "strikes": f"{short_call.strike}/{long_call.strike}",
+                                    "exp": exp,
+                                    "credit": round(credit, 3),
+                                    "credit_pct": round(credit_pct * 100, 1),
+                                    "short_delta": round(short_delta, 3),
+                                    "width": actual_width,
+                                    "net_theta": round(net_theta, 4),
+                                    "theta_ratio_pct": round(theta_ratio, 2),
+                                }
+                            )
 
                             # Accept: reasonable credit matching screener threshold
                             if credit > 0.20 and credit_pct >= 0.12:
@@ -510,11 +532,14 @@ async def on_fetch(request, env):
 
                 if not best_spread:
                     return Response(
-                        json.dumps({
-                            "error": "Could not construct a suitable bear call spread",
-                            "debug": spread_debug,
-                            "underlying_price": underlying_price,
-                        }, indent=2),
+                        json.dumps(
+                            {
+                                "error": "Could not construct a suitable bear call spread",
+                                "debug": spread_debug,
+                                "underlying_price": underlying_price,
+                            },
+                            indent=2,
+                        ),
                         status=200,
                         headers={"Content-Type": "application/json"},
                     )
@@ -523,11 +548,16 @@ async def on_fetch(request, env):
 
                 # Compute real IV metrics from chain + DB history
                 atm_contracts = [
-                    c for c in chain.contracts
+                    c
+                    for c in chain.contracts
                     if abs(c.strike - underlying_price) < underlying_price * 0.02
                     and c.implied_volatility is not None
                 ]
-                current_iv = sum(c.implied_volatility or 0.0 for c in atm_contracts) / len(atm_contracts) if atm_contracts else 0.20
+                current_iv = (
+                    sum(c.implied_volatility or 0.0 for c in atm_contracts) / len(atm_contracts)
+                    if atm_contracts
+                    else 0.20
+                )
 
                 historical_ivs = await db.get_iv_history("SPY", lookback_days=252)
                 if len(historical_ivs) >= 30:
@@ -599,6 +629,7 @@ async def on_fetch(request, env):
 
                 # Register Fund Manager for full pipeline
                 from core.agents.fund_manager import FundManagerAgent
+
                 orchestrator.set_fund_manager(FundManagerAgent(router=router))
 
                 # Build context with real market data
@@ -712,12 +743,16 @@ async def on_fetch(request, env):
 
             except Exception as e:
                 import traceback
+
                 return Response(
-                    json.dumps({
-                        "status": "error",
-                        "error": str(e),
-                        "traceback": traceback.format_exc(),
-                    }, indent=2),
+                    json.dumps(
+                        {
+                            "status": "error",
+                            "error": str(e),
+                            "traceback": traceback.format_exc(),
+                        },
+                        indent=2,
+                    ),
                     status=500,
                     headers={"Content-Type": "application/json"},
                 )
@@ -744,9 +779,12 @@ async def on_fetch(request, env):
                     # Filter for liquidity
                     liquid_puts = []
                     for c in puts:
-                        if (c.open_interest >= config.min_open_interest and
-                            c.volume >= config.min_volume and
-                            c.bid > 0 and c.ask > 0):
+                        if (
+                            c.open_interest >= config.min_open_interest
+                            and c.volume >= config.min_volume
+                            and c.bid > 0
+                            and c.ask > 0
+                        ):
                             mid = (c.bid + c.ask) / 2
                             spread_pct = (c.ask - c.bid) / mid if mid > 0 else 1.0
                             if spread_pct <= config.max_bid_ask_spread_pct:
@@ -772,11 +810,13 @@ async def on_fetch(request, env):
                                 delta = greeks.delta
                             if config.min_delta <= abs(delta) <= config.max_delta:
                                 puts_in_delta_range += 1
-                            sample_deltas.append({
-                                "strike": p.strike,
-                                "delta": round(delta, 4),
-                                "in_range": config.min_delta <= abs(delta) <= config.max_delta,
-                            })
+                            sample_deltas.append(
+                                {
+                                    "strike": p.strike,
+                                    "delta": round(delta, 4),
+                                    "in_range": config.min_delta <= abs(delta) <= config.max_delta,
+                                }
+                            )
                         except Exception:
                             pass
 
@@ -847,7 +887,8 @@ async def on_fetch(request, env):
 
                     # Get current IV from ATM options
                     atm_contracts = [
-                        c for c in chain.contracts
+                        c
+                        for c in chain.contracts
                         if abs(c.strike - chain.underlying_price) < chain.underlying_price * 0.02
                         and c.implied_volatility is not None
                     ]
@@ -856,7 +897,9 @@ async def on_fetch(request, env):
                         scan_results[symbol] = {"error": "No ATM contracts with IV data"}
                         continue
 
-                    current_iv = sum(c.implied_volatility for c in atm_contracts) / len(atm_contracts)
+                    current_iv = sum(c.implied_volatility for c in atm_contracts) / len(
+                        atm_contracts
+                    )
 
                     # Get IV history
                     historical_ivs = await db.get_iv_history(symbol, lookback_days=252)
@@ -879,11 +922,13 @@ async def on_fetch(request, env):
 
                     # Diagnostic: Count contracts passing each filter
                     from core.analysis.greeks import days_to_expiry
+
                     config = screener.config
 
                     # Filter diagnostics
                     valid_expirations = [
-                        exp for exp in chain.expirations
+                        exp
+                        for exp in chain.expirations
                         if config.min_dte <= days_to_expiry(exp) <= config.max_dte
                     ]
 
@@ -893,9 +938,12 @@ async def on_fetch(request, env):
                     for c in chain.contracts:
                         if c.implied_volatility:
                             has_iv += 1
-                        if (c.open_interest >= config.min_open_interest and
-                            c.volume >= config.min_volume and
-                            c.bid > 0 and c.ask > 0):
+                        if (
+                            c.open_interest >= config.min_open_interest
+                            and c.volume >= config.min_volume
+                            and c.bid > 0
+                            and c.ask > 0
+                        ):
                             mid = (c.bid + c.ask) / 2
                             spread_pct = (c.ask - c.bid) / mid if mid > 0 else 1.0
                             if spread_pct <= config.max_bid_ask_spread_pct:
@@ -930,10 +978,18 @@ async def on_fetch(request, env):
                                 "bid": atm_contracts[0].bid if atm_contracts else None,
                                 "ask": atm_contracts[0].ask if atm_contracts else None,
                                 "volume": atm_contracts[0].volume if atm_contracts else None,
-                                "open_interest": atm_contracts[0].open_interest if atm_contracts else None,
-                                "iv": atm_contracts[0].implied_volatility if atm_contracts else None,
-                            } if atm_contracts else None,
-                            "screening_debug": _get_screening_debug(chain, valid_expirations, config, iv_metrics.current_iv),
+                                "open_interest": atm_contracts[0].open_interest
+                                if atm_contracts
+                                else None,
+                                "iv": atm_contracts[0].implied_volatility
+                                if atm_contracts
+                                else None,
+                            }
+                            if atm_contracts
+                            else None,
+                            "screening_debug": _get_screening_debug(
+                                chain, valid_expirations, config, iv_metrics.current_iv
+                            ),
                         },
                     }
 
@@ -1033,11 +1089,15 @@ async def on_fetch(request, env):
             circuit_breaker = CircuitBreaker(kv)
             status = await circuit_breaker.get_status()
             return Response(
-                json.dumps({
-                    "halted": status.halted,
-                    "reason": status.reason,
-                    "triggered_at": status.triggered_at.isoformat() if status.triggered_at else None,
-                }),
+                json.dumps(
+                    {
+                        "halted": status.halted,
+                        "reason": status.reason,
+                        "triggered_at": status.triggered_at.isoformat()
+                        if status.triggered_at
+                        else None,
+                    }
+                ),
                 headers={"Content-Type": "application/json"},
             )
 
@@ -1079,9 +1139,11 @@ async def on_fetch(request, env):
                     dates.reverse()  # oldest first
 
                     for i in range(window, len(log_returns)):
-                        window_returns = log_returns[i - window:i]
+                        window_returns = log_returns[i - window : i]
                         mean_ret = sum(window_returns) / len(window_returns)
-                        variance = sum((r - mean_ret) ** 2 for r in window_returns) / (len(window_returns) - 1)
+                        variance = sum((r - mean_ret) ** 2 for r in window_returns) / (
+                            len(window_returns) - 1
+                        )
                         stdev = math.sqrt(variance)
                         realized_vol = stdev * math.sqrt(252)
 
@@ -1092,30 +1154,39 @@ async def on_fetch(request, env):
                         if "T" in date_str:
                             date_str = date_str.split("T")[0]
 
-                        records.append({
-                            "date": date_str,
-                            "underlying": symbol,
-                            "atm_iv": round(realized_vol, 6),
-                            "underlying_price": prices[i + 1] if (i + 1) < len(prices) else prices[-1],
-                        })
+                        records.append(
+                            {
+                                "date": date_str,
+                                "underlying": symbol,
+                                "atm_iv": round(realized_vol, 6),
+                                "underlying_price": prices[i + 1]
+                                if (i + 1) < len(prices)
+                                else prices[-1],
+                            }
+                        )
 
                     count = await db.save_daily_iv_batch(records)
                     total_seeded += count
                     results[symbol] = {
                         "bars_fetched": len(bars),
                         "records_seeded": count,
-                        "date_range": f"{records[0]['date']} to {records[-1]['date']}" if records else "none",
+                        "date_range": f"{records[0]['date']} to {records[-1]['date']}"
+                        if records
+                        else "none",
                     }
 
                 except Exception as e:
                     results[symbol] = {"error": str(e)}
 
             return Response(
-                json.dumps({
-                    "status": "ok",
-                    "total_records_seeded": total_seeded,
-                    "results": results,
-                }, indent=2),
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "total_records_seeded": total_seeded,
+                        "results": results,
+                    },
+                    indent=2,
+                ),
                 headers={"Content-Type": "application/json"},
             )
 

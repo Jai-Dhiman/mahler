@@ -8,7 +8,7 @@
 
 ---
 
-## Current Implementation State (2026-04-07)
+## Current Implementation State (2026-04-08)
 
 This document describes the full V2 vision. What is currently built and running:
 
@@ -18,22 +18,18 @@ This document describes the full V2 vision. What is currently built and running:
 - `WalkForwardOptimizer` using the trait-based engine for grid search
 - CLI: `mahler-backtest run` and `mahler-backtest optimize`
 
-**Layer 5 (Circuit Breakers) — IMPLEMENTED**
-- `DefaultRiskGate` with daily/drawdown circuit breakers
-- Position sizing, max positions, portfolio heat limits
-- Hard-coded, cannot be overridden
-
-**Algorithmic scan handlers — IMPLEMENTED (Python, Cloudflare Workers)**
-- `morning_scan.py`, `afternoon_scan.py`, `midday_check.py`
-- Regime detection, IV analysis, spread scoring, position sizing
+**Layer 5 (Circuit Breakers + Execution) — IMPLEMENTED (Rust, Cloudflare Workers)**
+- Rust Worker (`trader-joe/`) replaced all Python CF Workers on 2026-04-08
+- Three cron handlers: `morning_scan` (10 AM ET), `position_monitor` (5-min), `eod_summary` (9 PM ET)
+- `CircuitBreaker` with 6 risk levels, `PositionSizer` with VIX/heat/concentration limits
+- `AlpacaClient` for broker HTTP, `D1Client` + `KvClient` for persistence
 - All trade decisions are algorithmic (rule-based), not AI-driven
+- 154 tests: `cargo test` (101 backtest + 53 trader-joe)
 
 **Layers 2 & 3 (Multi-Agent + Memory) — REMOVED**
-- The multi-agent debate pipeline (IVAnalyst, BullResearcher, etc.) was implemented
-  behind an `AGENT_PIPELINE="enabled"` flag and removed on 2026-04-07.
-- The current system is fully algorithmic. Agent-based trade analysis is not active.
-- `core/agents/`, `core/memory/` modules still exist in the codebase but are not
-  called from any handler.
+- The multi-agent debate pipeline was removed on 2026-04-07.
+- All Python handlers (`morning_scan.py`, `afternoon_scan.py`, `midday_check.py`,
+  `core/agents/`, `core/memory/`) were deleted in the 2026-04-08 Rust rework.
 
 ---
 

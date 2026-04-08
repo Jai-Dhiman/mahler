@@ -106,6 +106,24 @@ class D1Client:
         ]
         self.query(sql, params)
 
+    def get_kv(self, key: str) -> Optional[str]:
+        """Read a value from mahler_kv. Returns None if the key doesn't exist."""
+        rows = self.query(
+            "SELECT value FROM mahler_kv WHERE key = ? LIMIT 1",
+            [key],
+        )
+        if rows:
+            return rows[0].get("value")
+        return None
+
+    def set_kv(self, key: str, value: str) -> None:
+        """Write a value to mahler_kv. Upserts on conflict."""
+        self.query(
+            "INSERT INTO mahler_kv (key, value, updated_at) VALUES (?, ?, datetime('now'))"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            [key, value],
+        )
+
     def ensure_tables(self) -> None:
         """Create tables if they don't exist. Safe to call on every run."""
         self.query(
@@ -128,6 +146,14 @@ class D1Client:
     source TEXT PRIMARY KEY,
     last_run TEXT,
     last_error TEXT
+)""",
+            [],
+        )
+        self.query(
+            """CREATE TABLE IF NOT EXISTS mahler_kv (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
 )""",
             [],
         )

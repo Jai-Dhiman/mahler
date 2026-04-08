@@ -22,39 +22,108 @@ HERMES_ENV="$HOME/.hermes/.env"
   echo "OPENROUTER_MODEL=${OPENROUTER_MODEL:-x-ai/grok-4.1-fast}"
 } > "$HERMES_ENV"
 
-# Register email triage cron job if not already registered
+# Register cron jobs in Hermes v0.7.0 format (schedule object + next_run_at)
 CRON_DIR="$HOME/.hermes/cron"
 JOBS_FILE="$CRON_DIR/jobs.json"
 mkdir -p "$CRON_DIR"
-if [ ! -f "$JOBS_FILE" ] || ! grep -q "email-triage" "$JOBS_FILE" 2>/dev/null; then
-  python3 -c "
+
+python3 -c "
 import json, uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 jobs_file = '$JOBS_FILE'
 try:
     with open(jobs_file, 'r') as f:
-        jobs = json.load(f)
+        data = json.load(f)
+        # Handle both old list format and new {jobs: [...]} format
+        jobs = data.get('jobs', data) if isinstance(data, dict) else data
 except (FileNotFoundError, json.JSONDecodeError):
     jobs = []
 
-# Only add if not already present
-if not any(j.get('skill') == 'email-triage' or 'email-triage' in j.get('skills', []) for j in jobs):
-    now = datetime.now(timezone.utc).isoformat()
-    jobs.append({
-        'id': str(uuid.uuid4()),
-        'skills': ['email-triage'],
-        'skill': 'email-triage',
-        'prompt': 'Run email triage: fetch unread emails from Gmail and Outlook, classify them using the priority map, store results in D1, and send Discord alerts for any URGENT emails.',
-        'cron': '*/15 * * * *',
+def next_run_for(cron_expr, now):
+    \"\"\"Compute next run for simple cron patterns without croniter.\"\"\"
+    parts = cron_expr.strip().split()
+    minute_field, hour_field = parts[0], parts[1]
+    base = now.replace(second=0, microsecond=0)
+    if minute_field.startswith('*/') and hour_field == '*':
+        # e.g. */15 * * * *
+        interval = int(minute_field[2:])
+        delta = interval - (base.minute % interval)
+        return base + timedelta(minutes=delta)
+    elif minute_field == '0' and hour_field.isdigit():
+        # e.g. 0 16 * * *
+        h = int(hour_field)
+        candidate = base.replace(hour=h, minute=0)
+        if candidate <= now:
+            candidate += timedelta(days=1)
+        return candidate
+    else:
+        # Fallback: 1 minute from now (Hermes will correct it after first run)
+        return base + timedelta(minutes=1)
+
+def make_job(skills, prompt, cron_expr):
+    now = datetime.now(timezone.utc)
+    next_run = next_run_for(cron_expr, now)
+    return {
+        'id': uuid.uuid4().hex[:12],
+        'name': skills[0],
+        'prompt': prompt,
+        'skills': skills,
+        'skill': skills[0],
+        'model': None,
+        'provider': None,
+        'base_url': None,
+        'script': None,
+        'schedule': {'kind': 'cron', 'expr': cron_expr, 'display': cron_expr},
+        'schedule_display': cron_expr,
+        'repeat': {'times': None, 'completed': 0},
         'enabled': True,
-        'created_at': now,
-        'updated_at': now,
-    })
-    with open(jobs_file, 'w') as f:
-        json.dump(jobs, f, indent=2)
-    print('Registered email-triage cron job (every 15 minutes)')
+        'state': 'scheduled',
+        'paused_at': None,
+        'paused_reason': None,
+        'created_at': now.isoformat(),
+        'next_run_at': next_run.isoformat(),
+        'last_run_at': None,
+        'last_status': None,
+        'last_error': None,
+        'deliver': 'local',
+        'origin': None,
+    }
+
+existing_skills = set()
+for j in jobs:
+    for s in j.get('skills', [j.get('skill', '')]):
+        existing_skills.add(s)
+
+added = []
+if 'email-triage' not in existing_skills:
+    jobs.append(make_job(
+        ['email-triage'],
+        'Run email triage: fetch unread emails from Gmail and Outlook, classify them using the priority map, store results in D1, and send Discord alerts for any URGENT emails.',
+        '0 * * * *',
+    ))
+    added.append('email-triage (every 15 min)')
+
+if 'morning-brief' not in existing_skills:
+    jobs.append(make_job(
+        ['morning-brief'],
+        'Post the morning email brief: query the last 12 hours of triage results and post a structured summary to Discord.',
+        '0 16 * * *',
+    ))
+    jobs.append(make_job(
+        ['morning-brief'],
+        'Post the evening email brief: query the last 12 hours of triage results and post a structured summary to Discord.',
+        '0 4 * * *',
+    ))
+    added.append('morning-brief (8am + 8pm PST)')
+
+with open(jobs_file, 'w') as f:
+    json.dump({'jobs': jobs, 'updated_at': datetime.now(timezone.utc).isoformat()}, f, indent=2)
+
+if added:
+    print('Registered cron jobs:', ', '.join(added))
+else:
+    print('Cron jobs already registered, skipping.')
 "
-fi
 
 exec hermes gateway

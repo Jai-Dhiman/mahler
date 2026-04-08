@@ -24,6 +24,30 @@ from pathlib import Path
 _SCRIPTS_DIR = Path(__file__).parent
 sys.path.insert(0, str(_SCRIPTS_DIR))
 
+
+def _supplement_env_from_hermes() -> None:
+    """Load missing env vars from ~/.hermes/.env.
+
+    Hermes loads this file into its own process but does not always export
+    the values into subprocess environments when running bash commands via
+    the terminal tool. This supplements os.environ for any keys not already set.
+    """
+    hermes_env = Path.home() / ".hermes" / ".env"
+    if not hermes_env.exists():
+        return
+    with open(hermes_env, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            if key and key not in os.environ:
+                os.environ[key] = value.strip()
+
+
+_supplement_env_from_hermes()
+
 import subprocess
 
 from d1_client import D1Client
@@ -34,6 +58,10 @@ import outlook_client
 
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 _DEFAULT_MODEL = "x-ai/grok-4.1-fast"
+
+# Cloudflare KV namespace provisioned for Mahler (stores rotating Outlook token)
+_CF_KV_NAMESPACE_ID = "4e63db1305a1424ead3565522a47b5f4"  # MAHLER_KV
+_OUTLOOK_TOKEN_KV_KEY = "outlook_refresh_token"
 
 _REQUIRED_ENV = [
     "GMAIL_CLIENT_ID",
@@ -59,11 +87,64 @@ def _build_https_opener() -> urllib.request.OpenerDirector:
     ctx.verify_mode = ssl.CERT_REQUIRED
     opener = urllib.request.OpenerDirector()
     opener.add_handler(urllib.request.HTTPSHandler(context=ctx))
+    opener.add_handler(urllib.request.HTTPDefaultErrorHandler())
     opener.add_handler(urllib.request.UnknownHandler())
     return opener
 
 
 _OPENER = _build_https_opener()
+
+
+# ---------------------------------------------------------------------------
+# Cloudflare KV helpers (for Outlook rotating refresh token)
+# ---------------------------------------------------------------------------
+
+def _kv_get(account_id: str, api_token: str, key: str) -> str | None:
+    """Read a value from Cloudflare KV. Returns None on any error.
+
+    Uses _OPENER (HTTPS-only, raises HTTPError on non-2xx) so that a
+    404 is caught below and file:// or other schemes are rejected.
+    """
+    url = (
+        f"https://api.cloudflare.com/client/v4/accounts/{account_id}"
+        f"/storage/kv/namespaces/{_CF_KV_NAMESPACE_ID}/values/{key}"
+    )
+    req = urllib.request.Request(
+        url, headers={"Authorization": f"Bearer {api_token}"}
+    )
+    try:
+        with _OPENER.open(req, timeout=10) as resp:
+            return resp.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        print(f"WARNING: KV get failed: {exc.code}", file=sys.stderr)
+        return None
+    except Exception as exc:
+        print(f"WARNING: KV get error: {exc}", file=sys.stderr)
+        return None
+
+
+def _kv_put(account_id: str, api_token: str, key: str, value: str) -> None:
+    """Write a value to Cloudflare KV. Logs on failure but does not raise."""
+    url = (
+        f"https://api.cloudflare.com/client/v4/accounts/{account_id}"
+        f"/storage/kv/namespaces/{_CF_KV_NAMESPACE_ID}/values/{key}"
+    )
+    req = urllib.request.Request(
+        url,
+        data=value.encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_token}",
+            "Content-Type": "text/plain",
+        },
+        method="PUT",
+    )
+    try:
+        with _OPENER.open(req, timeout=10):
+            pass
+    except Exception as exc:
+        print(f"WARNING: KV put failed for key '{key}': {exc}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -268,14 +349,28 @@ def main(argv: list[str] | None = None) -> None:
         gmail_error = exc
         print(f"WARNING: Gmail fetch failed: {exc}", file=sys.stderr)
 
+    # Read the Outlook refresh token from KV (survives token rotation).
+    # Falls back to the env var on first run or if KV is unreachable.
+    outlook_refresh_token = (
+        _kv_get(env["CF_ACCOUNT_ID"], env["CF_API_TOKEN"], _OUTLOOK_TOKEN_KV_KEY)
+        or env["OUTLOOK_REFRESH_TOKEN"]
+    )
+
     outlook_emails: list[EmailMessage] = []
     outlook_error: Exception | None = None
     try:
-        outlook_emails = outlook_client.fetch_unread_emails(
+        outlook_emails, new_outlook_token = outlook_client.fetch_unread_emails(
             client_id=env["OUTLOOK_CLIENT_ID"],
             client_secret=env["OUTLOOK_CLIENT_SECRET"],
-            refresh_token=env["OUTLOOK_REFRESH_TOKEN"],
+            refresh_token=outlook_refresh_token,
         )
+        if new_outlook_token:
+            _kv_put(
+                env["CF_ACCOUNT_ID"],
+                env["CF_API_TOKEN"],
+                _OUTLOOK_TOKEN_KV_KEY,
+                new_outlook_token,
+            )
     except Exception as exc:
         outlook_error = exc
         print(f"WARNING: Outlook fetch failed: {exc}", file=sys.stderr)

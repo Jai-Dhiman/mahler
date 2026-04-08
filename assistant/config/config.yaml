@@ -10,3 +10,78 @@ discord:
   require_mention: true
   auto_thread: false
   reactions: true
+
+skills:
+  disabled:
+    # Apple (macOS-local, irrelevant on server)
+    - apple-notes
+    - apple-reminders
+    - findmy
+    - imessage
+    # Coding agents
+    - claude-code
+    - codex
+    - opencode
+    # Dev workflow
+    - systematic-debugging
+    - plan
+    - writing-plans
+    - subagent-driven-development
+    - test-driven-development
+    - requesting-code-review
+    - dogfood
+    - github-issues
+    - github-pr-workflow
+    - github-repo-management
+    - github-code-review
+    - github-auth
+    - codebase-inspection
+    # Dev tools
+    - nano-pdf
+    - powerpoint
+    - ocr-and-documents
+    - webhook-subscriptions
+    - mcporter
+    - native-mcp
+    # Creative / media production
+    - ascii-art
+    - ascii-video
+    - excalidraw
+    - manim-video
+    - p5js
+    - popular-web-designs
+    - songwriting-and-ai-music
+    # Data science
+    - jupyter-live-kernel
+    # Gaming
+    - minecraft-modpack-server
+    - pokemon-player
+    # MLOps / training / inference
+    - serving-llms-vllm
+    - llama-cpp
+    - gguf-quantization
+    - guidance
+    - outlines
+    - obliteratus
+    - audiocraft-audio-generation
+    - clip
+    - segment-anything-model
+    - stable-diffusion-image-generation
+    - whisper
+    - dspy
+    - weights-and-biases
+    - huggingface-hub
+    - modal-serverless-gpu
+    - evaluating-llms-harness
+    - axolotl
+    - grpo-rl-training
+    - peft-fine-tuning
+    - pytorch-fsdp
+    - fine-tuning-with-trl
+    - unsloth
+    # Red teaming
+    - godmode
+    # Academic
+    - research-paper-writing
+    # Email (overrides custom email-triage skill)
+    - himalaya

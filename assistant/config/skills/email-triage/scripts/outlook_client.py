@@ -26,8 +26,15 @@ _TOKEN_ENDPOINT = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token
 _GRAPH_BASE = "https://graph.microsoft.com/v1.0/me"
 
 
-def refresh_access_token(client_id: str, client_secret: str, refresh_token: str) -> str:
-    """Exchange a refresh token for a new access token. Raises on auth failure."""
+def refresh_access_token(
+    client_id: str, client_secret: str, refresh_token: str
+) -> tuple[str, str]:
+    """Exchange a refresh token for a new access token.
+
+    Returns (access_token, new_refresh_token). new_refresh_token is an empty
+    string if Microsoft did not rotate the token in this response.
+    Raises on auth failure.
+    """
     body = urllib.parse.urlencode({
         "grant_type": "refresh_token",
         "client_id": client_id,
@@ -53,7 +60,8 @@ def refresh_access_token(client_id: str, client_secret: str, refresh_token: str)
     access_token = data.get("access_token")
     if not access_token:
         raise RuntimeError(f"No access_token in Outlook token response: {data}")
-    return access_token
+    new_refresh_token = data.get("refresh_token", "")
+    return access_token, new_refresh_token
 
 
 def _graph_get(url: str, access_token: str) -> dict:
@@ -166,12 +174,16 @@ def fetch_unread_emails(
     client_secret: str,
     refresh_token: str,
     max_results: int = 50,
-) -> list[EmailMessage]:
+) -> tuple[list[EmailMessage], str]:
     """Fetch unread emails from Outlook INBOX and Junk via Microsoft Graph API.
-    Marks fetched messages as read. Raises on auth failure."""
-    access_token = refresh_access_token(client_id, client_secret, refresh_token)
+    Marks fetched messages as read. Raises on auth failure.
+
+    Returns (emails, new_refresh_token). new_refresh_token is an empty string
+    if Microsoft did not rotate the token in this response.
+    """
+    access_token, new_refresh_token = refresh_access_token(client_id, client_secret, refresh_token)
 
     results: list[EmailMessage] = []
     results.extend(_fetch_from_folder("mailFolders/inbox", access_token, is_junk=False, max_results=max_results))
     results.extend(_fetch_from_folder("mailFolders/junkemail", access_token, is_junk=True, max_results=max_results))
-    return results
+    return results, new_refresh_token

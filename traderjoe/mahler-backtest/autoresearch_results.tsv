@@ -1,3 +1,8 @@
 iter	commit	test_sharpe	delta	status	win_rate	trades	sharpe_degradation	description
 0	3f396ee	0.10	--	baseline	51.0%	5606	32.6%	profit_target=50, stop_loss=125, dte=30-60, delta=0.20-0.30, iv=off
 1	keep	0.14	+0.04	keep	57.7%	6091	25.6%	profit_target=25
+2	revert	0.13	-0.01	revert	50.5%	5434	19.6%	profit_target=75 (worse than 25)
+3	revert	0.14	0.00	revert	50.4%	5419	19.9%	profit_target=100 (same Sharpe, lower win rate)
+4	revert	0.14	0.00	revert	57.7%	6091	25.9%	stop_loss=100 (no change — stop rarely hit at 25% profit target)
+5	revert	0.14	0.00	revert	57.7%	6091	25.6%	stop_loss=150 (identical — dead parameter)
+6	revert	0.14	0.00	revert	57.7%	6091	25.6%	stop_loss=999 hold-to-expiry (identical — dead parameter at 25% PT)

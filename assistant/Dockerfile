@@ -29,6 +29,7 @@ RUN chmod +x /home/hermes/entrypoint.sh
 # Copy custom skills
 COPY --chown=hermes:hermes config/skills/email-triage /home/hermes/.hermes/skills/email-triage
 COPY --chown=hermes:hermes config/skills/urgent-alert /home/hermes/.hermes/skills/urgent-alert
+COPY --chown=hermes:hermes config/skills/morning-brief /home/hermes/.hermes/skills/morning-brief
 
 # Copy priority map to Hermes workspace
 RUN mkdir -p /home/hermes/.hermes/workspace
