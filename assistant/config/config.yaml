@@ -88,3 +88,21 @@ skills:
     - research-paper-writing
     # Email (overrides custom email-triage skill)
     - himalaya
+    # Media — missing deps or API keys
+    - gif-search
+    - songsee
+    - heartmula
+    # Social — missing API keys
+    - xitter
+    # Productivity — missing API keys or credential files
+    - linear
+    - notion
+    - google-workspace
+    # Research — missing binary
+    - blogwatcher
+    # Note-taking — no vault on server
+    - obsidian
+    # Smart home — binary not installed, no Hue bridge on server
+    - openhue
+    # YouTube — youtube-transcript-api not installed
+    - youtube-content
