@@ -22,7 +22,7 @@ def _build_https_opener() -> urllib.request.OpenerDirector:
 
 _OPENER = _build_https_opener()
 
-_TOKEN_ENDPOINT = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
+_TOKEN_ENDPOINT = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 _GRAPH_BASE = "https://graph.microsoft.com/v1.0/me"
 
 
