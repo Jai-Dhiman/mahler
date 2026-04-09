@@ -88,3 +88,4 @@ codedb.snapshot
 # Assistant (Hermes deployment)
 assistant/.env
 assistant/.wrangler/
+target/

@@ -1,9 +1,9 @@
-name = "trader-joe"
-main = "trader-joe/build/worker/shim.mjs"
+name = "traderjoe"
+main = "build/worker/shim.mjs"
 compatibility_date = "2024-12-01"
 
 [build]
-command = "cd trader-joe && cargo install worker-build --version 0.4.0 && worker-build --release"
+command = "worker-build --release"
 
 [observability]
 enabled = true
