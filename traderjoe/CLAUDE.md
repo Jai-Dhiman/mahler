@@ -4,10 +4,10 @@ See docs/ARCHITECTURE_V2.md for full system design.
 
 TraderJoe is an autonomous options credit-spread trading system. Two distinct codebases:
 
-- **`mahler-backtest/`** — Rust crate: backtesting engine, walk-forward optimizer, CLI
+- **`traderjoe-backtest/`** — Rust crate: backtesting engine, walk-forward optimizer, CLI
 - **`trader-joe/`** — Rust: Cloudflare Workers handlers (WASM), broker integration, risk management
 
-## Rust Crate (`mahler-backtest/`)
+## Rust Crate (`traderjoe-backtest/`)
 
 Trait-based engine. Key types:
 
@@ -19,7 +19,7 @@ Trait-based engine. Key types:
 - `WalkForwardOptimizer` — grid search over `PutSpreadConfig` params (`walkforward/optimizer.rs`)
 - `BacktestConfig`, `BacktestResult`, `EquityPoint` — result types (`backtest/engine.rs`)
 
-CLI commands: `mahler-backtest run` and `mahler-backtest optimize`
+CLI commands: `traderjoe-backtest run` and `traderjoe-backtest optimize`
 
 Data lives in `data/orats/` (gitignored). Tests skip gracefully when data is absent.
 

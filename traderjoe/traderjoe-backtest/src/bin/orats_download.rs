@@ -17,9 +17,31 @@ use polars::prelude::*;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use mahler_backtest::data::{records_to_snapshot, ORATSClient, ORATSError, RawStrikeRecord};
+use traderjoe_backtest::data::{records_to_snapshot, ORATSClient, ORATSError, RawStrikeRecord};
 
 const SEPARATOR: &str = "============================================================";
+
+/// Sanitize a ticker symbol for safe use in file paths.
+///
+/// Returns a new string containing only the allowed characters (uppercase
+/// letters, digits, dots). Errors if the input contains any other character,
+/// which would indicate an invalid or malicious ticker value.
+fn sanitize_ticker(ticker: &str) -> Result<String> {
+    if ticker.is_empty() {
+        anyhow::bail!("Ticker symbol cannot be empty");
+    }
+    let sanitized: String = ticker
+        .chars()
+        .filter(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '.')
+        .collect();
+    if sanitized != ticker {
+        anyhow::bail!(
+            "Invalid ticker '{}': must contain only uppercase letters, digits, or '.'",
+            ticker
+        );
+    }
+    Ok(sanitized)
+}
 
 /// ORATS data downloader CLI.
 #[derive(Parser)]
@@ -232,10 +254,35 @@ fn records_to_dataframe(records: &[RawStrikeRecord]) -> Result<DataFrame> {
 
 /// Save DataFrame to Parquet file (append if exists).
 fn save_to_parquet(data_dir: &PathBuf, ticker: &str, year: i32, df: DataFrame) -> Result<PathBuf> {
-    let output_dir = data_dir.join("strikes").join(ticker);
-    fs::create_dir_all(&output_dir)?;
+    let safe_ticker = sanitize_ticker(ticker)?;
 
-    let output_path = output_dir.join(format!("{}_{}.parquet", ticker, year));
+    // Create the strikes base and canonicalize it so subsequent joins use a
+    // fully-resolved path with no symlink or ".." components.
+    let strikes_base = data_dir.join("strikes");
+    fs::create_dir_all(&strikes_base)?;
+    let canonical_strikes = strikes_base
+        .canonicalize()
+        .context("failed to resolve strikes base directory")?;
+
+    // Create the per-ticker subdirectory and canonicalize again, then verify
+    // the resolved path is still within the expected base (bounds check).
+    let ticker_dir_raw = canonical_strikes.join(&safe_ticker);
+    fs::create_dir_all(&ticker_dir_raw)?;
+    let ticker_dir = ticker_dir_raw
+        .canonicalize()
+        .context("failed to resolve ticker directory")?;
+
+    if !ticker_dir.starts_with(&canonical_strikes) {
+        anyhow::bail!("resolved path for '{}' escapes data directory", ticker);
+    }
+
+    // Derive the directory name from the canonicalized path (filesystem-sourced,
+    // not user input) so no taint flows into File::create.
+    let dir_name = ticker_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| anyhow::anyhow!("cannot determine ticker directory name"))?;
+    let output_path = ticker_dir.join(format!("{}_{}.parquet", dir_name, year));
 
     // If file exists, read and concatenate
     let final_df = if output_path.exists() {
@@ -262,6 +309,7 @@ fn save_to_parquet(data_dir: &PathBuf, ticker: &str, year: i32, df: DataFrame) -
     };
 
     // Write to Parquet with compression
+    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- false positive: Actix web rule applied to CLI; output_path is within canonicalized, bounds-checked directory
     let file = fs::File::create(&output_path)?;
     ParquetWriter::new(file)
         .with_compression(ParquetCompression::Zstd(Some(ZstdLevel::try_new(3)?)))
@@ -585,13 +633,33 @@ async fn cmd_validate(data_dir: PathBuf, tickers: Vec<&str>) -> Result<()> {
     println!("Validating downloaded data...\n");
 
     for ticker in &tickers {
-        let ticker_dir = data_dir.join("strikes").join(ticker);
-        if !ticker_dir.exists() {
+        let safe_ticker = match sanitize_ticker(ticker) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("Skipping invalid ticker '{}': {}", ticker, e);
+                continue;
+            }
+        };
+
+        let raw_dir = data_dir.join("strikes").join(&safe_ticker);
+        if !raw_dir.exists() {
             println!("{}: No data found", ticker);
             continue;
         }
 
-        let parquet_files: Vec<_> = fs::read_dir(&ticker_dir)?
+        // Canonicalize and bounds-check before any file system operations.
+        let canonical_base = data_dir
+            .canonicalize()
+            .context("failed to resolve data directory")?;
+        let ticker_dir = raw_dir
+            .canonicalize()
+            .with_context(|| format!("failed to resolve directory for {}", ticker))?;
+        if !ticker_dir.starts_with(&canonical_base) {
+            eprintln!("Skipping '{}': resolved path escapes data directory", ticker);
+            continue;
+        }
+
+        let parquet_files: Vec<_> = fs::read_dir(&ticker_dir)? // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- false positive: Actix web rule applied to CLI; ticker_dir is canonicalized and bounds-checked
             .filter_map(|e| e.ok())
             .filter(|e| {
                 e.path()

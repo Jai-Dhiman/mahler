@@ -1,4 +1,4 @@
-//! Mahler Backtest CLI
+//! TraderJoe Backtest CLI
 //!
 //! High-performance options backtesting engine.
 //!
@@ -6,17 +6,17 @@
 //!
 //! ## Run a single backtest
 //! ```bash
-//! mahler-backtest run --ticker SPY --start 2020-01-01 --end 2024-12-31
+//! traderjoe-backtest run --ticker SPY --start 2020-01-01 --end 2024-12-31
 //! ```
 //!
 //! ## Run walk-forward optimization
 //! ```bash
-//! mahler-backtest optimize --ticker SPY --start 2020-01-01 --end 2024-12-31
+//! traderjoe-backtest optimize --ticker SPY --start 2020-01-01 --end 2024-12-31
 //! ```
 //!
 //! ## Validate data integrity
 //! ```bash
-//! mahler-backtest validate --ticker SPY
+//! traderjoe-backtest validate --ticker SPY
 //! ```
 
 use std::time::Instant;
@@ -26,22 +26,22 @@ use clap::{Parser, Subcommand};
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
-use mahler_backtest::{
+use traderjoe_backtest::{
     DataIntegrityValidator, GreeksValidator, MetricsCalculator,
     ParameterGrid, SlippageModel, WalkForwardOptimizer,
 };
-use mahler_backtest::backtest::CommissionModel;
-use mahler_backtest::broker::backtest::SimulatedBroker;
-use mahler_backtest::data::{DataLoader, HistoricalDataSource};
-use mahler_backtest::engine_core::engine::Engine;
-use mahler_backtest::risk::circuit_breakers::CircuitBreakerConfig;
-use mahler_backtest::risk::gate::DefaultRiskGate;
-use mahler_backtest::strategy::put_spread::{PutCreditSpreadStrategy, PutSpreadConfig};
-use mahler_backtest::analytics::SpreadScreenerConfig;
-use mahler_backtest::walkforward::periods::WalkForwardPeriodsConfig;
+use traderjoe_backtest::backtest::CommissionModel;
+use traderjoe_backtest::broker::backtest::SimulatedBroker;
+use traderjoe_backtest::data::{DataLoader, HistoricalDataSource};
+use traderjoe_backtest::engine_core::engine::Engine;
+use traderjoe_backtest::risk::circuit_breakers::CircuitBreakerConfig;
+use traderjoe_backtest::risk::gate::DefaultRiskGate;
+use traderjoe_backtest::strategy::put_spread::{PutCreditSpreadStrategy, PutSpreadConfig};
+use traderjoe_backtest::analytics::SpreadScreenerConfig;
+use traderjoe_backtest::walkforward::periods::WalkForwardPeriodsConfig;
 
 #[derive(Parser)]
-#[command(name = "mahler-backtest")]
+#[command(name = "traderjoe-backtest")]
 #[command(about = "High-performance options backtesting engine")]
 #[command(version)]
 struct Cli {

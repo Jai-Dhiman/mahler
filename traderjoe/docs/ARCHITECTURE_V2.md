@@ -16,7 +16,7 @@ This document describes the full V2 vision. What is currently built and running:
 - Trait-based `Engine::run()` with `DataSource`, `Strategy`, `Broker`, `RiskGate` traits
 - `PutCreditSpreadStrategy` with `PutSpreadConfig` (DTE, delta, PT/SL, IV filter)
 - `WalkForwardOptimizer` using the trait-based engine for grid search
-- CLI: `mahler-backtest run` and `mahler-backtest optimize`
+- CLI: `traderjoe-backtest run` and `traderjoe-backtest optimize`
 
 **Layer 5 (Circuit Breakers + Execution) — IMPLEMENTED (Rust, Cloudflare Workers)**
 - Rust Worker (`trader-joe/`) replaced all Python CF Workers on 2026-04-08

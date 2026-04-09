@@ -1,12 +1,12 @@
 [package]
-name = "mahler-backtest"
+name = "traderjoe-backtest"
 version = "0.1.0"
 edition = "2021"
-description = "High-performance options backtesting engine for Mahler trading system"
+description = "High-performance options backtesting engine for TraderJoe"
 license = "MIT"
 
 [[bin]]
-name = "mahler-backtest"
+name = "traderjoe-backtest"
 path = "src/main.rs"
 
 [[bin]]

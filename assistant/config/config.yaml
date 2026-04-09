@@ -5,6 +5,9 @@ model:
 terminal:
   backend: local
 
+web:
+  backend: tavily
+
 # Discord settings (token, home_channel, allowed_users are set via env vars)
 discord:
   require_mention: true
