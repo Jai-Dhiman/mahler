@@ -4,7 +4,7 @@ import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from email_types import EmailMessage
@@ -112,10 +112,12 @@ def _fetch_from_folder(
     access_token: str,
     is_junk: bool,
     max_results: int = 50,
+    since_days: int = 7,
 ) -> list[EmailMessage]:
-    """Fetch unread messages from a Graph API mail folder."""
+    """Fetch unread messages from a Graph API mail folder received within the last since_days days."""
+    cutoff = (datetime.now(tz=timezone.utc) - timedelta(days=since_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     params = urllib.parse.urlencode({
-        "$filter": "isRead eq false",
+        "$filter": f"isRead eq false and receivedDateTime ge {cutoff}",
         "$select": "id,subject,from,receivedDateTime,body,internetMessageId,internetMessageHeaders",
         "$top": str(max_results),
     })
@@ -174,9 +176,11 @@ def fetch_unread_emails(
     client_secret: str,
     refresh_token: str,
     max_results: int = 50,
+    since_days: int = 7,
 ) -> tuple[list[EmailMessage], str]:
     """Fetch unread emails from Outlook INBOX and Junk via Microsoft Graph API.
-    Marks fetched messages as read. Raises on auth failure.
+    Marks fetched messages as read. Only fetches emails received within the last since_days days.
+    Raises on auth failure.
 
     Returns (emails, new_refresh_token). new_refresh_token is an empty string
     if Microsoft did not rotate the token in this response.
@@ -184,6 +188,6 @@ def fetch_unread_emails(
     access_token, new_refresh_token = refresh_access_token(client_id, client_secret, refresh_token)
 
     results: list[EmailMessage] = []
-    results.extend(_fetch_from_folder("mailFolders/inbox", access_token, is_junk=False, max_results=max_results))
-    results.extend(_fetch_from_folder("mailFolders/junkemail", access_token, is_junk=True, max_results=max_results))
+    results.extend(_fetch_from_folder("mailFolders/inbox", access_token, is_junk=False, max_results=max_results, since_days=since_days))
+    results.extend(_fetch_from_folder("mailFolders/junkemail", access_token, is_junk=True, max_results=max_results, since_days=since_days))
     return results, new_refresh_token

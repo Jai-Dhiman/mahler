@@ -68,11 +68,12 @@ def refresh_access_token(client_id: str, client_secret: str, refresh_token: str)
     return data["access_token"]
 
 
-def fetch_unread_emails(access_token: str, max_results: int = 50) -> list[EmailMessage]:
-    """Fetch unread emails from Gmail inbox. Raises on API error."""
+def fetch_unread_emails(access_token: str, max_results: int = 50, since_days: int = 7) -> list[EmailMessage]:
+    """Fetch unread emails from Gmail inbox received within the last since_days days. Raises on API error."""
+    query = f"is:unread in:inbox newer_than:{since_days}d"
     list_url = (
         f"{_GMAIL_API_BASE}/messages"
-        f"?q=is%3Aunread+in%3Ainbox&maxResults={max_results}"
+        f"?q={urllib.parse.quote(query)}&maxResults={max_results}"
     )
     list_data = _gmail_get(list_url, access_token)
 
