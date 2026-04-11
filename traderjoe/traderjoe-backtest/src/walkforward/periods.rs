@@ -62,9 +62,9 @@ pub struct WalkForwardPeriodsConfig {
 impl Default for WalkForwardPeriodsConfig {
     fn default() -> Self {
         Self {
-            train_months: 6,
-            validate_months: 1,
-            test_months: 1,
+            train_months: 24,
+            validate_months: 3,
+            test_months: 3,
             roll_months: 1,
         }
     }
@@ -199,9 +199,9 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = WalkForwardPeriodsConfig::default();
-        assert_eq!(config.train_months, 6);
-        assert_eq!(config.validate_months, 1);
-        assert_eq!(config.test_months, 1);
+        assert_eq!(config.train_months, 24);
+        assert_eq!(config.validate_months, 3);
+        assert_eq!(config.test_months, 3);
         assert_eq!(config.roll_months, 1);
     }
 
@@ -222,16 +222,16 @@ mod tests {
     #[test]
     fn test_period_generation() {
         let config = WalkForwardPeriodsConfig::default();
-        let start = NaiveDate::from_ymd_opt(2020, 1, 1).unwrap();
-        let end = NaiveDate::from_ymd_opt(2021, 12, 31).unwrap();
+        // Need at least 30 months (24 train + 3 validate + 3 test).
+        // Use 4 years: (48 - 30) / 1 + 1 = 19 periods expected.
+        let start = NaiveDate::from_ymd_opt(2019, 1, 1).unwrap();
+        let end = NaiveDate::from_ymd_opt(2022, 12, 31).unwrap();
 
         let generator = WalkForwardPeriods::new(config, start, end);
         let periods = generator.generate();
 
-        // 24 months - 8 required = 16 available, 16 / 1 + 1 = 17 periods
         assert!(periods.len() > 10);
 
-        // Check first period
         let first = &periods[0];
         assert_eq!(first.train_start, start);
     }

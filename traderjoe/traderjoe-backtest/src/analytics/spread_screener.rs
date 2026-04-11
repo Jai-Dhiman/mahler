@@ -42,16 +42,15 @@ impl Default for SpreadScreenerConfig {
     fn default() -> Self {
         Self {
             min_dte: 30,
-            max_dte: 45,
+            max_dte: 60,
             min_short_delta: 0.20,
             max_short_delta: 0.30,
             min_iv_percentile: 50.0,
             min_open_interest: 100,
             min_volume: 10,
-            max_spread_pct: 0.20, // 20% max spread
+            max_spread_pct: 0.08, // 8% max bid-ask spread per AUTORESEARCH.md
             spread_widths: vec![
                 Decimal::from(5),
-                Decimal::from(10),
             ],
             min_credit_pct: 20.0, // Minimum 20% of width as credit
         }
@@ -391,7 +390,7 @@ mod tests {
     fn test_default_config() {
         let config = SpreadScreenerConfig::default();
         assert_eq!(config.min_dte, 30);
-        assert_eq!(config.max_dte, 45);
+        assert_eq!(config.max_dte, 60);
         assert_eq!(config.min_short_delta, 0.20);
         assert_eq!(config.max_short_delta, 0.30);
     }

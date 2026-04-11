@@ -1294,31 +1294,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mahler-backtest"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "approx",
- "chrono",
- "clap",
- "indicatif",
- "polars",
- "proptest",
- "rayon",
- "reqwest",
- "rust_decimal",
- "rust_decimal_macros",
- "serde",
- "serde_json",
- "statrs",
- "thiserror 1.0.69",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "matchers"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3275,6 +3250,31 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
+]
+
+[[package]]
+name = "traderjoe-backtest"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "approx",
+ "chrono",
+ "clap",
+ "indicatif",
+ "polars",
+ "proptest",
+ "rayon",
+ "reqwest",
+ "rust_decimal",
+ "rust_decimal_macros",
+ "serde",
+ "serde_json",
+ "statrs",
+ "thiserror 1.0.69",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

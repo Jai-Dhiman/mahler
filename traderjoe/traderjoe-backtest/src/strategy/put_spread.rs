@@ -25,18 +25,13 @@ impl Default for PutSpreadConfig {
     fn default() -> Self {
         Self {
             profit_target_pct: 50.0,
-            stop_loss_pct: 125.0,
+            stop_loss_pct: 200.0,
             time_exit_dte: 21,
-            screener: SpreadScreenerConfig {
-                min_short_delta: 0.15,
-                max_short_delta: 0.35,
-                min_credit_pct: 10.0,
-                ..SpreadScreenerConfig::default()
-            },
+            screener: SpreadScreenerConfig::default(),
             max_positions: 10,
-            max_trades_per_day: 1,
+            max_trades_per_day: 3,
             min_iv_percentile: 50.0,
-            use_iv_filter: false,
+            use_iv_filter: true,
         }
     }
 }
@@ -110,7 +105,10 @@ impl PutCreditSpreadStrategy {
 
         let iv_structure = self.iv_analyzer.analyze(snapshot);
 
-        if self.config.use_iv_filter {
+        // Only apply IV filter once we have enough history for a meaningful percentile.
+        // With < 20 days of history, iv_percentile() returns 0.0 which would incorrectly
+        // block all entries during the warm-up period.
+        if self.config.use_iv_filter && self.iv_analyzer.history_length() >= 20 {
             if let Some(atm_iv) = iv_structure.atm_iv {
                 if let Some(pct) = self.iv_analyzer.iv_percentile(atm_iv) {
                     if pct < self.config.min_iv_percentile {
@@ -187,21 +185,23 @@ mod tests {
         let mut snapshot = OptionsSnapshot::new(date, "SPY".to_string(), dec!(480));
         let mut chain = OptionsChain::new(exp, 32);
 
+        // 470 short: delta -0.25 (in 0.20-0.30 range), bid-ask 3.8% of mid, passes all filters.
         chain.add_quote(OptionQuote {
             ticker: "SPY".to_string(), trade_date: date, expiration: exp, dte: 32,
             strike: dec!(470), option_type: OptionType::Put, stock_price: dec!(480),
-            bid: dec!(2.40), ask: dec!(2.60), mid: dec!(2.50),
-            theoretical_value: dec!(2.50), volume: 1000, open_interest: 5000,
+            bid: dec!(2.55), ask: dec!(2.65), mid: dec!(2.60),
+            theoretical_value: dec!(2.60), volume: 1000, open_interest: 5000,
             bid_iv: 0.18, mid_iv: 0.19, ask_iv: 0.20, smv_vol: 0.19,
             greeks: Greeks { delta: -0.25, gamma: 0.02, theta: -0.05, vega: 0.10, rho: 0.01 },
             residual_rate: 0.05,
         });
 
+        // 465 long: bid-ask 7.1% of mid (< 8%), credit = 2.55 - 1.45 = 1.10 = 22% of $5 width.
         chain.add_quote(OptionQuote {
             ticker: "SPY".to_string(), trade_date: date, expiration: exp, dte: 32,
             strike: dec!(465), option_type: OptionType::Put, stock_price: dec!(480),
-            bid: dec!(1.40), ask: dec!(1.60), mid: dec!(1.50),
-            theoretical_value: dec!(1.50), volume: 800, open_interest: 4000,
+            bid: dec!(1.35), ask: dec!(1.45), mid: dec!(1.40),
+            theoretical_value: dec!(1.40), volume: 800, open_interest: 4000,
             bid_iv: 0.19, mid_iv: 0.20, ask_iv: 0.21, smv_vol: 0.20,
             greeks: Greeks { delta: -0.15, gamma: 0.015, theta: -0.03, vega: 0.08, rho: 0.008 },
             residual_rate: 0.05,
@@ -210,8 +210,8 @@ mod tests {
         chain.add_quote(OptionQuote {
             ticker: "SPY".to_string(), trade_date: date, expiration: exp, dte: 32,
             strike: dec!(460), option_type: OptionType::Put, stock_price: dec!(480),
-            bid: dec!(0.90), ask: dec!(1.10), mid: dec!(1.00),
-            theoretical_value: dec!(1.00), volume: 600, open_interest: 3000,
+            bid: dec!(0.88), ask: dec!(0.94), mid: dec!(0.91),
+            theoretical_value: dec!(0.91), volume: 600, open_interest: 3000,
             bid_iv: 0.20, mid_iv: 0.21, ask_iv: 0.22, smv_vol: 0.21,
             greeks: Greeks { delta: -0.08, gamma: 0.01, theta: -0.02, vega: 0.06, rho: 0.005 },
             residual_rate: 0.05,

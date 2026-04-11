@@ -112,7 +112,7 @@ impl Default for BacktestConfig {
             stop_loss_pct: 125.0,
             time_exit_dte: 21,
             min_dte: 30,
-            max_dte: 45,
+            max_dte: 60,
             min_delta: 0.20,
             max_delta: 0.30,
             min_iv_percentile: 50.0,

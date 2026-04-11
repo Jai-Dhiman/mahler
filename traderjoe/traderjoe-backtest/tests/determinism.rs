@@ -1,13 +1,13 @@
 use chrono::NaiveDate;
 use rust_decimal_macros::dec;
 
-use mahler_backtest::backtest::{CommissionModel, SlippageModel};
-use mahler_backtest::broker::backtest::SimulatedBroker;
-use mahler_backtest::engine_core::engine::Engine;
-use mahler_backtest::data::HistoricalDataSource;
-use mahler_backtest::risk::circuit_breakers::CircuitBreakerConfig;
-use mahler_backtest::risk::gate::DefaultRiskGate;
-use mahler_backtest::strategy::put_spread::{PutCreditSpreadStrategy, PutSpreadConfig};
+use traderjoe_backtest::backtest::{CommissionModel, SlippageModel};
+use traderjoe_backtest::broker::backtest::SimulatedBroker;
+use traderjoe_backtest::engine_core::engine::Engine;
+use traderjoe_backtest::data::HistoricalDataSource;
+use traderjoe_backtest::risk::circuit_breakers::CircuitBreakerConfig;
+use traderjoe_backtest::risk::gate::DefaultRiskGate;
+use traderjoe_backtest::strategy::put_spread::{PutCreditSpreadStrategy, PutSpreadConfig};
 
 #[test]
 fn test_deterministic_results() {

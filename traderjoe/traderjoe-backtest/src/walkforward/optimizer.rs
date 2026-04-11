@@ -44,12 +44,12 @@ impl Default for ParameterGrid {
     fn default() -> Self {
         Self {
             dte_min: vec![30],
-            dte_max: vec![60],
-            delta_min: vec![0.20],
-            delta_max: vec![0.30],
-            profit_target: vec![25.0],
-            stop_loss: vec![125.0],
-            iv_percentile: vec![0.0],
+            dte_max: vec![45, 60],
+            delta_min: vec![0.15, 0.20, 0.25],
+            delta_max: vec![0.25, 0.30, 0.35],
+            profit_target: vec![50.0, 65.0, 75.0],
+            stop_loss: vec![150.0, 200.0],
+            iv_percentile: vec![0.0, 25.0, 50.0],
         }
     }
 }
@@ -221,7 +221,7 @@ impl WalkForwardResult {
             / self.period_results.len() as f64
     }
 
-    /// Calculate average test Sharpe ratio.
+    /// Calculate average test Sharpe ratio (OOS).
     pub fn avg_test_sharpe(&self) -> f64 {
         if self.period_results.is_empty() {
             return 0.0;
@@ -233,16 +233,52 @@ impl WalkForwardResult {
             / self.period_results.len() as f64
     }
 
+    /// Calculate average train Sharpe ratio (IS).
+    pub fn avg_train_sharpe(&self) -> f64 {
+        if self.period_results.is_empty() {
+            return 0.0;
+        }
+        self.period_results
+            .iter()
+            .map(|p| p.train_result.sharpe_ratio)
+            .sum::<f64>()
+            / self.period_results.len() as f64
+    }
+
+    /// Walk-Forward Efficiency: OOS Sharpe / IS Sharpe.
+    ///
+    /// Guard: must be > 0.50. Below 0.50 means the IS parameter selection
+    /// is not generalizing — the system is mining historical noise.
+    pub fn wfe(&self) -> f64 {
+        let train = self.avg_train_sharpe();
+        if train <= 0.0 {
+            return 0.0;
+        }
+        self.avg_test_sharpe() / train
+    }
+
+    /// Check whether this result passes the WFE guard (> 0.50).
+    pub fn passes_wfe_guard(&self) -> bool {
+        self.wfe() > 0.50
+    }
+
     /// Get summary string.
     pub fn summary(&self) -> String {
+        let wfe = self.wfe();
+        let wfe_status = if self.passes_wfe_guard() { "PASS" } else { "FAIL" };
         format!(
             "Walk-Forward Results: {} periods\n\
-             Avg Validate Sharpe: {:.2}\n\
-             Avg Test Sharpe: {:.2}\n\
+             Avg Train Sharpe (IS):  {:.2}\n\
+             Avg Validate Sharpe:    {:.2}\n\
+             Avg Test Sharpe (OOS):  {:.2}\n\
+             WFE (OOS/IS):           {:.2} [{}]\n\
              Total Periods: {}",
             self.period_results.len(),
+            self.avg_train_sharpe(),
             self.avg_validate_sharpe(),
             self.avg_test_sharpe(),
+            wfe,
+            wfe_status,
             self.period_results.len()
         )
     }
@@ -263,12 +299,18 @@ impl WalkForwardResult {
             0.0
         };
 
+        let train_sharpe = self.avg_train_sharpe();
+        let wfe = self.wfe();
+        let wfe_status = if self.passes_wfe_guard() { "PASS" } else { "FAIL" };
+
         analysis.push_str(&format!("Ticker: {}\n", self.ticker));
         analysis.push_str(&format!("Date Range: {} to {}\n", self.start_date, self.end_date));
         analysis.push_str(&format!("Walk-Forward Periods: {}\n", self.period_results.len()));
+        analysis.push_str(&format!("Avg Train Sharpe (IS): {:.2}\n", train_sharpe));
         analysis.push_str(&format!("Validation Sharpe: {:.2}\n", val_sharpe));
         analysis.push_str(&format!("Out-of-Sample Test Sharpe: {:.2}\n", test_sharpe));
-        analysis.push_str(&format!("Sharpe Degradation (overfit indicator): {:.1}%\n\n", sharpe_degradation));
+        analysis.push_str(&format!("WFE (OOS/IS): {:.2} [{}]\n", wfe, wfe_status));
+        analysis.push_str(&format!("Sharpe Degradation (val vs test): {:.1}%\n\n", sharpe_degradation));
 
         // 2. Consensus Parameters
         analysis.push_str("## CONSENSUS PARAMETERS\n\n");
@@ -415,8 +457,11 @@ impl WalkForwardResult {
   "ticker": "{}",
   "date_range": "{} to {}",
   "periods": {},
+  "train_sharpe": {:.2},
   "validation_sharpe": {:.2},
   "test_sharpe": {:.2},
+  "wfe": {:.2},
+  "wfe_pass": {},
   "sharpe_degradation_pct": {:.1},
   "total_test_trades": {},
   "overall_win_rate_pct": {:.1},
@@ -426,8 +471,11 @@ impl WalkForwardResult {
             self.start_date,
             self.end_date,
             self.period_results.len(),
+            train_sharpe,
             val_sharpe,
             test_sharpe,
+            wfe,
+            self.passes_wfe_guard(),
             sharpe_degradation,
             total_trades,
             total_win_rate,
