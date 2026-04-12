@@ -105,5 +105,62 @@ class TestListSubcommand(unittest.TestCase):
         self.assertEqual(mock_out.getvalue().strip(), "No tasks found.")
 
 
+class TestUpdateCompleteDeleteSubcommands(unittest.TestCase):
+
+    @patch.dict(os.environ, {"NOTION_API_TOKEN": "tok", "NOTION_DATABASE_ID": "db-id"})
+    @patch("tasks.NotionClient")
+    def test_update_calls_update_task_with_provided_fields_only(self, mock_cls):
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.update_task.return_value = _make_task(
+            page_id="page-abc", title="Test task", status="In Progress"
+        )
+
+        with patch("sys.stdout", new_callable=StringIO) as mock_out:
+            tasks.main(["update", "--id", "page-abc", "--status", "In Progress"])
+
+        mock_client.update_task.assert_called_once_with("page-abc", status="In Progress")
+        output = mock_out.getvalue()
+        self.assertIn("page-abc", output)
+
+    @patch.dict(os.environ, {"NOTION_API_TOKEN": "tok", "NOTION_DATABASE_ID": "db-id"})
+    @patch("tasks.NotionClient")
+    def test_complete_calls_complete_task_with_page_id(self, mock_cls):
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.complete_task.return_value = _make_task(
+            page_id="page-abc", title="Test task", status="Done"
+        )
+
+        with patch("sys.stdout", new_callable=StringIO) as mock_out:
+            tasks.main(["complete", "--id", "page-abc"])
+
+        mock_client.complete_task.assert_called_once_with("page-abc")
+        self.assertIn("page-abc", mock_out.getvalue())
+
+    @patch.dict(os.environ, {"NOTION_API_TOKEN": "tok", "NOTION_DATABASE_ID": "db-id"})
+    @patch("tasks.NotionClient")
+    def test_delete_calls_delete_task_and_prints_confirmation(self, mock_cls):
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.delete_task.return_value = None
+
+        with patch("sys.stdout", new_callable=StringIO) as mock_out:
+            tasks.main(["delete", "--id", "page-abc"])
+
+        mock_client.delete_task.assert_called_once_with("page-abc")
+        self.assertIn("page-abc", mock_out.getvalue())
+
+    def test_update_without_id_exits_nonzero(self):
+        with self.assertRaises(SystemExit) as ctx:
+            tasks.main(["update", "--status", "Done"])
+        self.assertNotEqual(ctx.exception.code, 0)
+
+    def test_complete_without_id_exits_nonzero(self):
+        with self.assertRaises(SystemExit) as ctx:
+            tasks.main(["complete"])
+        self.assertNotEqual(ctx.exception.code, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

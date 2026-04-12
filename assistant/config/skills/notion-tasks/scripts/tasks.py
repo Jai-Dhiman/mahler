@@ -82,6 +82,33 @@ def cmd_list(args: argparse.Namespace) -> None:
         print(_format_task(task))
 
 
+def cmd_update(args: argparse.Namespace) -> None:
+    client = _get_client()
+    fields = {}
+    if args.title is not None:
+        fields["title"] = args.title
+    if args.status is not None:
+        fields["status"] = args.status
+    if args.due is not None:
+        fields["due"] = args.due
+    if args.priority is not None:
+        fields["priority"] = args.priority
+    task = client.update_task(args.id, **fields)
+    print(f"Updated: {task['id']} — {task['title']}")
+
+
+def cmd_complete(args: argparse.Namespace) -> None:
+    client = _get_client()
+    task = client.complete_task(args.id)
+    print(f"Completed: {task['id']} — {task['title']}")
+
+
+def cmd_delete(args: argparse.Namespace) -> None:
+    client = _get_client()
+    client.delete_task(args.id)
+    print(f"Deleted: {args.id}")
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description="Mahler Notion task manager")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -96,8 +123,27 @@ def main(argv=None) -> None:
     p_list.add_argument("--priority", choices=["High", "Medium", "Low"], default=None)
     p_list.add_argument("--due-before", dest="due_before", default=None)
 
+    p_update = sub.add_parser("update")
+    p_update.add_argument("--id", required=True)
+    p_update.add_argument("--title", default=None)
+    p_update.add_argument("--status", choices=["Todo", "In Progress", "Done"], default=None)
+    p_update.add_argument("--due", default=None)
+    p_update.add_argument("--priority", choices=["High", "Medium", "Low"], default=None)
+
+    p_complete = sub.add_parser("complete")
+    p_complete.add_argument("--id", required=True)
+
+    p_delete = sub.add_parser("delete")
+    p_delete.add_argument("--id", required=True)
+
     args = parser.parse_args(argv)
-    dispatch = {"create": cmd_create, "list": cmd_list}
+    dispatch = {
+        "create": cmd_create,
+        "list": cmd_list,
+        "update": cmd_update,
+        "complete": cmd_complete,
+        "delete": cmd_delete,
+    }
     dispatch[args.command](args)
 
 
