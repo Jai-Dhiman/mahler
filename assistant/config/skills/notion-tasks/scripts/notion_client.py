@@ -56,6 +56,28 @@ class NotionClient:
             "Content-Type": "application/json",
         }
 
+    def create_task(
+        self,
+        title: str,
+        due: Optional[str] = None,
+        priority: Optional[str] = None,
+    ) -> dict:
+        properties: dict = {
+            "Name": {"title": [{"text": {"content": title}}]},
+            "Status": {"select": {"name": "Todo"}},
+        }
+        if due is not None:
+            properties["Due"] = {"date": {"start": due}}
+        if priority is not None:
+            properties["Priority"] = {"select": {"name": priority}}
+
+        body = {
+            "parent": {"database_id": self._database_id},
+            "properties": properties,
+        }
+        data = self._request("POST", "/pages", body)
+        return _extract_task(data)
+
     def _request(self, method: str, path: str, body: Optional[dict] = None) -> dict:
         url = f"{_NOTION_API_BASE}{path}"
         data = json.dumps(body).encode("utf-8") if body is not None else None

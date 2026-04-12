@@ -72,5 +72,59 @@ class TestNotionClientInit(unittest.TestCase):
         self.assertIsNotNone(client)
 
 
+class TestCreateTask(unittest.TestCase):
+
+    def test_create_task_sends_correct_payload_and_returns_task_dict(self):
+        page = _page_fixture(page_id="new-page-id", title="Buy groceries")
+        captured = []
+
+        def capture_open(req):
+            captured.append(req)
+            return _make_response(page)
+
+        with patch.object(_OPENER, "open", side_effect=capture_open):
+            client = _make_client()
+            result = client.create_task(title="Buy groceries", due=None, priority=None)
+
+        self.assertEqual(len(captured), 1)
+        body = json.loads(captured[0].data.decode("utf-8"))
+        self.assertEqual(body["parent"]["database_id"], "test-db-id")
+        self.assertEqual(body["properties"]["Name"]["title"][0]["text"]["content"], "Buy groceries")
+        self.assertEqual(body["properties"]["Status"]["select"]["name"], "Todo")
+        self.assertNotIn("Due", body["properties"])
+        self.assertNotIn("Priority", body["properties"])
+        self.assertEqual(result["id"], "new-page-id")
+        self.assertEqual(result["title"], "Buy groceries")
+        self.assertEqual(result["status"], "Todo")
+        self.assertIsNone(result["due"])
+        self.assertIsNone(result["priority"])
+
+    def test_create_task_includes_due_and_priority_when_provided(self):
+        page = _page_fixture(
+            page_id="page-xyz",
+            title="Fix bug",
+            status="Todo",
+            due="2026-04-17",
+            priority="High",
+        )
+        with patch.object(_OPENER, "open", return_value=_make_response(page)) as mock_open:
+            client = _make_client()
+            result = client.create_task(title="Fix bug", due="2026-04-17", priority="High")
+
+        body = json.loads(mock_open.call_args[0][0].data.decode("utf-8"))
+        self.assertEqual(body["properties"]["Due"]["date"]["start"], "2026-04-17")
+        self.assertEqual(body["properties"]["Priority"]["select"]["name"], "High")
+        self.assertEqual(result["due"], "2026-04-17")
+        self.assertEqual(result["priority"], "High")
+
+    def test_create_task_raises_on_api_error(self):
+        error_payload = {"object": "error", "status": 400, "message": "bad request"}
+        with patch.object(_OPENER, "open", return_value=_make_response(error_payload, status=400)):
+            client = _make_client()
+            with self.assertRaises(RuntimeError) as ctx:
+                client.create_task(title="Bad task", due=None, priority=None)
+        self.assertIn("400", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
