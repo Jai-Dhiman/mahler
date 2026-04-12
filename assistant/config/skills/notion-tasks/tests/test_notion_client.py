@@ -288,5 +288,42 @@ class TestCompleteTask(unittest.TestCase):
         self.assertEqual(result["id"], "page-abc123")
 
 
+class TestDeleteTask(unittest.TestCase):
+
+    def test_delete_task_sends_archived_true(self):
+        archived_page = _page_fixture(page_id="page-abc123", title="Test task")
+        captured = []
+
+        def capture_open(req):
+            captured.append(req)
+            return _make_response(archived_page)
+
+        with patch.object(_OPENER, "open", side_effect=capture_open):
+            client = _make_client()
+            client.delete_task("page-abc123")
+
+        body = json.loads(captured[0].data.decode("utf-8"))
+        self.assertTrue(body["archived"])
+        self.assertIn("/pages/page-abc123", captured[0].full_url)
+
+    def test_delete_task_raises_task_not_found_on_404(self):
+        error_payload = {"object": "error", "status": 404, "message": "Could not find page"}
+        with patch.object(_OPENER, "open", return_value=_make_response(error_payload, status=404)):
+            client = _make_client()
+            with self.assertRaises(RuntimeError) as ctx:
+                client.delete_task("page-missing")
+        self.assertIn("Task not found", str(ctx.exception))
+        self.assertIn("page-missing", str(ctx.exception))
+
+    def test_update_task_raises_task_not_found_on_404(self):
+        error_payload = {"object": "error", "status": 404, "message": "Could not find page"}
+        with patch.object(_OPENER, "open", return_value=_make_response(error_payload, status=404)):
+            client = _make_client()
+            with self.assertRaises(RuntimeError) as ctx:
+                client.update_task("page-missing", status="Done")
+        self.assertIn("Task not found", str(ctx.exception))
+        self.assertIn("page-missing", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

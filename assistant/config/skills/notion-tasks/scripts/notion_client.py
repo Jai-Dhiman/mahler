@@ -140,6 +140,14 @@ class NotionClient:
             raise
         return _extract_task(data)
 
+    def delete_task(self, page_id: str) -> None:
+        try:
+            self._request("PATCH", f"/pages/{page_id}", {"archived": True})
+        except RuntimeError as e:
+            if "404" in str(e):
+                raise RuntimeError(f"Task not found: {page_id}")
+            raise
+
     def complete_task(self, page_id: str) -> dict:
         return self.update_task(page_id, status="Done")
 
