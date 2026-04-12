@@ -101,7 +101,7 @@ class NotionClient:
         results = []
         cursor = None
         while True:
-            if cursor:
+            if cursor is not None:
                 body["start_cursor"] = cursor
             data = self._request("POST", f"/databases/{self._database_id}/query", body)
             for page in data.get("results", []):
@@ -109,6 +109,10 @@ class NotionClient:
             if not data.get("has_more"):
                 break
             cursor = data.get("next_cursor")
+            if not cursor:
+                raise RuntimeError(
+                    "Notion API returned has_more=True but no next_cursor"
+                )
         return results
 
     def _request(self, method: str, path: str, body: Optional[dict] = None) -> dict:
