@@ -51,8 +51,8 @@ If the user does not state a priority, infer it:
 
 ```bash
 python3 ~/.hermes/skills/notion-tasks/scripts/tasks.py list \
-  [--status Todo|In Progress|Done] \
-  [--priority High|Medium|Low] \
+  [--status "Todo"|"In Progress"|"Done"] \
+  [--priority "High"|"Medium"|"Low"] \
   [--due-before YYYY-MM-DD]
 ```
 
@@ -70,9 +70,9 @@ The page ID on each task's first line is required for follow-up update, complete
 python3 ~/.hermes/skills/notion-tasks/scripts/tasks.py update \
   --id PAGE_ID \
   [--title "NEW TITLE"] \
-  [--status Todo|In Progress|Done] \
+  [--status "Todo"|"In Progress"|"Done"] \
   [--due YYYY-MM-DD] \
-  [--priority High|Medium|Low]
+  [--priority "High"|"Medium"|"Low"]
 ```
 
 Include only the flags for fields the user wants to change.

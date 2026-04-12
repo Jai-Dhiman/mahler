@@ -93,6 +93,8 @@ def cmd_update(args: argparse.Namespace) -> None:
         fields["due"] = args.due
     if args.priority is not None:
         fields["priority"] = args.priority
+    if not fields:
+        raise RuntimeError("No fields specified for update — provide at least one of: --title, --status, --due, --priority")
     task = client.update_task(args.id, **fields)
     print(f"Updated: {task['id']} — {task['title']}")
 
