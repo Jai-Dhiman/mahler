@@ -193,15 +193,17 @@ mod tests {
 
     #[test]
     fn identifies_profit_target_exit() {
+        // 75% profit: entry 1.00, debit 0.25 (profit = 0.75 = 75%)
         let cfg = SpreadConfig::default();
-        let result = check_exit_conditions(1.00, 0.70, 40, &cfg);
+        let result = check_exit_conditions(1.00, 0.25, 40, &cfg);
         assert!(matches!(result, Some(crate::types::ExitReason::ProfitTarget)));
     }
 
     #[test]
     fn identifies_stop_loss_exit() {
+        // 210% loss: entry 1.00, debit 3.10 (loss = 2.10 > 200% threshold)
         let cfg = SpreadConfig::default();
-        let result = check_exit_conditions(1.00, 2.30, 40, &cfg);
+        let result = check_exit_conditions(1.00, 3.10, 40, &cfg);
         assert!(matches!(result, Some(crate::types::ExitReason::StopLoss)));
     }
 

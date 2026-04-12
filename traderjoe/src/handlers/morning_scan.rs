@@ -18,6 +18,15 @@ pub fn should_skip_due_to_circuit_breaker(halted: bool, triggered_today: bool) -
     halted && triggered_today
 }
 
+/// Returns true if IV conditions are sufficient to enter new positions.
+///
+/// Blocks entries when IV percentile is below the configured minimum.
+/// When history is empty, `calculate_iv_metrics` returns 50.0 (neutral default),
+/// which passes the standard 50% threshold and allows trading in new deployments.
+pub fn passes_iv_filter(iv_percentile: f64, min_iv_percentile: f64) -> bool {
+    iv_percentile >= min_iv_percentile
+}
+
 /// Extract the date portion (YYYY-MM-DD) from an ISO timestamp string.
 fn date_from_iso(iso: &str) -> &str {
     &iso[..iso.len().min(10)]
@@ -145,6 +154,16 @@ pub async fn run(env: &Env) -> Result<()> {
             .fold((0.0f64, 0usize), |(sum, n), iv| (sum + iv, n + 1));
         let current_iv = if atm_iv.1 > 0 { atm_iv.0 / atm_iv.1 as f64 } else { 0.20 };
         let iv_metrics = calculate_iv_metrics(current_iv, &history);
+
+        if !passes_iv_filter(iv_metrics.iv_percentile, cfg.min_iv_percentile) {
+            console_log!(
+                "Skipping {}: IV percentile {:.0} below minimum {:.0}",
+                symbol,
+                iv_metrics.iv_percentile,
+                cfg.min_iv_percentile
+            );
+            continue;
+        }
 
         let mut spreads = screener.screen_chain(&chain, &iv_metrics);
         for scored in spreads.drain(..).take(2) {
@@ -321,5 +340,25 @@ mod tests {
     #[test]
     fn does_not_skip_when_circuit_breaker_not_halted() {
         assert!(!should_skip_due_to_circuit_breaker(false, false));
+    }
+
+    #[test]
+    fn iv_filter_passes_at_minimum_threshold() {
+        assert!(passes_iv_filter(50.0, 50.0));
+    }
+
+    #[test]
+    fn iv_filter_passes_above_minimum_threshold() {
+        assert!(passes_iv_filter(75.0, 50.0));
+    }
+
+    #[test]
+    fn iv_filter_blocks_below_minimum_threshold() {
+        assert!(!passes_iv_filter(49.9, 50.0));
+    }
+
+    #[test]
+    fn iv_filter_blocks_low_iv_environment() {
+        assert!(!passes_iv_filter(20.0, 50.0));
     }
 }

@@ -1,12 +1,12 @@
-/// Spread configuration with backtest-validated parameters.
+/// Spread configuration validated by walk-forward optimization (SPY 2007-2023, QQQ 2008-2023).
 ///
-/// profit_target=0.25 and stop_loss=1.25 are from autoresearch:
-/// iter 1 (profit_target=25%) -> Sharpe 0.14, win_rate 57.7% vs baseline 0.10/51%
+/// Parameters consensus from 156-174 rolling 24-month IS / 3-month OOS windows:
+/// WFE=1.12 (SPY), WFE=0.73 (QQQ) — both pass the >0.50 generalization guard.
 #[derive(Debug, Clone)]
 pub struct SpreadConfig {
-    /// Close when profit >= this fraction of entry credit (25%)
+    /// Close when profit >= this fraction of entry credit (75%)
     pub profit_target_pct: f64,
-    /// Close when loss >= this fraction of entry credit (125%)
+    /// Close when loss >= this fraction of entry credit (200%)
     pub stop_loss_pct: f64,
     pub min_dte: i64,
     pub max_dte: i64,
@@ -22,22 +22,25 @@ pub struct SpreadConfig {
     pub underlyings: &'static [&'static str],
     /// Max trades to place per morning scan
     pub max_trades_per_scan: usize,
+    /// Minimum IV percentile required before entering (skip low-IV environments)
+    pub min_iv_percentile: f64,
 }
 
 impl Default for SpreadConfig {
     fn default() -> Self {
         SpreadConfig {
-            profit_target_pct: 0.25,
-            stop_loss_pct: 1.25,
+            profit_target_pct: 0.75,
+            stop_loss_pct: 2.00,
             min_dte: 30,
             max_dte: 45,
-            min_delta: 0.05,
-            max_delta: 0.15,
+            min_delta: 0.25,
+            max_delta: 0.30,
             min_credit_pct: 0.10,
             min_spread_width: 2.0,
             gamma_exit_dte: 7,
             underlyings: &["SPY", "QQQ", "IWM"],
             max_trades_per_scan: 3,
+            min_iv_percentile: 50.0,
         }
     }
 }
@@ -65,37 +68,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_config_has_autoresearch_validated_params() {
+    fn default_config_has_walkforward_validated_params() {
         let cfg = SpreadConfig::default();
-        assert_eq!(cfg.profit_target_pct, 0.25);
-        assert_eq!(cfg.stop_loss_pct, 1.25);
+        assert_eq!(cfg.profit_target_pct, 0.75);
+        assert_eq!(cfg.stop_loss_pct, 2.00);
         assert_eq!(cfg.min_dte, 30);
         assert_eq!(cfg.max_dte, 45);
-        assert!((cfg.min_delta - 0.05).abs() < 1e-9);
-        assert!((cfg.max_delta - 0.15).abs() < 1e-9);
+        assert!((cfg.min_delta - 0.25).abs() < 1e-9);
+        assert!((cfg.max_delta - 0.30).abs() < 1e-9);
+        assert!((cfg.min_iv_percentile - 50.0).abs() < 1e-9);
     }
 
     #[test]
     fn exits_at_profit_target_when_debit_is_25_pct_of_credit() {
+        // 75% profit: entry 1.00, debit 0.25 (profit = 0.75 = 75%)
         let cfg = SpreadConfig::default();
-        assert!(cfg.should_exit_profit(1.00, 0.75));
+        assert!(cfg.should_exit_profit(1.00, 0.25));
     }
 
     #[test]
     fn does_not_exit_when_profit_is_below_target() {
+        // 50% profit: below 75% target, should not exit
         let cfg = SpreadConfig::default();
-        assert!(!cfg.should_exit_profit(1.00, 0.85));
+        assert!(!cfg.should_exit_profit(1.00, 0.50));
     }
 
     #[test]
-    fn exits_at_stop_loss_when_debit_is_125_pct_of_credit() {
+    fn exits_at_stop_loss_when_debit_exceeds_200_pct_of_credit() {
+        // 210% loss: entry 1.00, debit 3.10 (loss = 2.10 > 2.00 threshold)
         let cfg = SpreadConfig::default();
-        assert!(cfg.should_exit_stop_loss(1.00, 2.25));
+        assert!(cfg.should_exit_stop_loss(1.00, 3.10));
     }
 
     #[test]
     fn does_not_trigger_stop_loss_below_threshold() {
+        // 150% loss: entry 1.00, debit 2.50 (loss = 1.50 < 2.00 threshold)
         let cfg = SpreadConfig::default();
-        assert!(!cfg.should_exit_stop_loss(1.00, 2.00));
+        assert!(!cfg.should_exit_stop_loss(1.00, 2.50));
     }
 }

@@ -672,12 +672,26 @@ impl WalkForwardOptimizer {
                 })
                 .collect();
 
-            // Find best parameters
-            let (best_params, best_sharpe, _) = results
+            // Find best parameters — skip periods where no combination produces trades
+            // (e.g. crisis windows where the IV warmup guard or liquidity filters block all entries)
+            let best = results
                 .into_iter()
                 .filter(|(_, _, trades)| *trades > 0)
-                .max_by(|(_, a, _), (_, b, _)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                .ok_or("No valid parameter combinations found")?;
+                .max_by(|(_, a, _), (_, b, _)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+            let (best_params, best_sharpe, _) = match best {
+                Some(b) => b,
+                None => {
+                    info!(
+                        "  Period {}/{}: skipping — no valid parameter combinations produced trades (train {} to {})",
+                        period_idx + 1,
+                        period_list.len(),
+                        period.train_start,
+                        period.train_end
+                    );
+                    continue;
+                }
+            };
 
             info!(
                 "  Period {}/{} complete: best params = {}, Sharpe = {:.2}",

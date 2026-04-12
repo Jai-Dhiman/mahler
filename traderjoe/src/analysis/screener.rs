@@ -29,9 +29,9 @@ impl Default for ScreenerConfig {
             min_credit_pct: cfg.min_credit_pct,
             min_spread_width: cfg.min_spread_width,
             max_spread_width: 10.0,
-            min_open_interest: 50,
+            min_open_interest: 100,
             min_volume: 1,
-            max_bid_ask_spread_pct: 0.12,
+            max_bid_ask_spread_pct: 0.08,
         }
     }
 }
@@ -249,30 +249,34 @@ mod tests {
 
     #[test]
     fn rejects_options_with_delta_outside_range() {
+        // Deltas 0.40 and 0.35 are above the max_delta of 0.30
         let exp = exp_40dte();
         let chain = OptionsChain {
             underlying: "SPY".to_string(),
             underlying_price: 480.0,
             expirations: vec![exp.clone()],
             contracts: vec![
-                make_put(460.0, 0.30, 2.00, 2.10, &exp),
-                make_put(455.0, 0.28, 1.80, 1.90, &exp),
+                make_put(460.0, 0.40, 2.00, 2.10, &exp),
+                make_put(455.0, 0.35, 1.80, 1.90, &exp),
             ],
         };
         let results = OptionsScreener::default().screen_chain(&chain, &good_iv());
-        assert!(results.is_empty(), "should reject options with delta 0.30");
+        assert!(results.is_empty(), "should reject options with delta above max_delta 0.30");
     }
 
     #[test]
     fn accepts_valid_bull_put_spread() {
+        // Short at delta 0.27 (in 0.25-0.30 range), long at lower strike
+        // Short: mid 2.55, bid-ask 3.9%; Long: mid 1.35, bid-ask 7.4%
+        // Width = 5, credit = 1.20, credit/width = 24% > 10% minimum
         let exp = exp_40dte();
         let chain = OptionsChain {
             underlying: "SPY".to_string(),
             underlying_price: 480.0,
             expirations: vec![exp.clone()],
             contracts: vec![
-                make_put(462.0, 0.10, 1.50, 1.60, &exp),
-                make_put(457.0, 0.07, 0.80, 0.90, &exp),
+                make_put(470.0, 0.27, 2.50, 2.60, &exp),
+                make_put(465.0, 0.15, 1.30, 1.40, &exp),
             ],
         };
         let results = OptionsScreener::default().screen_chain(&chain, &good_iv());
@@ -289,8 +293,8 @@ mod tests {
             underlying_price: 480.0,
             expirations: vec![exp.clone()],
             contracts: vec![
-                make_put(462.0, 0.10, 1.50, 1.60, &exp),
-                make_put(457.0, 0.07, 0.80, 0.90, &exp),
+                make_put(470.0, 0.27, 2.50, 2.60, &exp),
+                make_put(465.0, 0.15, 1.30, 1.40, &exp),
             ],
         };
         let screener = OptionsScreener::default();
@@ -300,13 +304,12 @@ mod tests {
         let low_results = screener.screen_chain(&chain, &low_iv);
         let high_results = screener.screen_chain(&chain, &high_iv);
 
-        if !low_results.is_empty() && !high_results.is_empty() {
-            assert!(
-                high_results[0].score > low_results[0].score,
-                "high IV should score higher: {} vs {}",
-                high_results[0].score,
-                low_results[0].score
-            );
-        }
+        assert!(!low_results.is_empty() && !high_results.is_empty(), "both should find spreads");
+        assert!(
+            high_results[0].score > low_results[0].score,
+            "high IV should score higher: {} vs {}",
+            high_results[0].score,
+            low_results[0].score
+        );
     }
 }
