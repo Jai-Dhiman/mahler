@@ -115,6 +115,31 @@ class NotionClient:
                 )
         return results
 
+    def update_task(self, page_id: str, **fields) -> dict:
+        properties: dict = {}
+        if "title" in fields:
+            properties["Name"] = {"title": [{"text": {"content": fields["title"]}}]}
+        if "status" in fields:
+            properties["Status"] = {"select": {"name": fields["status"]}}
+        if "due" in fields:
+            if fields["due"]:
+                properties["Due"] = {"date": {"start": fields["due"]}}
+            else:
+                properties["Due"] = {"date": None}
+        if "priority" in fields:
+            if fields["priority"]:
+                properties["Priority"] = {"select": {"name": fields["priority"]}}
+            else:
+                properties["Priority"] = {"select": None}
+
+        try:
+            data = self._request("PATCH", f"/pages/{page_id}", {"properties": properties})
+        except RuntimeError as e:
+            if "404" in str(e):
+                raise RuntimeError(f"Task not found: {page_id}")
+            raise
+        return _extract_task(data)
+
     def _request(self, method: str, path: str, body: Optional[dict] = None) -> dict:
         url = f"{_NOTION_API_BASE}{path}"
         data = json.dumps(body).encode("utf-8") if body is not None else None

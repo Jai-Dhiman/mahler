@@ -225,5 +225,48 @@ class TestListTasksFilters(unittest.TestCase):
         self.assertIn({"property": "Priority", "select": {"equals": "High"}}, and_clause)
 
 
+class TestUpdateTask(unittest.TestCase):
+
+    def test_update_task_sends_only_provided_fields(self):
+        updated_page = _page_fixture(page_id="page-abc123", title="Test task", status="In Progress")
+        captured = []
+
+        def capture_open(req):
+            captured.append(req)
+            return _make_response(updated_page)
+
+        with patch.object(_OPENER, "open", side_effect=capture_open):
+            client = _make_client()
+            result = client.update_task("page-abc123", status="In Progress")
+
+        body = json.loads(captured[0].data.decode("utf-8"))
+        props = body["properties"]
+        self.assertIn("Status", props)
+        self.assertEqual(props["Status"]["select"]["name"], "In Progress")
+        self.assertNotIn("Name", props)
+        self.assertNotIn("Due", props)
+        self.assertNotIn("Priority", props)
+        self.assertEqual(result["status"], "In Progress")
+
+    def test_update_task_with_title_sends_title_property(self):
+        updated_page = _page_fixture(page_id="page-abc123", title="New title")
+        with patch.object(_OPENER, "open", return_value=_make_response(updated_page)) as mock_open:
+            client = _make_client()
+            client.update_task("page-abc123", title="New title")
+
+        body = json.loads(mock_open.call_args[0][0].data.decode("utf-8"))
+        self.assertEqual(
+            body["properties"]["Name"]["title"][0]["text"]["content"], "New title"
+        )
+
+    def test_update_task_raises_on_api_error(self):
+        error_payload = {"object": "error", "status": 500, "message": "internal error"}
+        with patch.object(_OPENER, "open", return_value=_make_response(error_payload, status=500)):
+            client = _make_client()
+            with self.assertRaises(RuntimeError) as ctx:
+                client.update_task("page-abc123", status="Done")
+        self.assertIn("500", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
