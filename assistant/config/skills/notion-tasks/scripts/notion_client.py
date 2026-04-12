@@ -140,6 +140,9 @@ class NotionClient:
             raise
         return _extract_task(data)
 
+    def complete_task(self, page_id: str) -> dict:
+        return self.update_task(page_id, status="Done")
+
     def _request(self, method: str, path: str, body: Optional[dict] = None) -> dict:
         url = f"{_NOTION_API_BASE}{path}"
         data = json.dumps(body).encode("utf-8") if body is not None else None

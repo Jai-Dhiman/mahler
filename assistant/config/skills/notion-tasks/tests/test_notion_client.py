@@ -268,5 +268,25 @@ class TestUpdateTask(unittest.TestCase):
         self.assertIn("500", str(ctx.exception))
 
 
+class TestCompleteTask(unittest.TestCase):
+
+    def test_complete_task_sets_status_to_done(self):
+        done_page = _page_fixture(page_id="page-abc123", title="Test task", status="Done")
+        captured = []
+
+        def capture_open(req):
+            captured.append(req)
+            return _make_response(done_page)
+
+        with patch.object(_OPENER, "open", side_effect=capture_open):
+            client = _make_client()
+            result = client.complete_task("page-abc123")
+
+        body = json.loads(captured[0].data.decode("utf-8"))
+        self.assertEqual(body["properties"]["Status"]["select"]["name"], "Done")
+        self.assertEqual(result["status"], "Done")
+        self.assertEqual(result["id"], "page-abc123")
+
+
 if __name__ == "__main__":
     unittest.main()
