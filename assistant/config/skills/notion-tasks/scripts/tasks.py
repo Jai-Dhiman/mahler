@@ -68,6 +68,20 @@ def cmd_create(args: argparse.Namespace) -> None:
     print(f"Created: {task['id']} — {task['title']}")
 
 
+def cmd_list(args: argparse.Namespace) -> None:
+    client = _get_client()
+    task_list = client.list_tasks(
+        status=args.status,
+        priority=args.priority,
+        due_before=args.due_before,
+    )
+    if not task_list:
+        print("No tasks found.")
+        return
+    for task in task_list:
+        print(_format_task(task))
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description="Mahler Notion task manager")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -77,9 +91,14 @@ def main(argv=None) -> None:
     p_create.add_argument("--due", default=None)
     p_create.add_argument("--priority", choices=["High", "Medium", "Low"], default=None)
 
+    p_list = sub.add_parser("list")
+    p_list.add_argument("--status", choices=["Todo", "In Progress", "Done"], default=None)
+    p_list.add_argument("--priority", choices=["High", "Medium", "Low"], default=None)
+    p_list.add_argument("--due-before", dest="due_before", default=None)
+
     args = parser.parse_args(argv)
-    if args.command == "create":
-        cmd_create(args)
+    dispatch = {"create": cmd_create, "list": cmd_list}
+    dispatch[args.command](args)
 
 
 if __name__ == "__main__":

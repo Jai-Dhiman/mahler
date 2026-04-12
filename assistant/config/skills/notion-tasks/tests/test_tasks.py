@@ -59,5 +59,51 @@ class TestCreateSubcommand(unittest.TestCase):
         self.assertNotEqual(ctx.exception.code, 0)
 
 
+class TestListSubcommand(unittest.TestCase):
+
+    @patch.dict(os.environ, {"NOTION_API_TOKEN": "tok", "NOTION_DATABASE_ID": "db-id"})
+    @patch("tasks.NotionClient")
+    def test_list_output_includes_page_id_for_each_task(self, mock_cls):
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.list_tasks.return_value = [
+            _make_task(page_id="page-001", title="Task one", status="Todo"),
+            _make_task(page_id="page-002", title="Task two", status="In Progress"),
+        ]
+
+        with patch("sys.stdout", new_callable=StringIO) as mock_out:
+            tasks.main(["list"])
+
+        output = mock_out.getvalue()
+        self.assertIn("page-001", output)
+        self.assertIn("Task one", output)
+        self.assertIn("page-002", output)
+        self.assertIn("Task two", output)
+        mock_client.list_tasks.assert_called_once_with(status=None, priority=None, due_before=None)
+
+    @patch.dict(os.environ, {"NOTION_API_TOKEN": "tok", "NOTION_DATABASE_ID": "db-id"})
+    @patch("tasks.NotionClient")
+    def test_list_with_status_filter_passes_it_through(self, mock_cls):
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.list_tasks.return_value = []
+
+        tasks.main(["list", "--status", "Todo"])
+
+        mock_client.list_tasks.assert_called_once_with(status="Todo", priority=None, due_before=None)
+
+    @patch.dict(os.environ, {"NOTION_API_TOKEN": "tok", "NOTION_DATABASE_ID": "db-id"})
+    @patch("tasks.NotionClient")
+    def test_list_empty_result_prints_no_tasks_found(self, mock_cls):
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.list_tasks.return_value = []
+
+        with patch("sys.stdout", new_callable=StringIO) as mock_out:
+            tasks.main(["list"])
+
+        self.assertEqual(mock_out.getvalue().strip(), "No tasks found.")
+
+
 if __name__ == "__main__":
     unittest.main()
