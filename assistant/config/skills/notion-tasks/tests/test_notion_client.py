@@ -180,5 +180,50 @@ class TestListTasksNoFilter(unittest.TestCase):
         self.assertEqual(second_body["start_cursor"], "cursor-abc")
 
 
+class TestListTasksFilters(unittest.TestCase):
+
+    def _capture_body(self, **kwargs) -> dict:
+        captured = []
+
+        def side_effect(req):
+            captured.append(req)
+            return _make_response(_list_response([]))
+
+        with patch.object(_OPENER, "open", side_effect=side_effect):
+            client = _make_client()
+            client.list_tasks(**kwargs)
+
+        return json.loads(captured[0].data.decode("utf-8"))
+
+    def test_status_filter_generates_correct_notion_filter(self):
+        body = self._capture_body(status="Todo", priority=None, due_before=None)
+        self.assertEqual(
+            body["filter"],
+            {"property": "Status", "select": {"equals": "Todo"}},
+        )
+
+    def test_priority_filter_generates_correct_notion_filter(self):
+        body = self._capture_body(status=None, priority="High", due_before=None)
+        self.assertEqual(
+            body["filter"],
+            {"property": "Priority", "select": {"equals": "High"}},
+        )
+
+    def test_due_before_filter_generates_correct_notion_filter(self):
+        body = self._capture_body(status=None, priority=None, due_before="2026-04-17")
+        self.assertEqual(
+            body["filter"],
+            {"property": "Due", "date": {"on_or_before": "2026-04-17"}},
+        )
+
+    def test_multiple_filters_combined_with_and(self):
+        body = self._capture_body(status="Todo", priority="High", due_before=None)
+        self.assertIn("and", body["filter"])
+        and_clause = body["filter"]["and"]
+        self.assertEqual(len(and_clause), 2)
+        self.assertIn({"property": "Status", "select": {"equals": "Todo"}}, and_clause)
+        self.assertIn({"property": "Priority", "select": {"equals": "High"}}, and_clause)
+
+
 if __name__ == "__main__":
     unittest.main()
