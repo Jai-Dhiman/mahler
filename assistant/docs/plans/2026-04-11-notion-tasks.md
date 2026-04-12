@@ -1499,6 +1499,182 @@ git add config/skills/notion-tasks/SKILL.md Dockerfile && git commit -m "feat(no
 
 ---
 
+## Challenge Review
+
+### CEO Pass
+
+**Premise:** Sound. No Notion task management exists today — every task requires leaving Discord. This is a real daily friction point, not a speculative feature. The "Hermes orchestrates NL → CLI" decision is justified: Hermes is already an LLM doing exactly this for other skills.
+
+**Scope:** Tight. 6 files, 2 new scripts, no new services. The decision to exclude subtasks, calendar sync, and recurring tasks is correct — those are Phase 4/5 territory.
+
+**12-Month Alignment:**
+```
+CURRENT STATE                THIS PLAN                    12-MONTH IDEAL
+No Notion integration  →  Tasks CRUD via Discord  →  Full Notion surface
+                                                        (tasks + wiki + CRM)
+```
+
+This plan lays the Notion client foundation (auth pattern, HTTP opener, response parsing) that wiki and CRM skills will reuse. Good alignment — no tech debt introduced.
+
+**Alternatives:** The spec documents the NL-in-script vs. Hermes-orchestrates tradeoff explicitly. Alternative rejected on sound grounds (extra LLM hop, no complexity gain). Covered.
+
+---
+
+### Engineering Pass
+
+**Architecture:** Clean. `notion_client.py` owns all HTTP, serialization, and parsing. `tasks.py` is a pure dispatch layer. Data flow is straightforward:
+
+```
+Discord NL → Hermes reads SKILL.md → tasks.py main(argv)
+  → _get_client() reads env vars
+  → NotionClient._request() → HTTPS → Notion API
+  → _extract_task() → flat dict → stdout
+  → Hermes reads stdout → Discord reply
+```
+
+Error path: RuntimeError propagates from `NotionClient` → `cmd_*` → `main()` → Python traceback on stderr. Hermes reads exit code and stderr to surface error to user.
+
+**Module Depth:**
+- `notion_client.py` — DEEP: 5-method public interface hides block format JSON, pagination cursor loop, HTTPS opener, response parsing, HTTP status mapping.
+- `tasks.py` — SHALLOW by design: justified, depth lives in `notion_client.py`.
+
+**Deviation from established `d1_client.py` pattern — confirmed RISK:**
+
+`d1_client.query()` checks `status != 200` BEFORE calling `json.loads(raw)`, and raises `RuntimeError` with the raw bytes on non-200. The plan's `_request` does the opposite — it ALWAYS calls `json.loads(raw)` on line 198 regardless of status, then returns `(status, dict)` to the caller. If Notion's CDN returns a 502 or 503 with an HTML error page, `json.loads(raw)` raises `json.JSONDecodeError` — an uncaught exception that propagates as a confusing internal error rather than a clean `RuntimeError("Notion API error 502: ...")`.
+
+Fix: structure `_request` like `d1_client.query()`:
+```python
+with _OPENER.open(req) as resp:
+    status = resp.status
+    raw = resp.read()
+if status not in (200,):
+    raise RuntimeError(f"Notion API error {status}: {raw.decode('utf-8', errors='replace')}")
+return json.loads(raw)
+```
+
+This means callers no longer need to check the returned status — `_request` either succeeds or raises. The 404 case becomes a caught pattern: callers catch `RuntimeError` and re-raise with "Task not found". Alternatively, keep the `(status, dict)` return and add a try/except around `json.loads`. Either fix works; the first is cleaner and matches the existing codebase.
+
+**Test Philosophy:**
+
+All tests mock at the correct boundaries: `_OPENER.open` for `notion_client.py` tests (HTTP boundary), `tasks.NotionClient` for `tasks.py` tests (class boundary). No internal collaborators mocked. Behavior-focused assertions. Philosophy is sound.
+
+**Vertical Slice Audit:**
+
+Tasks 1, 2, 3, 5, 6, 7, 8, 9, 10: clean one-test → one-impl → one-commit slices.
+
+Task 4 is not a genuine vertical slice. The plan's own note states: "No new implementation required — the filter logic was written in Task 3." This means Task 4 writes tests for code that already exists. The plan instructs the build agent to run Step 2 ("verify it FAILS") with an expected failure message, then immediately notes the tests will likely PASS. The build agent's TDD discipline check — "if the test PASSES without the implementation, the test is wrong: rewrite" — will fire incorrectly on Task 4 and cause the agent to either skip valid tests or rewrite them. This is a real execution risk.
+
+**Test Coverage Gaps:**
+
+```
+[+] notion_client.py
+    ├── __init__()
+    │   ├── [TESTED ★★] empty token raises — Task 1
+    │   ├── [TESTED ★★] empty database_id raises — Task 1
+    │   └── [TESTED ★★] valid init, no network calls — Task 1
+    ├── _request()
+    │   ├── [GAP] json.JSONDecodeError on non-JSON response — no test
+    │   └── (tested indirectly through all method tests)
+    ├── create_task()
+    │   ├── [TESTED ★★★] correct payload, returns flat dict — Task 2
+    │   ├── [TESTED ★★★] due/priority included when provided — Task 2
+    │   └── [TESTED ★★] non-200 raises RuntimeError — Task 2
+    ├── list_tasks()
+    │   ├── [TESTED ★★★] no filters, returns all — Task 3
+    │   ├── [TESTED ★★★] no filter key in body when no filters — Task 3
+    │   ├── [TESTED ★★★] follows pagination cursor — Task 3
+    │   ├── [TESTED ★★★] status filter correct JSON — Task 4
+    │   ├── [TESTED ★★★] priority filter correct JSON — Task 4
+    │   ├── [TESTED ★★★] due_before filter correct JSON — Task 4
+    │   └── [TESTED ★★★] multiple filters use "and" — Task 4
+    ├── update_task()
+    │   ├── [TESTED ★★★] only provided fields sent — Task 5
+    │   ├── [TESTED ★★] title field maps to Name property — Task 5
+    │   ├── [TESTED ★★] non-200 raises RuntimeError — Task 5
+    │   └── [TESTED ★★★] 404 raises "Task not found" — Task 7
+    ├── complete_task()
+    │   └── [TESTED ★★★] sets Status to Done — Task 6
+    └── delete_task()
+        ├── [TESTED ★★★] sends archived=true, correct URL — Task 7
+        └── [TESTED ★★★] 404 raises "Task not found" — Task 7
+
+[+] tasks.py
+    ├── _get_client()
+    │   ├── [GAP] NOTION_API_TOKEN missing → RuntimeError propagates as traceback
+    │   └── [GAP] NOTION_DATABASE_ID missing → same
+    ├── cmd_create()
+    │   ├── [TESTED ★★★] calls create_task with correct args — Task 8
+    │   ├── [TESTED ★★] due/priority passed through — Task 8
+    │   └── [TESTED ★★] missing --title exits nonzero — Task 8
+    ├── cmd_list()
+    │   ├── [TESTED ★★★] output includes page IDs — Task 9
+    │   ├── [TESTED ★★★] status filter passed through — Task 9
+    │   └── [TESTED ★★★] empty result prints "No tasks found." — Task 9
+    ├── cmd_update()
+    │   ├── [TESTED ★★★] provided fields only passed — Task 10
+    │   └── [TESTED ★★] missing --id exits nonzero — Task 10
+    ├── cmd_complete()
+    │   ├── [TESTED ★★★] calls complete_task with ID — Task 10
+    │   └── [TESTED ★★] missing --id exits nonzero — Task 10
+    └── cmd_delete()
+        ├── [TESTED ★★★] calls delete_task, prints confirmation — Task 10
+        └── [GAP] missing --id — not tested
+```
+
+The `_get_client()` env-var-missing gap is low severity — the error propagates to Hermes as a non-zero exit with a `RuntimeError` message on stderr, which Hermes surfaces to the user. Not a silent failure.
+
+**Failure Modes:**
+
+All failures propagate as `RuntimeError` and exit non-zero. Hermes reads stderr and exit code. No silent failures. The one concern is the `json.JSONDecodeError` on non-JSON responses (documented above as RISK).
+
+---
+
+### Presumption Inventory
+
+| Assumption | Verdict | Reason |
+|---|---|---|
+| Notion API returns HTTP 200 (not 201) for POST /pages | SAFE | Notion API v1 docs confirm 200 for page creation |
+| `urllib.request.Request.full_url` attribute exists | SAFE | Python 3.4+ property, Dockerfile uses Python 3.11 |
+| Mocking `_OPENER.open` via `patch.object` captures the Request object as first positional arg | SAFE | Verified against `d1_client.py` test pattern which does the same |
+| `patch("tasks.NotionClient")` patches the right binding | SAFE | `tasks.py` does `from notion_client import NotionClient` — `tasks.NotionClient` is the correct patch target |
+| Notion API 404 response body is valid JSON | VALIDATE | Notion's error responses are always JSON per their docs, but a proxy-level 404 may not be |
+| Tests run from `config/skills/notion-tasks/` (not from repo root) | SAFE | All `cd config/skills/notion-tasks && python3 -m pytest` commands enforce this |
+| `_supplement_env_from_hermes()` at import time doesn't break tests | SAFE | Function handles missing file gracefully; test `@patch.dict` overrides any injected values |
+| `OpenerDirector` without `HTTPDefaultErrorHandler` returns response on non-200 (not raises) | SAFE | Verified against `d1_client.py` which uses the same opener construction and manually checks status |
+
+---
+
+### Summary
+
+```
+[RISK] (confidence: 9/10) — _request() calls json.loads(raw) unconditionally before
+       checking status. d1_client.py checks status != 200 first and raises RuntimeError
+       with raw bytes on non-200. A Notion 502/503 with HTML body will raise
+       json.JSONDecodeError instead of RuntimeError, violating the project's explicit
+       exception handling convention. Fix: check status before json.loads, or wrap
+       json.loads in try/except and re-raise as RuntimeError. Affects Tasks 1-7.
+
+[RISK] (confidence: 9/10) — Task 4 "Step 2: verify it FAILS" contradicts the plan's
+       own note that the filter implementation already exists from Task 3. The build
+       agent's TDD discipline check will fire on passing tests and may incorrectly
+       rewrite valid tests. Fix: restructure Task 4 as a pure test-addition step,
+       remove the "verify it FAILS" instruction, and note explicitly that this task
+       adds coverage for already-implemented filter paths.
+
+[OBS] — _get_client() env-var-missing path in tasks.py is not tested. RuntimeError
+       propagates as a Python traceback on stderr. Hermes surfaces this as an error
+       to the user (non-silent). Low severity.
+
+[OBS] — No timeout on _OPENER.open() calls. Consistent with d1_client.py and
+       gmail_client.py patterns. Notion API could hang indefinitely. Acceptable given
+       Hermes's own timeout handling.
+```
+
+[RISK] count: 2
+[OBS] count: 2
+
+---
+
 ## Post-build verification
 
 Before deploying, set the two new secrets:
@@ -1514,3 +1690,7 @@ The Notion database must be created manually in Notion with these exact property
 - `Priority` — Select property with options: `High`, `Medium`, `Low`
 
 The integration token must have read/write access to the database (share the database with the integration in Notion's Share menu).
+
+---
+
+VERDICT: PROCEED_WITH_CAUTION — Fix `_request()` to check status before calling `json.loads(raw)` (match the `d1_client.py` pattern). Reword Task 4's Step 2 to remove the misleading "verify it FAILS" instruction. Both are small, in-task corrections the build agent can apply as it works.
