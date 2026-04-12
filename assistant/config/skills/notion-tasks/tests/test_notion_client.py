@@ -126,5 +126,59 @@ class TestCreateTask(unittest.TestCase):
         self.assertIn("400", str(ctx.exception))
 
 
+class TestListTasksNoFilter(unittest.TestCase):
+
+    def test_list_tasks_with_no_filters_returns_all_tasks(self):
+        pages = [
+            _page_fixture(page_id="page-1", title="Task one"),
+            _page_fixture(page_id="page-2", title="Task two"),
+        ]
+        with patch.object(_OPENER, "open", return_value=_make_response(_list_response(pages))):
+            client = _make_client()
+            result = client.list_tasks(status=None, priority=None, due_before=None)
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["id"], "page-1")
+        self.assertEqual(result[0]["title"], "Task one")
+        self.assertEqual(result[1]["id"], "page-2")
+
+    def test_list_tasks_no_filter_sends_no_filter_key_in_body(self):
+        captured = []
+
+        def capture_open(req):
+            captured.append(req)
+            return _make_response(_list_response([]))
+
+        with patch.object(_OPENER, "open", side_effect=capture_open):
+            client = _make_client()
+            client.list_tasks(status=None, priority=None, due_before=None)
+
+        body = json.loads(captured[0].data.decode("utf-8"))
+        self.assertNotIn("filter", body)
+
+    def test_list_tasks_follows_pagination_cursor(self):
+        page1 = _page_fixture(page_id="page-1", title="First")
+        page2 = _page_fixture(page_id="page-2", title="Second")
+        responses = [
+            _make_response(_list_response([page1], has_more=True, next_cursor="cursor-abc")),
+            _make_response(_list_response([page2], has_more=False)),
+        ]
+        calls = []
+
+        def side_effect(req):
+            calls.append(req)
+            return responses[len(calls) - 1]
+
+        with patch.object(_OPENER, "open", side_effect=side_effect):
+            client = _make_client()
+            result = client.list_tasks(status=None, priority=None, due_before=None)
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["id"], "page-1")
+        self.assertEqual(result[1]["id"], "page-2")
+        second_body = json.loads(calls[1].data.decode("utf-8"))
+        self.assertEqual(second_body["start_cursor"], "cursor-abc")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -78,6 +78,39 @@ class NotionClient:
         data = self._request("POST", "/pages", body)
         return _extract_task(data)
 
+    def list_tasks(
+        self,
+        status: Optional[str] = None,
+        priority: Optional[str] = None,
+        due_before: Optional[str] = None,
+    ) -> list[dict]:
+        filters = []
+        if status is not None:
+            filters.append({"property": "Status", "select": {"equals": status}})
+        if priority is not None:
+            filters.append({"property": "Priority", "select": {"equals": priority}})
+        if due_before is not None:
+            filters.append({"property": "Due", "date": {"on_or_before": due_before}})
+
+        body: dict = {}
+        if len(filters) == 1:
+            body["filter"] = filters[0]
+        elif len(filters) > 1:
+            body["filter"] = {"and": filters}
+
+        results = []
+        cursor = None
+        while True:
+            if cursor:
+                body["start_cursor"] = cursor
+            data = self._request("POST", f"/databases/{self._database_id}/query", body)
+            for page in data.get("results", []):
+                results.append(_extract_task(page))
+            if not data.get("has_more"):
+                break
+            cursor = data.get("next_cursor")
+        return results
+
     def _request(self, method: str, path: str, body: Optional[dict] = None) -> dict:
         url = f"{_NOTION_API_BASE}{path}"
         data = json.dumps(body).encode("utf-8") if body is not None else None
