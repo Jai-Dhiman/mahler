@@ -30,6 +30,7 @@ RUN chmod +x /home/hermes/entrypoint.sh
 COPY --chown=hermes:hermes config/skills/email-triage /home/hermes/.hermes/skills/email-triage
 COPY --chown=hermes:hermes config/skills/urgent-alert /home/hermes/.hermes/skills/urgent-alert
 COPY --chown=hermes:hermes config/skills/morning-brief /home/hermes/.hermes/skills/morning-brief
+COPY --chown=hermes:hermes config/skills/notion-tasks /home/hermes/.hermes/skills/notion-tasks
 
 # Copy priority map to Hermes workspace
 RUN mkdir -p /home/hermes/.hermes/workspace
