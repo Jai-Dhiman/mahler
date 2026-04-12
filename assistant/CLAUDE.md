@@ -29,6 +29,13 @@ assistant/
   config/
     SOUL.md               # Mahler personality (opinionated chief of staff)
     config.yaml           # Model, provider, Discord settings
+    skills/
+      notion-tasks/       # Notion task management skill (CRUD via Discord)
+        SKILL.md
+        scripts/
+          notion_client.py  # Notion API client (pages, databases, filters)
+          tasks.py          # CLI: create, list, update, complete, delete
+        tests/
   .env                    # Local secrets (gitignored)
   .env.example            # Template for required secrets
   docs/
@@ -86,7 +93,7 @@ Salvageable code from previous build in `hermes-assistant` repo's `.worktrees/fe
 
 ### Phase 4: Calendar + Task Integration
 - Google Calendar integration
-- Notion task sync
+- ~~Notion task sync~~ — shipped: `notion-tasks` skill (create, list, update, complete, delete via Discord)
 - Meeting prep and post-meeting extraction
 
 ### Phase 5: Relationship CRM
