@@ -23,11 +23,11 @@ _OPENER = _build_https_opener()
 
 def _extract_task(page: dict) -> dict:
     props = page.get("properties", {})
-    title_list = props.get("Name", {}).get("title", [])
+    title_list = props.get("Task name", {}).get("title", [])
     title = title_list[0]["plain_text"] if title_list else ""
-    status_sel = props.get("Status", {}).get("select")
+    status_sel = props.get("Status", {}).get("status")
     status = status_sel["name"] if status_sel else "Todo"
-    due_obj = props.get("Due", {}).get("date")
+    due_obj = props.get("Due date", {}).get("date")
     due = due_obj["start"] if due_obj else None
     priority_sel = props.get("Priority", {}).get("select")
     priority = priority_sel["name"] if priority_sel else None
@@ -63,11 +63,11 @@ class NotionClient:
         priority: Optional[str] = None,
     ) -> dict:
         properties: dict = {
-            "Name": {"title": [{"text": {"content": title}}]},
-            "Status": {"select": {"name": "Todo"}},
+            "Task name": {"title": [{"text": {"content": title}}]},
+            "Status": {"status": {"name": "Not started"}},
         }
         if due is not None:
-            properties["Due"] = {"date": {"start": due}}
+            properties["Due date"] = {"date": {"start": due}}
         if priority is not None:
             properties["Priority"] = {"select": {"name": priority}}
 
@@ -86,11 +86,11 @@ class NotionClient:
     ) -> list[dict]:
         filters = []
         if status is not None:
-            filters.append({"property": "Status", "select": {"equals": status}})
+            filters.append({"property": "Status", "status": {"equals": status}})
         if priority is not None:
             filters.append({"property": "Priority", "select": {"equals": priority}})
         if due_before is not None:
-            filters.append({"property": "Due", "date": {"on_or_before": due_before}})
+            filters.append({"property": "Due date", "date": {"on_or_before": due_before}})
 
         body: dict = {}
         if len(filters) == 1:
@@ -118,14 +118,14 @@ class NotionClient:
     def update_task(self, page_id: str, **fields) -> dict:
         properties: dict = {}
         if "title" in fields:
-            properties["Name"] = {"title": [{"text": {"content": fields["title"]}}]}
+            properties["Task name"] = {"title": [{"text": {"content": fields["title"]}}]}
         if "status" in fields:
-            properties["Status"] = {"select": {"name": fields["status"]}}
+            properties["Status"] = {"status": {"name": fields["status"]}}
         if "due" in fields:
             if fields["due"]:
-                properties["Due"] = {"date": {"start": fields["due"]}}
+                properties["Due date"] = {"date": {"start": fields["due"]}}
             else:
-                properties["Due"] = {"date": None}
+                properties["Due date"] = {"date": None}
         if "priority" in fields:
             if fields["priority"]:
                 properties["Priority"] = {"select": {"name": fields["priority"]}}

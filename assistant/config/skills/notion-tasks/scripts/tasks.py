@@ -121,14 +121,14 @@ def main(argv=None) -> None:
     p_create.add_argument("--priority", choices=["High", "Medium", "Low"], default=None)
 
     p_list = sub.add_parser("list")
-    p_list.add_argument("--status", choices=["Todo", "In Progress", "Done"], default=None)
+    p_list.add_argument("--status", choices=["Not started", "In progress", "Done"], default=None)
     p_list.add_argument("--priority", choices=["High", "Medium", "Low"], default=None)
     p_list.add_argument("--due-before", dest="due_before", default=None)
 
     p_update = sub.add_parser("update")
     p_update.add_argument("--id", required=True)
     p_update.add_argument("--title", default=None)
-    p_update.add_argument("--status", choices=["Todo", "In Progress", "Done"], default=None)
+    p_update.add_argument("--status", choices=["Not started", "In progress", "Done"], default=None)
     p_update.add_argument("--due", default=None)
     p_update.add_argument("--priority", choices=["High", "Medium", "Low"], default=None)
 
