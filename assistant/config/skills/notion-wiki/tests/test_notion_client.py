@@ -213,5 +213,33 @@ class TestReaderReadPage(unittest.TestCase):
         self.assertEqual(result["body_markdown"], "- first\n\n- second")
 
 
+    def test_unsupported_block_types_are_skipped(self):
+        page_response = {
+            "id": "src-u",
+            "properties": {"Title": {"type": "title", "title": [{"plain_text": "T"}]}},
+        }
+        blocks_response = {
+            "results": [
+                {"type": "callout", "callout": {"rich_text": [{"plain_text": "note"}]}},
+                {"type": "paragraph", "paragraph": {"rich_text": [{"plain_text": "kept"}]}},
+                {"type": "image", "image": {}},
+            ],
+            "has_more": False,
+            "next_cursor": None,
+        }
+        responses = [_make_response(page_response), _make_response(blocks_response)]
+        calls = []
+
+        def side_effect(req):
+            calls.append(req)
+            return responses[len(calls) - 1]
+
+        with patch.object(_OPENER, "open", side_effect=side_effect):
+            reader = _make_reader()
+            result = reader.read_page("src-u")
+
+        self.assertEqual(result["body_markdown"], "kept")
+
+
 if __name__ == "__main__":
     unittest.main()
