@@ -89,5 +89,39 @@ class TestReaderSearch(unittest.TestCase):
         self.assertEqual(results[1]["db"], "sources")
 
 
+class TestReaderReadPage(unittest.TestCase):
+    def test_read_page_returns_title_and_type(self):
+        page_response = {
+            "object": "page",
+            "id": "src-1",
+            "parent": {"type": "database_id", "database_id": "src"},
+            "properties": {
+                "Title": {"type": "title", "title": [{"plain_text": "Paper X"}]},
+                "Type": {"type": "select", "select": {"name": "paper"}},
+                "URL": {"type": "url", "url": "https://example.com/x"},
+            },
+        }
+        blocks_response = {"results": [], "has_more": False, "next_cursor": None}
+        responses = [_make_response(page_response), _make_response(blocks_response)]
+        calls = []
+
+        def side_effect(req):
+            calls.append(req)
+            return responses[len(calls) - 1]
+
+        with patch.object(_OPENER, "open", side_effect=side_effect):
+            reader = _make_reader()
+            result = reader.read_page("src-1")
+
+        self.assertEqual(result["id"], "src-1")
+        self.assertEqual(result["title"], "Paper X")
+        self.assertEqual(result["type"], "paper")
+        self.assertEqual(result["url"], "https://example.com/x")
+        self.assertEqual(result["body_markdown"], "")
+        self.assertEqual(result["related_sources"], [])
+        self.assertIn("/pages/src-1", calls[0].full_url)
+        self.assertIn("/blocks/src-1/children", calls[1].full_url)
+
+
 if __name__ == "__main__":
     unittest.main()

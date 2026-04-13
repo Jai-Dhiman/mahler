@@ -22,6 +22,17 @@ def _build_https_opener() -> urllib.request.OpenerDirector:
 _OPENER = _build_https_opener()
 
 
+def _rich_text_plain(rich_text: list) -> str:
+    return "".join(r.get("plain_text", "") for r in rich_text)
+
+
+def _render_block(block: dict) -> Optional[str]:
+    btype = block.get("type", "")
+    if btype == "paragraph":
+        return _rich_text_plain(block["paragraph"].get("rich_text", []))
+    return None
+
+
 def _blocks_to_markdown(blocks: list) -> str:
     return ""
 
@@ -80,4 +91,49 @@ class NotionWikiReader:
                 "title": title,
                 "db": db_name,
             })
+        return results
+
+    def read_page(self, page_id: str) -> dict:
+        page = self._request("GET", f"/pages/{page_id}", None)
+        props = page.get("properties", {})
+
+        title_parts = props.get("Title", {}).get("title", [])
+        title = "".join(p.get("plain_text", "") for p in title_parts).strip()
+
+        type_ = ""
+        type_prop = props.get("Type", {})
+        if type_prop.get("type") == "select" and type_prop.get("select"):
+            type_ = type_prop["select"].get("name", "")
+
+        url = ""
+        url_prop = props.get("URL", {})
+        if url_prop.get("type") == "url":
+            url = url_prop.get("url") or ""
+
+        blocks = self._fetch_children(page_id)
+        body_markdown = _blocks_to_markdown(blocks)
+
+        return {
+            "id": page["id"],
+            "title": title,
+            "type": type_,
+            "url": url,
+            "body_markdown": body_markdown,
+            "related_sources": [],
+        }
+
+    def _fetch_children(self, page_id: str) -> list:
+        results = []
+        cursor = None
+        while True:
+            path = f"/blocks/{page_id}/children"
+            if cursor is not None:
+                path += f"?start_cursor={urllib.parse.quote(cursor)}"
+            data = self._request("GET", path, None)
+            results.extend(data.get("results", []))
+            if not data.get("has_more"):
+                break
+            cursor = data.get("next_cursor")
+            if not cursor:
+                raise RuntimeError("Notion API returned has_more=True but no next_cursor")
         return results
