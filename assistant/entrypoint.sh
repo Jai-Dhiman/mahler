@@ -22,6 +22,15 @@ HERMES_ENV="$HOME/.hermes/.env"
   echo "OPENROUTER_MODEL=${OPENROUTER_MODEL:-x-ai/grok-4.1-fast}"
 } > "$HERMES_ENV"
 
+: "${NOTION_WIKI_READ_TOKEN:=}"
+: "${NOTION_WIKI_SOURCES_DB_ID:=}"
+: "${NOTION_WIKI_CONCEPTS_DB_ID:=}"
+{
+  echo "NOTION_WIKI_READ_TOKEN=${NOTION_WIKI_READ_TOKEN}"
+  echo "NOTION_WIKI_SOURCES_DB_ID=${NOTION_WIKI_SOURCES_DB_ID}"
+  echo "NOTION_WIKI_CONCEPTS_DB_ID=${NOTION_WIKI_CONCEPTS_DB_ID}"
+} >> "$HOME/.hermes/.env"
+
 # Register cron jobs in Hermes v0.7.0 format (schedule object + next_run_at)
 CRON_DIR="$HOME/.hermes/cron"
 JOBS_FILE="$CRON_DIR/jobs.json"
