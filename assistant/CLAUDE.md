@@ -103,8 +103,8 @@ Salvageable code from previous build in `hermes-assistant` repo's `.worktrees/fe
 ### Phase 6: Approval Gates
 - Email draft composition with Discord-based approval flow
 
-### Phase 7: Wiki Bridge
-- Sync local wiki content to KV for agent access (container cannot read local filesystem)
+### Phase 7: Wiki Bridge — shipped as `notion-wiki` skill
+- ~~Sync local wiki content to KV for agent access~~ — shipped differently: the `notion-wiki` skill gives Hermes read-only access to a Notion-backed wiki. Local Claude Code sessions ingest sources into Notion via `mahler/wiki/scripts/ingest.py`; Hermes reads via `wiki.py` (search/read/index). Raw sources stay on the laptop.
 
 ### Phase 8: Kaizen Loop
 - Self-improvement: track what worked, what was ignored, refine triage rules
