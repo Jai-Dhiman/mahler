@@ -288,5 +288,48 @@ class TestReaderReadRelations(unittest.TestCase):
         self.assertIn("/pages/con-b", calls[3].full_url)
 
 
+class TestReaderListIndex(unittest.TestCase):
+    def test_list_index_returns_paginated_titles(self):
+        page_1 = {
+            "results": [
+                {"id": "con-1", "properties": {"Title": {"type": "title", "title": [{"plain_text": "Alpha"}]}}},
+                {"id": "con-2", "properties": {"Title": {"type": "title", "title": [{"plain_text": "Beta"}]}}},
+            ],
+            "has_more": True,
+            "next_cursor": "cur-2",
+        }
+        page_2 = {
+            "results": [
+                {"id": "con-3", "properties": {"Title": {"type": "title", "title": [{"plain_text": "Gamma"}]}}},
+            ],
+            "has_more": False,
+            "next_cursor": None,
+        }
+        responses = [_make_response(page_1), _make_response(page_2)]
+        calls = []
+
+        def side_effect(req):
+            calls.append(req)
+            return responses[len(calls) - 1]
+
+        with patch.object(_OPENER, "open", side_effect=side_effect):
+            reader = _make_reader()
+            result = reader.list_index(db="concepts", limit=50)
+
+        self.assertEqual([r["title"] for r in result], ["Alpha", "Beta", "Gamma"])
+        first_body = json.loads(calls[0].data.decode("utf-8"))
+        self.assertEqual(first_body["page_size"], 50)
+        self.assertIn("/databases/con/query", calls[0].full_url)
+        second_body = json.loads(calls[1].data.decode("utf-8"))
+        self.assertEqual(second_body["start_cursor"], "cur-2")
+
+    def test_list_index_invalid_db_raises(self):
+        with patch.object(_OPENER, "open"):
+            reader = _make_reader()
+            with self.assertRaises(RuntimeError) as ctx:
+                reader.list_index(db="banana", limit=10)
+            self.assertIn("banana", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

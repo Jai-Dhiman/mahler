@@ -143,6 +143,32 @@ class NotionWikiReader:
             "related_sources": related,
         }
 
+    def list_index(self, db: str, limit: int = 100) -> list:
+        if db == "sources":
+            db_id = self._sources_db_id
+        elif db == "concepts":
+            db_id = self._concepts_db_id
+        else:
+            raise RuntimeError(f"Unknown db: {db!r} (expected 'sources' or 'concepts')")
+
+        results = []
+        cursor = None
+        while True:
+            body: dict = {"page_size": limit}
+            if cursor is not None:
+                body["start_cursor"] = cursor
+            data = self._request("POST", f"/databases/{db_id}/query", body)
+            for page in data.get("results", []):
+                title_parts = page.get("properties", {}).get("Title", {}).get("title", [])
+                title = "".join(p.get("plain_text", "") for p in title_parts).strip()
+                results.append({"id": page["id"], "title": title})
+            if not data.get("has_more"):
+                break
+            cursor = data.get("next_cursor")
+            if not cursor:
+                raise RuntimeError("Notion API returned has_more=True but no next_cursor")
+        return results
+
     def _lookup_title(self, page_id: str) -> dict:
         page = self._request("GET", f"/pages/{page_id}", None)
         title_parts = page.get("properties", {}).get("Title", {}).get("title", [])
