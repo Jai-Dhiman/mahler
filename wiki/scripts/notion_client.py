@@ -122,6 +122,68 @@ class NotionWikiWriter:
         }
         return self._request("POST", "/pages", body)
 
+    def update_source_url(self, page_id: str, url: str) -> dict:
+        body = {"properties": {"URL": {"url": url}}}
+        return self._request("PATCH", f"/pages/{page_id}", body)
+
+    def update_source_body(self, page_id: str, summary: str) -> None:
+        # Fetch and delete existing blocks
+        cursor = None
+        while True:
+            path = f"/blocks/{page_id}/children"
+            if cursor:
+                path += f"?start_cursor={cursor}"
+            data = self._request("GET", path, None)
+            for block in data.get("results", []):
+                self._request("DELETE", f"/blocks/{block['id']}", None)
+            if not data.get("has_more"):
+                break
+            cursor = data.get("next_cursor")
+        # Append new blocks
+        children = _summary_to_paragraph_blocks(summary)
+        self._request("PATCH", f"/blocks/{page_id}/children", {"children": children})
+
+    def update_source_concepts(self, page_id: str, concept_ids: list) -> dict:
+        body = {"properties": {"Concepts": {"relation": [{"id": cid} for cid in concept_ids]}}}
+        return self._request("PATCH", f"/pages/{page_id}", body)
+
+    def find_concept_by_exact_title(self, title: str) -> Optional[dict]:
+        body = {"filter": {"property": "Title", "title": {"equals": title}}}
+        data = self._request("POST", f"/databases/{self._concepts_db_id}/query", body)
+        for page in data.get("results", []):
+            props = page.get("properties", {})
+            title_parts = props.get("Title", {}).get("title", [])
+            stored = "".join(p.get("plain_text", "") for p in title_parts).strip().lower()
+            if stored == title.strip().lower():
+                return page
+        return None
+
+    def create_concept(
+        self,
+        title: str,
+        body: str,
+        tags: Optional[list] = None,
+    ) -> dict:
+        properties: dict = {
+            "Title": {"title": [{"text": {"content": title}}]},
+        }
+        if tags is not None:
+            for tag in tags:
+                if "," in tag:
+                    raise RuntimeError(
+                        f"Tag value contains a comma, which Notion multi_select cannot store: {tag!r}"
+                    )
+            properties["Tags"] = {
+                "multi_select": [{"name": t} for t in tags]
+            }
+        children = _summary_to_paragraph_blocks(body)
+        payload = {
+            "parent": {"database_id": self._concepts_db_id},
+            "properties": properties,
+            "children": children,
+        }
+        return self._request("POST", "/pages", payload)
+
     def append_log(self, kind: str, detail: str, when: str) -> dict:
         body = {
             "parent": {"database_id": self._log_db_id},

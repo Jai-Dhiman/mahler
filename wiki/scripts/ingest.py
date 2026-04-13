@@ -67,9 +67,34 @@ def main(argv=None) -> None:
     p_ingest.add_argument("--concepts", default="")
     p_ingest.add_argument("--ingested", default=None)
 
+    p_fix = sub.add_parser("fix-url")
+    p_fix.add_argument("--page-id", dest="page_id", required=True)
+    p_fix.add_argument("--url", required=True)
+
+    p_fixbody = sub.add_parser("fix-body")
+    p_fixbody.add_argument("--page-id", dest="page_id", required=True)
+    p_fixbody.add_argument("--body-file", dest="body_file", required=True)
+
+    p_link = sub.add_parser("link-concepts")
+    p_link.add_argument("--page-id", dest="page_id", required=True)
+    p_link.add_argument("--concepts", required=True, help="Comma-separated exact concept titles")
+
+    p_concept = sub.add_parser("create-concept")
+    p_concept.add_argument("--title", required=True)
+    p_concept.add_argument("--body-file", dest="body_file", required=True)
+    p_concept.add_argument("--tags", default="")
+
     args = parser.parse_args(argv)
     if args.command == "ingest":
         cmd_ingest(args)
+    elif args.command == "fix-url":
+        cmd_fix_url(args)
+    elif args.command == "fix-body":
+        cmd_fix_body(args)
+    elif args.command == "link-concepts":
+        cmd_link_concepts(args)
+    elif args.command == "create-concept":
+        cmd_create_concept(args)
 
 
 def cmd_ingest(args: argparse.Namespace) -> None:
@@ -106,6 +131,49 @@ def cmd_ingest(args: argparse.Namespace) -> None:
         kind="INGEST",
         detail=f"ingested {args.url} as {created['id']}",
         when=ingested,
+    )
+
+
+def cmd_fix_url(args: argparse.Namespace) -> None:
+    writer = _get_writer()
+    writer.update_source_url(args.page_id, args.url)
+    print(f"Updated: {args.page_id} -> {args.url}")
+
+
+def cmd_fix_body(args: argparse.Namespace) -> None:
+    writer = _get_writer()
+    body = Path(args.body_file).read_text(encoding="utf-8")
+    writer.update_source_body(args.page_id, body)
+    print(f"Body updated: {args.page_id}")
+
+
+def cmd_link_concepts(args: argparse.Namespace) -> None:
+    writer = _get_writer()
+    titles = [t.strip() for t in args.concepts.split(",") if t.strip()]
+    concept_ids = []
+    for title in titles:
+        page = writer.find_concept_by_title(title)
+        if page is None:
+            raise RuntimeError(f"Concept not found: {title!r}")
+        concept_ids.append(page["id"])
+    writer.update_source_concepts(args.page_id, concept_ids)
+    print(f"Linked {args.page_id} -> {titles}")
+
+
+def cmd_create_concept(args: argparse.Namespace) -> None:
+    writer = _get_writer()
+    existing = writer.find_concept_by_exact_title(args.title)
+    if existing is not None:
+        print(f"Already exists: {existing['id']} ({args.title!r})")
+        return
+    body = Path(args.body_file).read_text(encoding="utf-8")
+    tags = [t.strip() for t in args.tags.split(",") if t.strip()] if args.tags else None
+    created = writer.create_concept(title=args.title, body=body, tags=tags)
+    print(f"Created concept: {created['id']} ({args.title!r})")
+    writer.append_log(
+        kind="INGEST",
+        detail=f"created concept {args.title!r} as {created['id']}",
+        when=date.today().isoformat(),
     )
 
 
