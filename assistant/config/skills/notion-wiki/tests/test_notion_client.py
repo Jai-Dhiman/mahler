@@ -158,5 +158,33 @@ class TestReaderReadPage(unittest.TestCase):
         self.assertEqual(result["body_markdown"], "First.\n\nSecond line.")
 
 
+    def test_heading_blocks_become_markdown_headers(self):
+        page_response = {
+            "id": "src-h",
+            "properties": {"Title": {"type": "title", "title": [{"plain_text": "T"}]}},
+        }
+        blocks_response = {
+            "results": [
+                {"type": "heading_1", "heading_1": {"rich_text": [{"plain_text": "Top"}]}},
+                {"type": "heading_2", "heading_2": {"rich_text": [{"plain_text": "Sub"}]}},
+                {"type": "heading_3", "heading_3": {"rich_text": [{"plain_text": "Sub-sub"}]}},
+            ],
+            "has_more": False,
+            "next_cursor": None,
+        }
+        responses = [_make_response(page_response), _make_response(blocks_response)]
+        calls = []
+
+        def side_effect(req):
+            calls.append(req)
+            return responses[len(calls) - 1]
+
+        with patch.object(_OPENER, "open", side_effect=side_effect):
+            reader = _make_reader()
+            result = reader.read_page("src-h")
+
+        self.assertEqual(result["body_markdown"], "# Top\n\n## Sub\n\n### Sub-sub")
+
+
 if __name__ == "__main__":
     unittest.main()

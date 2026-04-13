@@ -30,6 +30,12 @@ def _render_block(block: dict) -> Optional[str]:
     btype = block.get("type", "")
     if btype == "paragraph":
         return _rich_text_plain(block["paragraph"].get("rich_text", []))
+    if btype == "heading_1":
+        return "# " + _rich_text_plain(block["heading_1"].get("rich_text", []))
+    if btype == "heading_2":
+        return "## " + _rich_text_plain(block["heading_2"].get("rich_text", []))
+    if btype == "heading_3":
+        return "### " + _rich_text_plain(block["heading_3"].get("rich_text", []))
     return None
 
 
