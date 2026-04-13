@@ -80,31 +80,43 @@ Salvageable code from previous build in `hermes-assistant` repo's `.worktrees/fe
 
 ## Roadmap
 
-### Phase 2: Email Triage Skills
+Organized in three layers (Knowledge → Execution → Architectural). Ordering inside Execution is by ROI, not chronology.
+
+### Knowledge Layer
+
+**Phase K1: notion-wiki (in flight).** Three Notion DBs (Sources, Concepts, Log), local ingest + Fly-side read-only access. Gives Mahler a persistent, queryable knowledge base that compounds across sessions. See `docs/specs/2026-04-12-notion-wiki-design.md` and `docs/plans/2026-04-12-notion-wiki.md`. Supersedes the retired Phase 7 "Wiki Bridge".
+
+### Execution Layer
+
+**Phase E1: Trader-analyst morning brief.** Extend the existing `morning-brief` skill to pull traderjoe state (open positions, yesterday's fills, credit-spread deltas, rationale) from shared D1 and deliver an opinionated read in `#mahler`. Highest-leverage next move given the traderjoe/assistant crossover — the daily brief becomes the single place positions, P&L, and priorities land.
+
+**Phase E2: Email Triage depth.**
 - Gmail + Outlook fetch skills (OAuth2 / MSAL auth)
 - Junk folder rescue for Outlook
 - Classification engine (URGENT / NEEDS_ACTION / FYI / NOISE) using priority map
 - Store triage results in Cloudflare D1
 
-### Phase 3: Morning Brief + Evening Wrap
-- Cron-triggered briefs delivered to #mahler channel via Hermes cron system
-- Brief builder aggregates triage data from D1
-- Opinionated summaries, not data dumps
+**Phase E3: Kaizen Loop (pulled forward from old Phase 8).** Every triage/brief writes an outcome row to D1: what was surfaced, what the human actioned, what was ignored. Weekly reflection skill reads the log and proposes `SOUL.md` / priority-map edits for human approval. This is the compounding layer — pulled forward so every later phase contributes training data from day one instead of being retrofitted later.
 
-### Phase 4: Calendar + Task Integration
+**Phase E4: Calendar + meeting flow.**
 - Google Calendar integration
-- ~~Notion task sync~~ — shipped: `notion-tasks` skill (create, list, update, complete, delete via Discord)
-- Meeting prep and post-meeting extraction
+- Meeting prep brief and post-meeting extraction
+- `notion-tasks` already shipped for the task side (create, list, update, complete, delete via Discord)
 
-### Phase 5: Relationship CRM
+**Phase E5: Relationship CRM.**
 - Per-person context tracking
-- Communication pattern detection
+- Communication pattern detection feeding the morning brief
 
-### Phase 6: Approval Gates
-- Email draft composition with Discord-based approval flow
+**Phase E6: Approval Gates.** Email draft composition with Discord-based approval flow. Depends on E2.
 
-### Phase 7: Wiki Bridge
-- Sync local wiki content to KV for agent access (container cannot read local filesystem)
+### Architectural (deferred, needs design spike)
 
-### Phase 8: Kaizen Loop
-- Self-improvement: track what worked, what was ignored, refine triage rules
+**Phase A1: Multi-agent profiles.** Hermes v0.6.0 introduced subagent profiles; Mahler runs as a single monolithic agent today. Natural split: `research` (wiki + web), `ops` (email / calendar / tasks), `trader` (traderjoe state, rationale, risk). Each subagent reads the shared notion-wiki.
+
+- **Blocker:** verify subagent profiles work inside the Fly.io container runtime before committing. Profiles assume separate state and may expect a writable local install; the Hermes install on Fly is container-baked. Spike this before `/brainstorm`.
+- **Not a prerequisite for E1–E6.** Pursue only when a concrete boundary problem (context bleed, conflicting personas, skill scoping) makes it worth the architectural cost.
+
+### Retired
+
+- **Phase 7: Wiki Bridge** — replaced by notion-wiki (K1). Local filesystem → KV sync approach was one-way with no query surface.
+- **Phase 8: Kaizen Loop** — pulled forward to E3.
