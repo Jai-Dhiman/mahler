@@ -114,6 +114,19 @@ class TestFindConceptByTitle(unittest.TestCase):
         self.assertEqual(result["id"], "page-con-1")
         self.assertIn("/databases/con-db/query", captured[0].full_url)
 
+    def test_returns_none_when_no_exact_match(self):
+        page = {
+            "id": "page-con-near",
+            "properties": {
+                "Title": {"title": [{"plain_text": "Speculative Decoding Variants"}]},
+            },
+        }
+        response = {"results": [page], "has_more": False, "next_cursor": None}
+        with patch.object(_OPENER, "open", return_value=_make_response(response)):
+            writer = _make_writer()
+            result = writer.find_concept_by_title("Speculative Decoding")
+        self.assertIsNone(result)
+
 
 if __name__ == "__main__":
     unittest.main()
