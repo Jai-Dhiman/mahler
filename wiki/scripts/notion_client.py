@@ -101,6 +101,15 @@ class NotionWikiWriter:
         }
         if ingested is not None:
             properties["Ingested"] = {"date": {"start": ingested}}
+        if tags is not None:
+            for tag in tags:
+                if "," in tag:
+                    raise RuntimeError(
+                        f"Tag value contains a comma, which Notion multi_select cannot store: {tag!r}"
+                    )
+            properties["Tags"] = {
+                "multi_select": [{"name": t} for t in tags]
+            }
         children = _summary_to_paragraph_blocks(summary)
         body = {
             "parent": {"database_id": self._sources_db_id},

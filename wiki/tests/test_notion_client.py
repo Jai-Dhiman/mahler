@@ -176,6 +176,44 @@ class TestCreateSource(unittest.TestCase):
         )
         self.assertEqual(result["id"], "new-src-id")
 
+    def test_create_with_tags_sets_multi_select(self):
+        page = {"id": "src-2", "properties": {"Title": {"title": [{"plain_text": "p"}]}}}
+        captured = []
+
+        def capture(req):
+            captured.append(req)
+            return _make_response(page)
+
+        with patch.object(_OPENER, "open", side_effect=capture):
+            writer = _make_writer()
+            writer.create_source(
+                url="https://example.com/p2",
+                title="p",
+                type_="article",
+                summary="x",
+                tags=["llm", "inference"],
+                ingested="2026-04-12",
+            )
+
+        body = json.loads(captured[0].data.decode("utf-8"))
+        tag_names = [t["name"] for t in body["properties"]["Tags"]["multi_select"]]
+        self.assertEqual(tag_names, ["llm", "inference"])
+
+    def test_tag_with_comma_raises(self):
+        with patch.object(_OPENER, "open") as mock_open:
+            writer = _make_writer()
+            with self.assertRaises(RuntimeError) as ctx:
+                writer.create_source(
+                    url="https://example.com/p3",
+                    title="p",
+                    type_="article",
+                    summary="x",
+                    tags=["llm,inference"],
+                    ingested="2026-04-12",
+                )
+            mock_open.assert_not_called()
+        self.assertIn("comma", str(ctx.exception).lower())
+
 
 if __name__ == "__main__":
     unittest.main()
