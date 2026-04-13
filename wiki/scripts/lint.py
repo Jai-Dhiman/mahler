@@ -90,7 +90,18 @@ def cmd_lint(args: argparse.Namespace) -> None:
             print(f"Sourceless concept: {concept['title']!r} (referenced but has no sources)")
             sourceless += 1
 
-    print(f"Summary: {broken} broken wikilinks, {orphans} orphans, {sourceless} sourceless")
+    by_norm: dict = {}
+    for concept in concepts:
+        key = concept["title"].strip().lower()
+        by_norm.setdefault(key, []).append(concept)
+    duplicates = 0
+    for key, group in by_norm.items():
+        if len(group) > 1:
+            ids = ", ".join(c["id"] for c in group)
+            print(f"Duplicate title: {group[0]['title']!r} across pages {ids}")
+            duplicates += 1
+
+    print(f"Summary: {broken} broken wikilinks, {orphans} orphans, {sourceless} sourceless, {duplicates} duplicate titles")
 
 
 def main(argv=None) -> None:

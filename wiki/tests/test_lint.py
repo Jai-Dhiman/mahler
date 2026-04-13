@@ -85,3 +85,26 @@ class TestLintSourceless(unittest.TestCase):
         self.assertIn("Sourceless concept", output)
         self.assertIn("Sourceless", output)
         self.assertNotIn("Orphan concept: 'Sourceless'", output)
+
+
+@patch.dict(os.environ, {
+    "NOTION_WIKI_WRITE_TOKEN": "t",
+    "NOTION_WIKI_SOURCES_DB_ID": "s",
+    "NOTION_WIKI_CONCEPTS_DB_ID": "c",
+    "NOTION_WIKI_LOG_DB_ID": "l",
+})
+class TestLintDuplicates(unittest.TestCase):
+    def test_detects_case_insensitive_duplicates(self):
+        fake_writer = MagicMock()
+        fake_writer.list_all_concepts.return_value = [
+            _concept("p1", "Speculative Decoding", body="x", sources=["s1"]),
+            _concept("p2", "speculative decoding", body="x", sources=["s2"]),
+        ]
+        with patch("lint.NotionWikiWriter", return_value=fake_writer):
+            with patch("sys.stdout", new_callable=StringIO) as out:
+                lint.main(["lint"])
+        output = out.getvalue()
+        self.assertIn("Duplicate title", output)
+        self.assertIn("Speculative Decoding", output)
+        self.assertIn("p1", output)
+        self.assertIn("p2", output)
