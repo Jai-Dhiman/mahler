@@ -83,6 +83,13 @@ class TestFindSourceByURL(unittest.TestCase):
         )
         self.assertIn("/databases/src-db/query", captured[0].full_url)
 
+    def test_returns_none_when_url_not_found(self):
+        empty_response = {"results": [], "has_more": False, "next_cursor": None}
+        with patch.object(_OPENER, "open", return_value=_make_response(empty_response)):
+            writer = _make_writer()
+            result = writer.find_source_by_url("https://example.com/missing")
+        self.assertIsNone(result)
+
 
 if __name__ == "__main__":
     unittest.main()
