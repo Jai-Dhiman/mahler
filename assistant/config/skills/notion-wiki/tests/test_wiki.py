@@ -84,5 +84,26 @@ class TestWikiRead(unittest.TestCase):
         self.assertIn("[con-a] Speculative Decoding", output)
 
 
+@patch.dict(os.environ, {
+    "NOTION_WIKI_READ_TOKEN": "t",
+    "NOTION_WIKI_SOURCES_DB_ID": "s",
+    "NOTION_WIKI_CONCEPTS_DB_ID": "c",
+})
+class TestWikiIndex(unittest.TestCase):
+    def test_index_dispatches_and_prints(self):
+        fake_reader = MagicMock()
+        fake_reader.list_index.return_value = [
+            {"id": "con-1", "title": "Alpha"},
+            {"id": "con-2", "title": "Beta"},
+        ]
+        with patch("wiki.NotionWikiReader", return_value=fake_reader):
+            with patch("sys.stdout", new_callable=StringIO) as out:
+                wiki.main(["index", "--db", "concepts", "--limit", "100"])
+        fake_reader.list_index.assert_called_once_with(db="concepts", limit=100)
+        output = out.getvalue()
+        self.assertIn("[con-1] Alpha", output)
+        self.assertIn("[con-2] Beta", output)
+
+
 if __name__ == "__main__":
     unittest.main()

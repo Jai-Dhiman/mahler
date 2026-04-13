@@ -79,7 +79,13 @@ def main(argv=None) -> None:
 
 
 def cmd_index(args: argparse.Namespace) -> None:
-    raise NotImplementedError  # Task F2
+    reader = _get_reader()
+    entries = reader.list_index(db=args.db, limit=args.limit)
+    if not entries:
+        print("Empty index.")
+        return
+    for entry in entries:
+        print(f"[{entry['id']}] {entry['title']}")
 
 
 def cmd_read(args: argparse.Namespace) -> None:
