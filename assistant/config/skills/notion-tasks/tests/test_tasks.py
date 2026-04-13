@@ -88,9 +88,9 @@ class TestListSubcommand(unittest.TestCase):
         mock_cls.return_value = mock_client
         mock_client.list_tasks.return_value = []
 
-        tasks.main(["list", "--status", "Todo"])
+        tasks.main(["list", "--status", "Not started"])
 
-        mock_client.list_tasks.assert_called_once_with(status="Todo", priority=None, due_before=None)
+        mock_client.list_tasks.assert_called_once_with(status="Not started", priority=None, due_before=None)
 
     @patch.dict(os.environ, {"NOTION_API_TOKEN": "tok", "NOTION_DATABASE_ID": "db-id"})
     @patch("tasks.NotionClient")
@@ -113,13 +113,13 @@ class TestUpdateCompleteDeleteSubcommands(unittest.TestCase):
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
         mock_client.update_task.return_value = _make_task(
-            page_id="page-abc", title="Test task", status="In Progress"
+            page_id="page-abc", title="Test task", status="In progress"
         )
 
         with patch("sys.stdout", new_callable=StringIO) as mock_out:
-            tasks.main(["update", "--id", "page-abc", "--status", "In Progress"])
+            tasks.main(["update", "--id", "page-abc", "--status", "In progress"])
 
-        mock_client.update_task.assert_called_once_with("page-abc", status="In Progress")
+        mock_client.update_task.assert_called_once_with("page-abc", status="In progress")
         output = mock_out.getvalue()
         self.assertIn("page-abc", output)
 

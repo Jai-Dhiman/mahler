@@ -20,7 +20,7 @@ def _make_response(payload: dict, status: int = 200) -> MagicMock:
 def _page_fixture(
     page_id: str = "page-abc123",
     title: str = "Test task",
-    status: str = "Todo",
+    status: str = "Not started",
     due: str | None = None,
     priority: str | None = None,
 ) -> dict:
@@ -28,9 +28,9 @@ def _page_fixture(
         "object": "page",
         "id": page_id,
         "properties": {
-            "Name": {"title": [{"plain_text": title}]},
-            "Status": {"select": {"name": status}},
-            "Due": {"date": {"start": due} if due else None},
+            "Task name": {"title": [{"plain_text": title}]},
+            "Status": {"status": {"name": status}},
+            "Due date": {"date": {"start": due} if due else None},
             "Priority": {"select": {"name": priority} if priority else None},
         },
     }
@@ -89,13 +89,13 @@ class TestCreateTask(unittest.TestCase):
         self.assertEqual(len(captured), 1)
         body = json.loads(captured[0].data.decode("utf-8"))
         self.assertEqual(body["parent"]["database_id"], "test-db-id")
-        self.assertEqual(body["properties"]["Name"]["title"][0]["text"]["content"], "Buy groceries")
-        self.assertEqual(body["properties"]["Status"]["select"]["name"], "Todo")
-        self.assertNotIn("Due", body["properties"])
+        self.assertEqual(body["properties"]["Task name"]["title"][0]["text"]["content"], "Buy groceries")
+        self.assertEqual(body["properties"]["Status"]["status"]["name"], "Not started")
+        self.assertNotIn("Due date", body["properties"])
         self.assertNotIn("Priority", body["properties"])
         self.assertEqual(result["id"], "new-page-id")
         self.assertEqual(result["title"], "Buy groceries")
-        self.assertEqual(result["status"], "Todo")
+        self.assertEqual(result["status"], "Not started")
         self.assertIsNone(result["due"])
         self.assertIsNone(result["priority"])
 
@@ -103,7 +103,7 @@ class TestCreateTask(unittest.TestCase):
         page = _page_fixture(
             page_id="page-xyz",
             title="Fix bug",
-            status="Todo",
+            status="Not started",
             due="2026-04-17",
             priority="High",
         )
@@ -112,7 +112,7 @@ class TestCreateTask(unittest.TestCase):
             result = client.create_task(title="Fix bug", due="2026-04-17", priority="High")
 
         body = json.loads(mock_open.call_args[0][0].data.decode("utf-8"))
-        self.assertEqual(body["properties"]["Due"]["date"]["start"], "2026-04-17")
+        self.assertEqual(body["properties"]["Due date"]["date"]["start"], "2026-04-17")
         self.assertEqual(body["properties"]["Priority"]["select"]["name"], "High")
         self.assertEqual(result["due"], "2026-04-17")
         self.assertEqual(result["priority"], "High")
@@ -196,10 +196,10 @@ class TestListTasksFilters(unittest.TestCase):
         return json.loads(captured[0].data.decode("utf-8"))
 
     def test_status_filter_generates_correct_notion_filter(self):
-        body = self._capture_body(status="Todo", priority=None, due_before=None)
+        body = self._capture_body(status="Not started", priority=None, due_before=None)
         self.assertEqual(
             body["filter"],
-            {"property": "Status", "select": {"equals": "Todo"}},
+            {"property": "Status", "status": {"equals": "Not started"}},
         )
 
     def test_priority_filter_generates_correct_notion_filter(self):
@@ -213,22 +213,22 @@ class TestListTasksFilters(unittest.TestCase):
         body = self._capture_body(status=None, priority=None, due_before="2026-04-17")
         self.assertEqual(
             body["filter"],
-            {"property": "Due", "date": {"on_or_before": "2026-04-17"}},
+            {"property": "Due date", "date": {"on_or_before": "2026-04-17"}},
         )
 
     def test_multiple_filters_combined_with_and(self):
-        body = self._capture_body(status="Todo", priority="High", due_before=None)
+        body = self._capture_body(status="Not started", priority="High", due_before=None)
         self.assertIn("and", body["filter"])
         and_clause = body["filter"]["and"]
         self.assertEqual(len(and_clause), 2)
-        self.assertIn({"property": "Status", "select": {"equals": "Todo"}}, and_clause)
+        self.assertIn({"property": "Status", "status": {"equals": "Not started"}}, and_clause)
         self.assertIn({"property": "Priority", "select": {"equals": "High"}}, and_clause)
 
 
 class TestUpdateTask(unittest.TestCase):
 
     def test_update_task_sends_only_provided_fields(self):
-        updated_page = _page_fixture(page_id="page-abc123", title="Test task", status="In Progress")
+        updated_page = _page_fixture(page_id="page-abc123", title="Test task", status="In progress")
         captured = []
 
         def capture_open(req):
@@ -237,16 +237,16 @@ class TestUpdateTask(unittest.TestCase):
 
         with patch.object(_OPENER, "open", side_effect=capture_open):
             client = _make_client()
-            result = client.update_task("page-abc123", status="In Progress")
+            result = client.update_task("page-abc123", status="In progress")
 
         body = json.loads(captured[0].data.decode("utf-8"))
         props = body["properties"]
         self.assertIn("Status", props)
-        self.assertEqual(props["Status"]["select"]["name"], "In Progress")
-        self.assertNotIn("Name", props)
-        self.assertNotIn("Due", props)
+        self.assertEqual(props["Status"]["status"]["name"], "In progress")
+        self.assertNotIn("Task name", props)
+        self.assertNotIn("Due date", props)
         self.assertNotIn("Priority", props)
-        self.assertEqual(result["status"], "In Progress")
+        self.assertEqual(result["status"], "In progress")
 
     def test_update_task_with_title_sends_title_property(self):
         updated_page = _page_fixture(page_id="page-abc123", title="New title")
@@ -256,7 +256,7 @@ class TestUpdateTask(unittest.TestCase):
 
         body = json.loads(mock_open.call_args[0][0].data.decode("utf-8"))
         self.assertEqual(
-            body["properties"]["Name"]["title"][0]["text"]["content"], "New title"
+            body["properties"]["Task name"]["title"][0]["text"]["content"], "New title"
         )
 
     def test_update_task_raises_on_api_error(self):
@@ -283,7 +283,7 @@ class TestCompleteTask(unittest.TestCase):
             result = client.complete_task("page-abc123")
 
         body = json.loads(captured[0].data.decode("utf-8"))
-        self.assertEqual(body["properties"]["Status"]["select"]["name"], "Done")
+        self.assertEqual(body["properties"]["Status"]["status"]["name"], "Done")
         self.assertEqual(result["status"], "Done")
         self.assertEqual(result["id"], "page-abc123")
 
