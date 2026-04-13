@@ -84,7 +84,7 @@ Organized in three layers (Knowledge → Execution → Architectural). Ordering 
 
 ### Knowledge Layer
 
-**Phase K1: notion-wiki (in flight).** Three Notion DBs (Sources, Concepts, Log), local ingest + Fly-side read-only access. Gives Mahler a persistent, queryable knowledge base that compounds across sessions. See `docs/specs/2026-04-12-notion-wiki-design.md` and `docs/plans/2026-04-12-notion-wiki.md`. Supersedes the retired Phase 7 "Wiki Bridge".
+**Phase K1: notion-wiki — shipped.** Three Notion DBs (Sources, Concepts, Log), local ingest + Fly-side read-only access. Gives Mahler a persistent, queryable knowledge base that compounds across sessions. Local sessions ingest via `mahler/wiki/scripts/ingest.py`; Hermes reads via the `notion-wiki` skill (`search`/`read`/`index`). Raw sources stay on the laptop. Supersedes the retired Phase 7 "Wiki Bridge".
 
 ### Execution Layer
 
