@@ -122,6 +122,17 @@ class NotionWikiWriter:
         }
         return self._request("POST", "/pages", body)
 
+    def append_log(self, kind: str, detail: str, when: str) -> dict:
+        body = {
+            "parent": {"database_id": self._log_db_id},
+            "properties": {
+                "Kind": {"select": {"name": kind}},
+                "Detail": {"rich_text": [{"text": {"content": detail}}]},
+                "When": {"date": {"start": when}},
+            },
+        }
+        return self._request("POST", "/pages", body)
+
     def _request(self, method: str, path: str, body: Optional[dict] = None) -> dict:
         url = f"{_NOTION_API_BASE}{path}"
         data = json.dumps(body).encode("utf-8") if body is not None else None

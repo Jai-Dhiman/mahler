@@ -253,5 +253,30 @@ class TestCreateSource(unittest.TestCase):
         self.assertIn("validation", str(ctx.exception))
 
 
+class TestAppendLog(unittest.TestCase):
+    def test_append_log_sends_correct_payload(self):
+        page = {"id": "log-1", "properties": {}}
+        captured = []
+
+        def capture(req):
+            captured.append(req)
+            return _make_response(page)
+
+        with patch.object(_OPENER, "open", side_effect=capture):
+            writer = _make_writer()
+            result = writer.append_log(kind="INGEST", detail="added paper X", when="2026-04-12")
+
+        self.assertIn("/pages", captured[0].full_url)
+        body = json.loads(captured[0].data.decode("utf-8"))
+        self.assertEqual(body["parent"], {"database_id": "log-db"})
+        self.assertEqual(body["properties"]["Kind"]["select"]["name"], "INGEST")
+        self.assertEqual(
+            body["properties"]["Detail"]["rich_text"][0]["text"]["content"],
+            "added paper X",
+        )
+        self.assertEqual(body["properties"]["When"]["date"]["start"], "2026-04-12")
+        self.assertEqual(result["id"], "log-1")
+
+
 if __name__ == "__main__":
     unittest.main()
