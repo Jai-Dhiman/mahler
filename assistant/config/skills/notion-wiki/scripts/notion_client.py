@@ -9,6 +9,10 @@ _NOTION_API_BASE = "https://api.notion.com/v1"
 _NOTION_VERSION = "2022-06-28"
 
 
+def _normalize_db_id(db_id: str) -> str:
+    return db_id.replace("-", "").lower()
+
+
 def _build_https_opener() -> urllib.request.OpenerDirector:
     ctx = ssl.create_default_context()
     ctx.check_hostname = True
@@ -87,13 +91,15 @@ class NotionWikiReader:
             "filter": {"property": "object", "value": "page"},
         }
         data = self._request("POST", "/search", body)
+        sources_canonical = _normalize_db_id(self._sources_db_id)
+        concepts_canonical = _normalize_db_id(self._concepts_db_id)
         results = []
         for page in data.get("results", []):
             parent = page.get("parent", {})
-            db_id = parent.get("database_id", "")
-            if db_id == self._sources_db_id:
+            db_id = _normalize_db_id(parent.get("database_id", ""))
+            if db_id == sources_canonical:
                 db_name = "sources"
-            elif db_id == self._concepts_db_id:
+            elif db_id == concepts_canonical:
                 db_name = "concepts"
             else:
                 continue

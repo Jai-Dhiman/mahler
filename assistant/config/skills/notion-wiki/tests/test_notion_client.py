@@ -88,6 +88,34 @@ class TestReaderSearch(unittest.TestCase):
         self.assertEqual(results[0]["db"], "concepts")
         self.assertEqual(results[1]["db"], "sources")
 
+    def test_search_matches_when_env_ids_are_unhyphenated(self):
+        hyphenated = "abc12345-def6-7890-abcd-ef1234567890"
+        unhyphenated = "abc12345def67890abcdef1234567890"
+        api_response = {
+            "results": [
+                {
+                    "object": "page",
+                    "id": "page-1",
+                    "parent": {"type": "database_id", "database_id": hyphenated},
+                    "properties": {
+                        "Title": {"type": "title", "title": [{"plain_text": "A Source"}]},
+                    },
+                },
+            ],
+            "has_more": False,
+            "next_cursor": None,
+        }
+        with patch.object(_OPENER, "open", return_value=_make_response(api_response)):
+            reader = NotionWikiReader(
+                token="t",
+                sources_db_id=unhyphenated,
+                concepts_db_id="other",
+            )
+            results = reader.search("anything", limit=5)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["db"], "sources")
+
 
 class TestReaderReadPage(unittest.TestCase):
     def test_read_page_returns_title_and_type(self):

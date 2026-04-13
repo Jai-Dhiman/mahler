@@ -2,7 +2,6 @@
 import sys
 sys.path.insert(0, 'scripts')
 
-import io
 import os
 import tempfile
 import unittest
