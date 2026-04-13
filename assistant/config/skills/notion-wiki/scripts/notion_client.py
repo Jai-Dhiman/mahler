@@ -36,6 +36,8 @@ def _render_block(block: dict) -> Optional[str]:
         return "## " + _rich_text_plain(block["heading_2"].get("rich_text", []))
     if btype == "heading_3":
         return "### " + _rich_text_plain(block["heading_3"].get("rich_text", []))
+    if btype == "bulleted_list_item":
+        return "- " + _rich_text_plain(block["bulleted_list_item"].get("rich_text", []))
     return None
 
 
