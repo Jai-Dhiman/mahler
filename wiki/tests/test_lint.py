@@ -108,3 +108,26 @@ class TestLintDuplicates(unittest.TestCase):
         self.assertIn("Speculative Decoding", output)
         self.assertIn("p1", output)
         self.assertIn("p2", output)
+
+
+@patch.dict(os.environ, {
+    "NOTION_WIKI_WRITE_TOKEN": "t",
+    "NOTION_WIKI_SOURCES_DB_ID": "s",
+    "NOTION_WIKI_CONCEPTS_DB_ID": "c",
+    "NOTION_WIKI_LOG_DB_ID": "l",
+})
+class TestLintLog(unittest.TestCase):
+    def test_appends_log_with_counts(self):
+        fake_writer = MagicMock()
+        fake_writer.list_all_concepts.return_value = [
+            _concept("p1", "Alpha", body="[[Missing]]", sources=["s1"]),
+            _concept("p2", "Orphan", body="", sources=[]),
+        ]
+        with patch("lint.NotionWikiWriter", return_value=fake_writer):
+            with patch("sys.stdout", new_callable=StringIO):
+                lint.main(["lint"])
+        fake_writer.append_log.assert_called_once()
+        kwargs = fake_writer.append_log.call_args.kwargs
+        self.assertEqual(kwargs["kind"], "LINT")
+        self.assertIn("broken", kwargs["detail"])
+        self.assertIn("orphan", kwargs["detail"])

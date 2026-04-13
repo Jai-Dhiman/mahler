@@ -102,6 +102,11 @@ def cmd_lint(args: argparse.Namespace) -> None:
             duplicates += 1
 
     print(f"Summary: {broken} broken wikilinks, {orphans} orphans, {sourceless} sourceless, {duplicates} duplicate titles")
+    writer.append_log(
+        kind="LINT",
+        detail=f"{broken} broken wikilinks, {orphans} orphans, {sourceless} sourceless, {duplicates} duplicate titles",
+        when=date.today().isoformat(),
+    )
 
 
 def main(argv=None) -> None:
