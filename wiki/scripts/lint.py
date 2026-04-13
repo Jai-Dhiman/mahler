@@ -81,7 +81,16 @@ def cmd_lint(args: argparse.Namespace) -> None:
             print(f"Orphan concept: {concept['title']!r} (no incoming links and no sources)")
             orphans += 1
 
-    print(f"Summary: {broken} broken wikilinks, {orphans} orphans")
+    sourceless = 0
+    for concept in concepts:
+        key = concept["title"].strip().lower()
+        has_incoming = len(incoming.get(key, set())) > 0
+        has_sources = len(concept["source_ids"]) > 0
+        if has_incoming and not has_sources:
+            print(f"Sourceless concept: {concept['title']!r} (referenced but has no sources)")
+            sourceless += 1
+
+    print(f"Summary: {broken} broken wikilinks, {orphans} orphans, {sourceless} sourceless")
 
 
 def main(argv=None) -> None:

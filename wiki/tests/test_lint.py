@@ -63,3 +63,25 @@ class TestLintOrphans(unittest.TestCase):
         self.assertIn("Orphan", output)
         self.assertNotIn("Orphan concept: 'Alpha'", output)
         self.assertNotIn("Orphan concept: 'Beta'", output)
+
+
+@patch.dict(os.environ, {
+    "NOTION_WIKI_WRITE_TOKEN": "t",
+    "NOTION_WIKI_SOURCES_DB_ID": "s",
+    "NOTION_WIKI_CONCEPTS_DB_ID": "c",
+    "NOTION_WIKI_LOG_DB_ID": "l",
+})
+class TestLintSourceless(unittest.TestCase):
+    def test_detects_sourceless_concept(self):
+        fake_writer = MagicMock()
+        fake_writer.list_all_concepts.return_value = [
+            _concept("p1", "Alpha", body="See [[Sourceless]].", sources=["src-1"]),
+            _concept("p2", "Sourceless", body="", sources=[]),
+        ]
+        with patch("lint.NotionWikiWriter", return_value=fake_writer):
+            with patch("sys.stdout", new_callable=StringIO) as out:
+                lint.main(["lint"])
+        output = out.getvalue()
+        self.assertIn("Sourceless concept", output)
+        self.assertIn("Sourceless", output)
+        self.assertNotIn("Orphan concept: 'Sourceless'", output)
