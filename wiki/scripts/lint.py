@@ -65,7 +65,23 @@ def cmd_lint(args: argparse.Namespace) -> None:
                 print(f"Broken wikilink: [[{match.group(1)}]] in concept {concept['title']!r}")
                 broken += 1
 
-    print(f"Summary: {broken} broken wikilinks")
+    incoming = {c["title"].strip().lower(): set() for c in concepts}
+    for concept in concepts:
+        for match in _WIKILINK_PATTERN.finditer(concept["body_markdown"]):
+            target = match.group(1).strip().lower()
+            if target in incoming:
+                incoming[target].add(concept["id"])
+
+    orphans = 0
+    for concept in concepts:
+        key = concept["title"].strip().lower()
+        has_incoming = len(incoming.get(key, set())) > 0
+        has_sources = len(concept["source_ids"]) > 0
+        if not has_incoming and not has_sources:
+            print(f"Orphan concept: {concept['title']!r} (no incoming links and no sources)")
+            orphans += 1
+
+    print(f"Summary: {broken} broken wikilinks, {orphans} orphans")
 
 
 def main(argv=None) -> None:
