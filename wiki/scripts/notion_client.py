@@ -110,6 +110,10 @@ class NotionWikiWriter:
             properties["Tags"] = {
                 "multi_select": [{"name": t} for t in tags]
             }
+        if concept_ids is not None and len(concept_ids) > 0:
+            properties["Concepts"] = {
+                "relation": [{"id": cid} for cid in concept_ids]
+            }
         children = _summary_to_paragraph_blocks(summary)
         body = {
             "parent": {"database_id": self._sources_db_id},

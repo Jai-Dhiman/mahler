@@ -214,6 +214,29 @@ class TestCreateSource(unittest.TestCase):
             mock_open.assert_not_called()
         self.assertIn("comma", str(ctx.exception).lower())
 
+    def test_create_with_concept_ids_sets_relation(self):
+        page = {"id": "src-3", "properties": {"Title": {"title": [{"plain_text": "p"}]}}}
+        captured = []
+
+        def capture(req):
+            captured.append(req)
+            return _make_response(page)
+
+        with patch.object(_OPENER, "open", side_effect=capture):
+            writer = _make_writer()
+            writer.create_source(
+                url="https://example.com/p4",
+                title="p",
+                type_="paper",
+                summary="x",
+                concept_ids=["con-1", "con-2"],
+                ingested="2026-04-12",
+            )
+
+        body = json.loads(captured[0].data.decode("utf-8"))
+        relation = body["properties"]["Concepts"]["relation"]
+        self.assertEqual(relation, [{"id": "con-1"}, {"id": "con-2"}])
+
 
 if __name__ == "__main__":
     unittest.main()
