@@ -83,7 +83,24 @@ def cmd_index(args: argparse.Namespace) -> None:
 
 
 def cmd_read(args: argparse.Namespace) -> None:
-    raise NotImplementedError  # Task F3
+    reader = _get_reader()
+    page = reader.read_page(args.page_id)
+    print(f"# {page['title']}")
+    meta_parts = []
+    if page.get("type"):
+        meta_parts.append(f"type: {page['type']}")
+    if page.get("url"):
+        meta_parts.append(f"url: {page['url']}")
+    if meta_parts:
+        print(" | ".join(meta_parts))
+    print()
+    print(page["body_markdown"])
+    related = page.get("related_sources", [])
+    if related:
+        print()
+        print("Related:")
+        for rel in related:
+            print(f"  [{rel['id']}] {rel['title']}")
 
 
 def cmd_search(args: argparse.Namespace) -> None:

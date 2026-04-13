@@ -53,5 +53,36 @@ class TestWikiSearch(unittest.TestCase):
         self.assertIn("[src-1] (sources) Paper X", output)
 
 
+@patch.dict(os.environ, {
+    "NOTION_WIKI_READ_TOKEN": "t",
+    "NOTION_WIKI_SOURCES_DB_ID": "s",
+    "NOTION_WIKI_CONCEPTS_DB_ID": "c",
+})
+class TestWikiRead(unittest.TestCase):
+    def test_read_prints_page(self):
+        fake_reader = MagicMock()
+        fake_reader.read_page.return_value = {
+            "id": "src-1",
+            "title": "Fast Inference",
+            "type": "paper",
+            "url": "https://example.com/p",
+            "body_markdown": "Summary here.",
+            "related_sources": [
+                {"id": "con-a", "title": "Speculative Decoding"},
+            ],
+        }
+        with patch("wiki.NotionWikiReader", return_value=fake_reader):
+            with patch("sys.stdout", new_callable=StringIO) as out:
+                wiki.main(["read", "--id", "src-1"])
+        fake_reader.read_page.assert_called_once_with("src-1")
+        output = out.getvalue()
+        self.assertIn("# Fast Inference", output)
+        self.assertIn("type: paper", output)
+        self.assertIn("https://example.com/p", output)
+        self.assertIn("Summary here.", output)
+        self.assertIn("Related:", output)
+        self.assertIn("[con-a] Speculative Decoding", output)
+
+
 if __name__ == "__main__":
     unittest.main()
