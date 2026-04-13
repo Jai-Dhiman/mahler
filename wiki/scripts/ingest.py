@@ -78,8 +78,24 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     if existing is not None:
         print(f"Already ingested: {existing['id']} ({args.url})")
         return
-    # remaining logic added in Task C3
-    raise NotImplementedError
+    summary = Path(args.summary_file).read_text(encoding="utf-8")
+    ingested = args.ingested or date.today().isoformat()
+    tags = [t.strip() for t in args.tags.split(",") if t.strip()] if args.tags else None
+    concept_titles = [c.strip() for c in args.concepts.split(",") if c.strip()] if args.concepts else []
+
+    concept_ids: list = []
+    # concept resolution added in Task C4
+
+    created = writer.create_source(
+        url=args.url,
+        title=args.title,
+        type_=args.type_,
+        summary=summary,
+        tags=tags,
+        concept_ids=concept_ids or None,
+        ingested=ingested,
+    )
+    print(f"Created: {created['id']} ({args.url})")
 
 
 if __name__ == "__main__":

@@ -85,5 +85,40 @@ class TestIngestSkipDuplicate(unittest.TestCase):
             os.unlink(summary_path)
 
 
+@patch.dict(os.environ, {
+    "NOTION_WIKI_WRITE_TOKEN": "t",
+    "NOTION_WIKI_SOURCES_DB_ID": "s",
+    "NOTION_WIKI_CONCEPTS_DB_ID": "c",
+    "NOTION_WIKI_LOG_DB_ID": "l",
+})
+class TestIngestCreate(unittest.TestCase):
+    def test_creates_source_for_new_url(self):
+        fake_writer = MagicMock()
+        fake_writer.find_source_by_url.return_value = None
+        fake_writer.create_source.return_value = {"id": "new-src-id"}
+        summary_path = _summary_tmpfile("Paragraph one.\n\nParagraph two.")
+        try:
+            with patch("ingest.NotionWikiWriter", return_value=fake_writer):
+                with patch("sys.stdout", new_callable=StringIO) as out:
+                    ingest.main([
+                        "ingest",
+                        "--url", "https://example.com/new",
+                        "--title", "New Paper",
+                        "--type", "paper",
+                        "--summary-file", summary_path,
+                        "--ingested", "2026-04-12",
+                    ])
+            fake_writer.create_source.assert_called_once()
+            kwargs = fake_writer.create_source.call_args.kwargs
+            self.assertEqual(kwargs["url"], "https://example.com/new")
+            self.assertEqual(kwargs["title"], "New Paper")
+            self.assertEqual(kwargs["type_"], "paper")
+            self.assertEqual(kwargs["summary"], "Paragraph one.\n\nParagraph two.")
+            self.assertEqual(kwargs["ingested"], "2026-04-12")
+            self.assertIn("new-src-id", out.getvalue())
+        finally:
+            os.unlink(summary_path)
+
+
 if __name__ == "__main__":
     unittest.main()
