@@ -87,7 +87,13 @@ def cmd_read(args: argparse.Namespace) -> None:
 
 
 def cmd_search(args: argparse.Namespace) -> None:
-    raise NotImplementedError  # Task F4
+    reader = _get_reader()
+    hits = reader.search(args.query, limit=args.limit)
+    if not hits:
+        print("No results.")
+        return
+    for hit in hits:
+        print(f"[{hit['id']}] ({hit['db']}) {hit['title']}")
 
 
 if __name__ == "__main__":
