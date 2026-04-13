@@ -120,6 +120,31 @@ class TestIngestCreate(unittest.TestCase):
             os.unlink(summary_path)
 
 
+    def test_appends_log_after_successful_create(self):
+        fake_writer = MagicMock()
+        fake_writer.find_source_by_url.return_value = None
+        fake_writer.create_source.return_value = {"id": "src-log-test"}
+        summary_path = _summary_tmpfile()
+        try:
+            with patch("ingest.NotionWikiWriter", return_value=fake_writer):
+                with patch("sys.stdout", new_callable=StringIO):
+                    ingest.main([
+                        "ingest",
+                        "--url", "https://example.com/log",
+                        "--title", "L",
+                        "--type", "paper",
+                        "--summary-file", summary_path,
+                        "--ingested", "2026-04-12",
+                    ])
+            fake_writer.append_log.assert_called_once()
+            kwargs = fake_writer.append_log.call_args.kwargs
+            self.assertEqual(kwargs["kind"], "INGEST")
+            self.assertIn("src-log-test", kwargs["detail"])
+            self.assertIn("https://example.com/log", kwargs["detail"])
+            self.assertEqual(kwargs["when"], "2026-04-12")
+        finally:
+            os.unlink(summary_path)
+
     def test_resolves_concept_titles_to_ids(self):
         fake_writer = MagicMock()
         fake_writer.find_source_by_url.return_value = None

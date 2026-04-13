@@ -102,6 +102,11 @@ def cmd_ingest(args: argparse.Namespace) -> None:
         ingested=ingested,
     )
     print(f"Created: {created['id']} ({args.url})")
+    writer.append_log(
+        kind="INGEST",
+        detail=f"ingested {args.url} as {created['id']}",
+        when=ingested,
+    )
 
 
 if __name__ == "__main__":
