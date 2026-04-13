@@ -34,7 +34,12 @@ def _render_block(block: dict) -> Optional[str]:
 
 
 def _blocks_to_markdown(blocks: list) -> str:
-    return ""
+    parts = []
+    for block in blocks:
+        rendered = _render_block(block)
+        if rendered is not None:
+            parts.append(rendered)
+    return "\n\n".join(parts)
 
 
 class NotionWikiReader:
