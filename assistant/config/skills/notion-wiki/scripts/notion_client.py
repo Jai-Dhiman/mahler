@@ -55,3 +55,29 @@ class NotionWikiReader:
         if status != 200:
             raise RuntimeError(f"Notion API error {status}: {raw.decode('utf-8', errors='replace')}")
         return json.loads(raw)
+
+    def search(self, query: str, limit: int = 10) -> list:
+        body = {
+            "query": query,
+            "page_size": limit,
+            "filter": {"property": "object", "value": "page"},
+        }
+        data = self._request("POST", "/search", body)
+        results = []
+        for page in data.get("results", []):
+            parent = page.get("parent", {})
+            db_id = parent.get("database_id", "")
+            if db_id == self._sources_db_id:
+                db_name = "sources"
+            elif db_id == self._concepts_db_id:
+                db_name = "concepts"
+            else:
+                continue
+            title_parts = page.get("properties", {}).get("Title", {}).get("title", [])
+            title = "".join(p.get("plain_text", "") for p in title_parts).strip()
+            results.append({
+                "id": page["id"],
+                "title": title,
+                "db": db_name,
+            })
+        return results
