@@ -112,7 +112,7 @@ def cmd_lint(args: argparse.Namespace) -> None:
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description="Mahler notion-wiki linter")
     sub = parser.add_subparsers(dest="command", required=True)
-    p_lint = sub.add_parser("lint")
+    sub.add_parser("lint")
     args = parser.parse_args(argv)
     if args.command == "lint":
         cmd_lint(args)

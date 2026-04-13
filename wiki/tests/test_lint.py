@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import lint
 
 
-def _concept(page_id: str, title: str, body: str = "", sources: list = None) -> dict:
+def _concept(page_id: str, title: str, body: str = "", sources: list | None = None) -> dict:
     return {
         "id": page_id,
         "title": title,

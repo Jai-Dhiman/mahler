@@ -321,5 +321,179 @@ class TestRetryOn429(unittest.TestCase):
         self.assertIn("429", str(ctx.exception))
 
 
+class TestListAllConcepts(unittest.TestCase):
+    def _make_concept_page(self, page_id: str, title: str, source_ids: list) -> dict:
+        return {
+            "id": page_id,
+            "properties": {
+                "Title": {"title": [{"plain_text": title}]},
+                "Sources": {"relation": [{"id": sid} for sid in source_ids]},
+            },
+        }
+
+    def _make_blocks_response(self, texts: list) -> dict:
+        return {
+            "results": [
+                {
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [{"plain_text": t}]
+                    },
+                }
+                for t in texts
+            ]
+        }
+
+    def test_single_page_returns_all_concepts(self):
+        page1 = self._make_concept_page("con-1", "Speculative Decoding", ["src-a"])
+        page2 = self._make_concept_page("con-2", "LLM Efficiency", ["src-b", "src-c"])
+
+        query_response = {"results": [page1, page2], "has_more": False, "next_cursor": None}
+        blocks_1 = self._make_blocks_response(["Speculative decoding speeds up inference."])
+        blocks_2 = self._make_blocks_response(["Efficiency matters.", "Second paragraph."])
+
+        responses = [
+            _make_response(query_response),
+            _make_response(blocks_1),
+            _make_response(blocks_2),
+        ]
+        calls = []
+
+        def side_effect(req):
+            calls.append(req)
+            return responses[len(calls) - 1]
+
+        with patch.object(_OPENER, "open", side_effect=side_effect):
+            writer = _make_writer()
+            result = writer.list_all_concepts()
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["id"], "con-1")
+        self.assertEqual(result[0]["title"], "Speculative Decoding")
+        self.assertEqual(result[0]["source_ids"], ["src-a"])
+        self.assertIn("Speculative decoding speeds up inference.", result[0]["body_markdown"])
+        self.assertEqual(result[1]["id"], "con-2")
+        self.assertEqual(result[1]["title"], "LLM Efficiency")
+        self.assertEqual(result[1]["source_ids"], ["src-b", "src-c"])
+        self.assertIn("Efficiency matters.", result[1]["body_markdown"])
+        self.assertIn("/databases/con-db/query", calls[0].full_url)
+        self.assertIn("/blocks/con-1/children", calls[1].full_url)
+        self.assertIn("/blocks/con-2/children", calls[2].full_url)
+
+    def test_follows_pagination_cursor(self):
+        page1 = self._make_concept_page("con-1", "Alpha", [])
+        page2 = self._make_concept_page("con-2", "Beta", [])
+
+        query_page1 = {"results": [page1], "has_more": True, "next_cursor": "cursor-abc"}
+        query_page2 = {"results": [page2], "has_more": False, "next_cursor": None}
+        blocks_1 = self._make_blocks_response(["Alpha body."])
+        blocks_2 = self._make_blocks_response(["Beta body."])
+
+        responses = [
+            _make_response(query_page1),
+            _make_response(blocks_1),
+            _make_response(query_page2),
+            _make_response(blocks_2),
+        ]
+        calls = []
+
+        def side_effect(req):
+            calls.append(req)
+            return responses[len(calls) - 1]
+
+        with patch.object(_OPENER, "open", side_effect=side_effect):
+            writer = _make_writer()
+            result = writer.list_all_concepts()
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["title"], "Alpha")
+        self.assertEqual(result[1]["title"], "Beta")
+
+        # First query has no cursor, second query must include next_cursor
+        first_body = json.loads(calls[0].data.decode("utf-8"))
+        self.assertNotIn("start_cursor", first_body)
+        third_body = json.loads(calls[2].data.decode("utf-8"))
+        self.assertEqual(third_body["start_cursor"], "cursor-abc")
+
+    def test_raises_when_has_more_but_no_cursor(self):
+        page1 = self._make_concept_page("con-1", "Alpha", [])
+        query_response = {"results": [page1], "has_more": True, "next_cursor": None}
+        blocks_1 = self._make_blocks_response([])
+
+        responses = [
+            _make_response(query_response),
+            _make_response(blocks_1),
+        ]
+        calls = []
+
+        def side_effect(req):
+            calls.append(req)
+            return responses[len(calls) - 1]
+
+        with patch.object(_OPENER, "open", side_effect=side_effect):
+            writer = _make_writer()
+            with self.assertRaises(RuntimeError) as ctx:
+                writer.list_all_concepts()
+        self.assertIn("next_cursor", str(ctx.exception))
+
+
+class TestFetchConceptBodyMarkdown(unittest.TestCase):
+    def test_joins_paragraph_blocks_into_markdown(self):
+        blocks_response = {
+            "results": [
+                {
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [{"plain_text": "First paragraph."}]
+                    },
+                },
+                {
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [{"plain_text": "Second paragraph."}]
+                    },
+                },
+            ]
+        }
+        with patch.object(_OPENER, "open", return_value=_make_response(blocks_response)):
+            writer = _make_writer()
+            result = writer._fetch_concept_body_markdown("page-abc")
+
+        self.assertIn("First paragraph.", result)
+        self.assertIn("Second paragraph.", result)
+        self.assertEqual(result, "First paragraph.\n\nSecond paragraph.")
+
+    def test_skips_non_paragraph_blocks(self):
+        blocks_response = {
+            "results": [
+                {
+                    "type": "heading_1",
+                    "heading_1": {
+                        "rich_text": [{"plain_text": "A Heading"}]
+                    },
+                },
+                {
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [{"plain_text": "Only this paragraph."}]
+                    },
+                },
+                {
+                    "type": "bulleted_list_item",
+                    "bulleted_list_item": {
+                        "rich_text": [{"plain_text": "A bullet."}]
+                    },
+                },
+            ]
+        }
+        with patch.object(_OPENER, "open", return_value=_make_response(blocks_response)):
+            writer = _make_writer()
+            result = writer._fetch_concept_body_markdown("page-xyz")
+
+        self.assertEqual(result, "Only this paragraph.")
+        self.assertNotIn("A Heading", result)
+        self.assertNotIn("A bullet.", result)
+
+
 if __name__ == "__main__":
     unittest.main()
