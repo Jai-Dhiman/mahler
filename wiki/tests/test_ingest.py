@@ -120,5 +120,34 @@ class TestIngestCreate(unittest.TestCase):
             os.unlink(summary_path)
 
 
+    def test_resolves_concept_titles_to_ids(self):
+        fake_writer = MagicMock()
+        fake_writer.find_source_by_url.return_value = None
+        fake_writer.find_concept_by_title.side_effect = [
+            {"id": "con-spec"},
+            {"id": "con-eff"},
+        ]
+        fake_writer.create_source.return_value = {"id": "src-x"}
+        summary_path = _summary_tmpfile()
+        try:
+            with patch("ingest.NotionWikiWriter", return_value=fake_writer):
+                with patch("sys.stdout", new_callable=StringIO):
+                    ingest.main([
+                        "ingest",
+                        "--url", "https://example.com/x",
+                        "--title", "X",
+                        "--type", "paper",
+                        "--summary-file", summary_path,
+                        "--concepts", "Speculative Decoding,LLM Efficiency",
+                        "--ingested", "2026-04-12",
+                    ])
+            calls = fake_writer.find_concept_by_title.call_args_list
+            self.assertEqual([c.args[0] for c in calls], ["Speculative Decoding", "LLM Efficiency"])
+            concept_ids = fake_writer.create_source.call_args.kwargs["concept_ids"]
+            self.assertEqual(concept_ids, ["con-spec", "con-eff"])
+        finally:
+            os.unlink(summary_path)
+
+
 if __name__ == "__main__":
     unittest.main()

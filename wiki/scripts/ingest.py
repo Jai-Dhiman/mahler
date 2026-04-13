@@ -84,7 +84,13 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     concept_titles = [c.strip() for c in args.concepts.split(",") if c.strip()] if args.concepts else []
 
     concept_ids: list = []
-    # concept resolution added in Task C4
+    for title in concept_titles:
+        page = writer.find_concept_by_title(title)
+        if page is None:
+            raise RuntimeError(
+                f"Concept not found: {title!r}. Create it in Notion first, then re-run ingest."
+            )
+        concept_ids.append(page["id"])
 
     created = writer.create_source(
         url=args.url,
