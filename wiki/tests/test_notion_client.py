@@ -237,6 +237,21 @@ class TestCreateSource(unittest.TestCase):
         relation = body["properties"]["Concepts"]["relation"]
         self.assertEqual(relation, [{"id": "con-1"}, {"id": "con-2"}])
 
+    def test_non_2xx_response_raises(self):
+        error_body = {"object": "error", "status": 400, "message": "validation"}
+        with patch.object(_OPENER, "open", return_value=_make_response(error_body, status=400)):
+            writer = _make_writer()
+            with self.assertRaises(RuntimeError) as ctx:
+                writer.create_source(
+                    url="https://example.com/p5",
+                    title="p",
+                    type_="paper",
+                    summary="x",
+                    ingested="2026-04-12",
+                )
+        self.assertIn("400", str(ctx.exception))
+        self.assertIn("validation", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
