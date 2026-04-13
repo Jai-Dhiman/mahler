@@ -149,5 +149,35 @@ class TestIngestCreate(unittest.TestCase):
             os.unlink(summary_path)
 
 
+@patch.dict(os.environ, {
+    "NOTION_WIKI_WRITE_TOKEN": "t",
+    "NOTION_WIKI_SOURCES_DB_ID": "s",
+    "NOTION_WIKI_CONCEPTS_DB_ID": "c",
+    "NOTION_WIKI_LOG_DB_ID": "l",
+})
+class TestIngestMissingConcept(unittest.TestCase):
+    def test_raises_when_concept_missing(self):
+        fake_writer = MagicMock()
+        fake_writer.find_source_by_url.return_value = None
+        fake_writer.find_concept_by_title.return_value = None
+        summary_path = _summary_tmpfile()
+        try:
+            with patch("ingest.NotionWikiWriter", return_value=fake_writer):
+                with self.assertRaises(RuntimeError) as ctx:
+                    ingest.main([
+                        "ingest",
+                        "--url", "https://example.com/missing-concept",
+                        "--title", "X",
+                        "--type", "paper",
+                        "--summary-file", summary_path,
+                        "--concepts", "Nonexistent",
+                    ])
+            self.assertIn("Nonexistent", str(ctx.exception))
+            self.assertIn("Create it in Notion", str(ctx.exception))
+            fake_writer.create_source.assert_not_called()
+        finally:
+            os.unlink(summary_path)
+
+
 if __name__ == "__main__":
     unittest.main()
