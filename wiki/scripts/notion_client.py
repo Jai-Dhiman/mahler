@@ -136,10 +136,22 @@ class NotionWikiWriter:
     def _request(self, method: str, path: str, body: Optional[dict] = None) -> dict:
         url = f"{_NOTION_API_BASE}{path}"
         data = json.dumps(body).encode("utf-8") if body is not None else None
-        req = urllib.request.Request(url, data=data, method=method, headers=self._headers())
-        with _OPENER.open(req) as resp:
-            status = resp.status
-            raw = resp.read()
-        if status != 200:
-            raise RuntimeError(f"Notion API error {status}: {raw.decode('utf-8', errors='replace')}")
-        return json.loads(raw)
+        attempts = 3
+        delay = 0.5
+        last_status = 0
+        last_raw = b""
+        for attempt in range(attempts):
+            req = urllib.request.Request(url, data=data, method=method, headers=self._headers())
+            with _OPENER.open(req) as resp:
+                last_status = resp.status
+                last_raw = resp.read()
+            if last_status == 200:
+                return json.loads(last_raw)
+            if last_status != 429:
+                break
+            if attempt < attempts - 1:
+                time.sleep(delay)
+                delay *= 2
+        raise RuntimeError(
+            f"Notion API error {last_status}: {last_raw.decode('utf-8', errors='replace')}"
+        )

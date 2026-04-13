@@ -278,5 +278,48 @@ class TestAppendLog(unittest.TestCase):
         self.assertEqual(result["id"], "log-1")
 
 
+class TestRetryOn429(unittest.TestCase):
+    def test_429_then_success_retries(self):
+        success = {"id": "src-retry", "properties": {"Title": {"title": [{"plain_text": "p"}]}}}
+        responses = [
+            _make_response({"message": "rate limited"}, status=429),
+            _make_response(success, status=200),
+        ]
+        calls = []
+
+        def side_effect(req):
+            calls.append(req)
+            return responses[len(calls) - 1]
+
+        with patch("notion_client.time.sleep") as mock_sleep:
+            with patch.object(_OPENER, "open", side_effect=side_effect):
+                writer = _make_writer()
+                result = writer.create_source(
+                    url="https://example.com/retry",
+                    title="p",
+                    type_="paper",
+                    summary="x",
+                    ingested="2026-04-12",
+                )
+            mock_sleep.assert_called()
+        self.assertEqual(result["id"], "src-retry")
+        self.assertEqual(len(calls), 2)
+
+    def test_429_exhausted_raises(self):
+        always_429 = _make_response({"message": "rate limited"}, status=429)
+        with patch("notion_client.time.sleep"):
+            with patch.object(_OPENER, "open", return_value=always_429):
+                writer = _make_writer()
+                with self.assertRaises(RuntimeError) as ctx:
+                    writer.create_source(
+                        url="https://example.com/retry2",
+                        title="p",
+                        type_="paper",
+                        summary="x",
+                        ingested="2026-04-12",
+                    )
+        self.assertIn("429", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
