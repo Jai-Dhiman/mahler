@@ -64,6 +64,14 @@ class NotionWikiWriter:
             "Content-Type": "application/json",
         }
 
+    def find_source_by_url(self, url: str) -> Optional[dict]:
+        body = {"filter": {"property": "URL", "url": {"equals": url}}}
+        data = self._request("POST", f"/databases/{self._sources_db_id}/query", body)
+        results = data.get("results", [])
+        if not results:
+            return None
+        return results[0]
+
     def _request(self, method: str, path: str, body: Optional[dict] = None) -> dict:
         url = f"{_NOTION_API_BASE}{path}"
         data = json.dumps(body).encode("utf-8") if body is not None else None

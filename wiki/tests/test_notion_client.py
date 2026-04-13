@@ -54,5 +54,35 @@ class TestNotionWikiWriterInit(unittest.TestCase):
         self.assertIsNotNone(writer)
 
 
+class TestFindSourceByURL(unittest.TestCase):
+    def test_returns_page_dict_when_url_matches(self):
+        matching_page = {
+            "id": "page-src-1",
+            "properties": {
+                "URL": {"url": "https://example.com/paper"},
+                "Title": {"title": [{"plain_text": "Example Paper"}]},
+            },
+        }
+        query_response = {"results": [matching_page], "has_more": False, "next_cursor": None}
+        captured = []
+
+        def capture(req):
+            captured.append(req)
+            return _make_response(query_response)
+
+        with patch.object(_OPENER, "open", side_effect=capture):
+            writer = _make_writer()
+            result = writer.find_source_by_url("https://example.com/paper")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["id"], "page-src-1")
+        body = json.loads(captured[0].data.decode("utf-8"))
+        self.assertEqual(
+            body["filter"],
+            {"property": "URL", "url": {"equals": "https://example.com/paper"}},
+        )
+        self.assertIn("/databases/src-db/query", captured[0].full_url)
+
+
 if __name__ == "__main__":
     unittest.main()
