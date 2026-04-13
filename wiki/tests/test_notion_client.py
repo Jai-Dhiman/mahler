@@ -91,5 +91,29 @@ class TestFindSourceByURL(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class TestFindConceptByTitle(unittest.TestCase):
+    def test_case_insensitive_match_returns_page(self):
+        page = {
+            "id": "page-con-1",
+            "properties": {
+                "Title": {"title": [{"plain_text": "speculative decoding"}]},
+            },
+        }
+        query_response = {"results": [page], "has_more": False, "next_cursor": None}
+        captured = []
+
+        def capture(req):
+            captured.append(req)
+            return _make_response(query_response)
+
+        with patch.object(_OPENER, "open", side_effect=capture):
+            writer = _make_writer()
+            result = writer.find_concept_by_title("Speculative Decoding")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["id"], "page-con-1")
+        self.assertIn("/databases/con-db/query", captured[0].full_url)
+
+
 if __name__ == "__main__":
     unittest.main()

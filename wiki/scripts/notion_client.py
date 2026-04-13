@@ -72,6 +72,18 @@ class NotionWikiWriter:
             return None
         return results[0]
 
+    def find_concept_by_title(self, title: str) -> Optional[dict]:
+        body = {"filter": {"property": "Title", "title": {"contains": title}}}
+        data = self._request("POST", f"/databases/{self._concepts_db_id}/query", body)
+        needle = title.strip().lower()
+        for page in data.get("results", []):
+            props = page.get("properties", {})
+            title_parts = props.get("Title", {}).get("title", [])
+            stored = "".join(p.get("plain_text", "") for p in title_parts).strip().lower()
+            if stored == needle:
+                return page
+        return None
+
     def _request(self, method: str, path: str, body: Optional[dict] = None) -> dict:
         url = f"{_NOTION_API_BASE}{path}"
         data = json.dumps(body).encode("utf-8") if body is not None else None
