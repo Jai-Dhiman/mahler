@@ -133,6 +133,42 @@ class NotionWikiWriter:
         }
         return self._request("POST", "/pages", body)
 
+    def list_all_concepts(self) -> list:
+        results = []
+        cursor = None
+        while True:
+            body: dict = {}
+            if cursor is not None:
+                body["start_cursor"] = cursor
+            data = self._request("POST", f"/databases/{self._concepts_db_id}/query", body)
+            for page in data.get("results", []):
+                title_parts = page.get("properties", {}).get("Title", {}).get("title", [])
+                title = "".join(p.get("plain_text", "") for p in title_parts).strip()
+                sources_rel = page.get("properties", {}).get("Sources", {}).get("relation", [])
+                source_ids = [r["id"] for r in sources_rel]
+                body_md = self._fetch_concept_body_markdown(page["id"])
+                results.append({
+                    "id": page["id"],
+                    "title": title,
+                    "body_markdown": body_md,
+                    "source_ids": source_ids,
+                })
+            if not data.get("has_more"):
+                break
+            cursor = data.get("next_cursor")
+            if not cursor:
+                raise RuntimeError("Notion API returned has_more=True but no next_cursor")
+        return results
+
+    def _fetch_concept_body_markdown(self, page_id: str) -> str:
+        data = self._request("GET", f"/blocks/{page_id}/children", None)
+        parts = []
+        for block in data.get("results", []):
+            if block.get("type") == "paragraph":
+                rich = block["paragraph"].get("rich_text", [])
+                parts.append("".join(r.get("plain_text", "") for r in rich))
+        return "\n\n".join(parts)
+
     def _request(self, method: str, path: str, body: Optional[dict] = None) -> dict:
         url = f"{_NOTION_API_BASE}{path}"
         data = json.dumps(body).encode("utf-8") if body is not None else None
