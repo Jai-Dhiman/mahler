@@ -44,5 +44,46 @@ class TestIngestEnvLoader(unittest.TestCase):
             self.assertIn("NOTION_WIKI_WRITE_TOKEN", str(ctx.exception))
 
 
+from io import StringIO
+from unittest.mock import MagicMock
+
+
+def _summary_tmpfile(text: str = "A summary.") -> str:
+    tf = tempfile.NamedTemporaryFile("w", suffix=".md", delete=False)
+    tf.write(text)
+    tf.close()
+    return tf.name
+
+
+@patch.dict(os.environ, {
+    "NOTION_WIKI_WRITE_TOKEN": "t",
+    "NOTION_WIKI_SOURCES_DB_ID": "s",
+    "NOTION_WIKI_CONCEPTS_DB_ID": "c",
+    "NOTION_WIKI_LOG_DB_ID": "l",
+})
+class TestIngestSkipDuplicate(unittest.TestCase):
+    def test_skips_when_url_already_ingested(self):
+        existing = {"id": "existing-src", "properties": {}}
+        fake_writer = MagicMock()
+        fake_writer.find_source_by_url.return_value = existing
+        summary_path = _summary_tmpfile()
+        try:
+            with patch("ingest.NotionWikiWriter", return_value=fake_writer):
+                with patch("sys.stdout", new_callable=StringIO) as out:
+                    ingest.main([
+                        "ingest",
+                        "--url", "https://example.com/dup",
+                        "--title", "dup",
+                        "--type", "paper",
+                        "--summary-file", summary_path,
+                    ])
+            fake_writer.find_source_by_url.assert_called_once_with("https://example.com/dup")
+            fake_writer.create_source.assert_not_called()
+            self.assertIn("Already ingested", out.getvalue())
+            self.assertIn("existing-src", out.getvalue())
+        finally:
+            os.unlink(summary_path)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -73,7 +73,13 @@ def main(argv=None) -> None:
 
 
 def cmd_ingest(args: argparse.Namespace) -> None:
-    raise NotImplementedError  # filled in by Task C3
+    writer = _get_writer()
+    existing = writer.find_source_by_url(args.url)
+    if existing is not None:
+        print(f"Already ingested: {existing['id']} ({args.url})")
+        return
+    # remaining logic added in Task C3
+    raise NotImplementedError
 
 
 if __name__ == "__main__":
