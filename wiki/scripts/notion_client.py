@@ -84,6 +84,31 @@ class NotionWikiWriter:
                 return page
         return None
 
+    def create_source(
+        self,
+        url: str,
+        title: str,
+        type_: str,
+        summary: str,
+        tags: Optional[list] = None,
+        concept_ids: Optional[list] = None,
+        ingested: Optional[str] = None,
+    ) -> dict:
+        properties: dict = {
+            "Title": {"title": [{"text": {"content": title}}]},
+            "URL": {"url": url},
+            "Type": {"select": {"name": type_}},
+        }
+        if ingested is not None:
+            properties["Ingested"] = {"date": {"start": ingested}}
+        children = _summary_to_paragraph_blocks(summary)
+        body = {
+            "parent": {"database_id": self._sources_db_id},
+            "properties": properties,
+            "children": children,
+        }
+        return self._request("POST", "/pages", body)
+
     def _request(self, method: str, path: str, body: Optional[dict] = None) -> dict:
         url = f"{_NOTION_API_BASE}{path}"
         data = json.dumps(body).encode("utf-8") if body is not None else None

@@ -128,5 +128,54 @@ class TestFindConceptByTitle(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class TestCreateSource(unittest.TestCase):
+    def test_basic_create_sends_correct_payload(self):
+        created_page = {
+            "id": "new-src-id",
+            "properties": {
+                "Title": {"title": [{"plain_text": "Paper"}]},
+                "URL": {"url": "https://example.com/p"},
+            },
+        }
+        captured = []
+
+        def capture(req):
+            captured.append(req)
+            return _make_response(created_page)
+
+        with patch.object(_OPENER, "open", side_effect=capture):
+            writer = _make_writer()
+            result = writer.create_source(
+                url="https://example.com/p",
+                title="Paper",
+                type_="paper",
+                summary="First paragraph.\n\nSecond paragraph.",
+                ingested="2026-04-12",
+            )
+
+        self.assertIn("/pages", captured[0].full_url)
+        self.assertEqual(captured[0].method, "POST")
+        body = json.loads(captured[0].data.decode("utf-8"))
+        self.assertEqual(body["parent"], {"database_id": "src-db"})
+        props = body["properties"]
+        self.assertEqual(props["Title"]["title"][0]["text"]["content"], "Paper")
+        self.assertEqual(props["URL"]["url"], "https://example.com/p")
+        self.assertEqual(props["Type"]["select"]["name"], "paper")
+        self.assertEqual(props["Ingested"]["date"]["start"], "2026-04-12")
+        self.assertNotIn("Tags", props)
+        self.assertNotIn("Concepts", props)
+        children = body["children"]
+        self.assertEqual(len(children), 2)
+        self.assertEqual(
+            children[0]["paragraph"]["rich_text"][0]["text"]["content"],
+            "First paragraph.",
+        )
+        self.assertEqual(
+            children[1]["paragraph"]["rich_text"][0]["text"]["content"],
+            "Second paragraph.",
+        )
+        self.assertEqual(result["id"], "new-src-id")
+
+
 if __name__ == "__main__":
     unittest.main()
