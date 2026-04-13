@@ -89,3 +89,14 @@ codedb.snapshot
 assistant/.env
 assistant/.wrangler/
 target/
+
+# notion-wiki: raw sources and working outputs stay local
+wiki/raw/
+wiki/assets/
+wiki/outputs/
+wiki/.env
+wiki/codedb.snapshot
+
+# notion-wiki: override the repo-wide `CLAUDE.md` ignore so the wiki's
+# CLAUDE.md (created in Task A4) can be committed.
+!wiki/CLAUDE.md
