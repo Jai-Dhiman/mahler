@@ -95,11 +95,12 @@ ingest.py:
   4. Ask Claude (via the active session, not a subprocess) to produce:
      - Source summary (~400 words, Markdown)
      - List of concepts the source should relate to (existing or new)
-  5. For each concept:
-     - If concept exists in Concepts DB → append source to its Concept.sources relation
-     - If concept does not exist → FAIL LOUDLY: "Concept 'X' does not exist. Create it first,
+  5. For each concept title the user passed:
+     - Look up the concept by title in the Concepts DB
+     - If it does not exist → FAIL LOUDLY: "Concept 'X' does not exist. Create it first,
        then re-run ingest." (No auto-stubbing — concepts are curated.)
-  6. Create Source page in Sources DB with properties + summary as page body
+     - If it exists → collect its page id
+  6. Create Source page in Sources DB with properties (including the Concepts relation = collected ids) + summary as page body. Notion's bidirectional relation auto-populates `Concept.sources` on the other side.
   7. Append Log entry: INGEST, source_url, page_id, timestamp
   8. Print Source page URL + updated Concept page URLs
 ```
@@ -181,8 +182,8 @@ Bootstrapping (one-time re-ingest of 62 sources) is **not** tested — it's a ma
 
 ### `mahler/wiki/scripts/notion_client.py` (write-side) — DEEP
 
-- **Interface:** `NotionWikiWriter(token, sources_db_id, concepts_db_id, log_db_id)` with methods `create_source(url, title, summary, tags, concepts) -> dict`, `update_concept_sources(concept_title, source_page_id) -> dict`, `find_source_by_url(url) -> dict | None`, `find_concept_by_title(title) -> dict | None`, `append_log(kind, detail) -> dict`.
-- **Hides:** Notion property JSON shapes, relation update semantics, pagination for lookup, 429 retry with backoff, SSRF-safe HTTPS opener, idempotency checks.
+- **Interface:** `NotionWikiWriter(token, sources_db_id, concepts_db_id, log_db_id)` with methods `create_source(url, title, summary, tags, concept_ids) -> dict`, `find_source_by_url(url) -> dict | None`, `find_concept_by_title(title) -> dict | None`, `append_log(kind, detail) -> dict`.
+- **Hides:** Notion property JSON shapes, pagination for lookup, 429 retry with backoff, SSRF-safe HTTPS opener, idempotency checks. The `Source → Concepts` relation is set once at create time; Notion's bidirectional relation auto-populates `Concept.sources` on the other side, so no read-modify-write cycle is needed.
 - **Tested through:** direct unit tests at the class level using the `_OPENER` mock boundary.
 
 ### `mahler/wiki/scripts/ingest.py` — SHALLOW (justified)
