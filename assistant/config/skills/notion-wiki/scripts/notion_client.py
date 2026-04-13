@@ -126,14 +126,28 @@ class NotionWikiReader:
         blocks = self._fetch_children(page_id)
         body_markdown = _blocks_to_markdown(blocks)
 
+        related = []
+        for prop_name in ("Concepts", "Sources"):
+            prop = props.get(prop_name, {})
+            if prop.get("type") != "relation":
+                continue
+            for rel in prop.get("relation", []):
+                related.append(self._lookup_title(rel["id"]))
+
         return {
             "id": page["id"],
             "title": title,
             "type": type_,
             "url": url,
             "body_markdown": body_markdown,
-            "related_sources": [],
+            "related_sources": related,
         }
+
+    def _lookup_title(self, page_id: str) -> dict:
+        page = self._request("GET", f"/pages/{page_id}", None)
+        title_parts = page.get("properties", {}).get("Title", {}).get("title", [])
+        title = "".join(p.get("plain_text", "") for p in title_parts).strip()
+        return {"id": page["id"], "title": title}
 
     def _fetch_children(self, page_id: str) -> list:
         results = []

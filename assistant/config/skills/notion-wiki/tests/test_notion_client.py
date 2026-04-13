@@ -241,5 +241,52 @@ class TestReaderReadPage(unittest.TestCase):
         self.assertEqual(result["body_markdown"], "kept")
 
 
+class TestReaderReadRelations(unittest.TestCase):
+    def test_source_page_returns_linked_concept_titles(self):
+        src_page = {
+            "id": "src-r",
+            "parent": {"type": "database_id", "database_id": "src"},
+            "properties": {
+                "Title": {"type": "title", "title": [{"plain_text": "The Paper"}]},
+                "Concepts": {
+                    "type": "relation",
+                    "relation": [{"id": "con-a"}, {"id": "con-b"}],
+                },
+            },
+        }
+        blocks_response = {"results": [], "has_more": False, "next_cursor": None}
+        con_a = {
+            "id": "con-a",
+            "properties": {"Title": {"type": "title", "title": [{"plain_text": "Alpha"}]}},
+        }
+        con_b = {
+            "id": "con-b",
+            "properties": {"Title": {"type": "title", "title": [{"plain_text": "Beta"}]}},
+        }
+
+        responses = [
+            _make_response(src_page),
+            _make_response(blocks_response),
+            _make_response(con_a),
+            _make_response(con_b),
+        ]
+        calls = []
+
+        def side_effect(req):
+            calls.append(req)
+            return responses[len(calls) - 1]
+
+        with patch.object(_OPENER, "open", side_effect=side_effect):
+            reader = _make_reader()
+            result = reader.read_page("src-r")
+
+        self.assertEqual(result["related_sources"], [
+            {"id": "con-a", "title": "Alpha"},
+            {"id": "con-b", "title": "Beta"},
+        ])
+        self.assertIn("/pages/con-a", calls[2].full_url)
+        self.assertIn("/pages/con-b", calls[3].full_url)
+
+
 if __name__ == "__main__":
     unittest.main()
