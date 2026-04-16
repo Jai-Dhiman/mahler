@@ -69,6 +69,21 @@ def cmd_list(args: argparse.Namespace) -> None:
             print(f"  {evt['description'][:80]}")
 
 
+def cmd_create(args: argparse.Namespace) -> None:
+    client_id, client_secret, refresh_token = _get_credentials()
+    access_token = gcal_client.refresh_access_token(client_id, client_secret, refresh_token)
+    attendees = [e.strip() for e in args.attendees.split(",")] if args.attendees else None
+    result = gcal_client.create_event(
+        access_token=access_token,
+        summary=args.title,
+        start=args.start,
+        end=args.end,
+        attendees=attendees,
+        description=args.description,
+    )
+    print(f"Created: {result['id']} \u2014 {result['summary']}")
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description="Mahler Google Calendar")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -77,14 +92,16 @@ def main(argv=None) -> None:
     p_list.add_argument("--days", type=int, default=7)
     p_list.add_argument("--hours-ahead", dest="hours_ahead", type=int, default=None)
 
-    # create subcommand added in Task 5
-    sub.add_parser("create")
+    p_create = sub.add_parser("create")
+    p_create.add_argument("--title", required=True)
+    p_create.add_argument("--start", required=True)
+    p_create.add_argument("--end", required=True)
+    p_create.add_argument("--attendees", default=None)
+    p_create.add_argument("--description", default=None)
 
     args = parser.parse_args(argv)
-    if args.command == "list":
-        cmd_list(args)
-    else:
-        raise RuntimeError(f"Unknown command: {args.command}")
+    dispatch = {"list": cmd_list, "create": cmd_create}
+    dispatch[args.command](args)
 
 
 if __name__ == "__main__":
