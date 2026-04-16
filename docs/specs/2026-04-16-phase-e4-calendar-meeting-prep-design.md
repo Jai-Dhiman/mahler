@@ -68,6 +68,17 @@ A Hermes plugin fires before every LLM turn. It queries `meeting_prep_log` for a
 - **Hides:** Cloudflare D1 REST API, HTTP request construction, JSON encoding, error parsing, table creation SQL.
 - **Depth:** DEEP — same depth as `email-triage/d1_client.py`; meeting-prep-specific methods only.
 
+**`meeting_prep_log` D1 schema:**
+```sql
+CREATE TABLE IF NOT EXISTS meeting_prep_log (
+    event_id    TEXT PRIMARY KEY,
+    summary     TEXT NOT NULL,
+    start_time  TEXT NOT NULL,
+    notified_at TEXT NOT NULL
+)
+```
+`notified_at` is set to `datetime('now')` on insert. `start_time` is an ISO 8601 string (`2026-04-16T15:00:00Z`). The plugin queries this table with `WHERE start_time > datetime('now') AND start_time < datetime('now', '+2 hours')` ordered by `start_time ASC LIMIT 1`.
+
 ### `dedup.py`
 
 - **Interface:** CLI `check --event-id ID` (exit 0 = proceed, exit 1 = already notified, non-zero + RuntimeError = D1 failure) and `log --event-id ID --summary TEXT --start-time ISO8601`
