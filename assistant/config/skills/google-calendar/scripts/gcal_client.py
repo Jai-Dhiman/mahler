@@ -81,6 +81,51 @@ def _normalize_event(item: dict) -> dict:
     }
 
 
+def create_event(
+    access_token: str,
+    summary: str,
+    start: str,
+    end: str,
+    attendees: list[str] | None = None,
+    description: str | None = None,
+) -> dict:
+    """Create a calendar event. Returns normalized event dict. Raises on API error."""
+    body: dict = {
+        "summary": summary,
+        "start": {"dateTime": start},
+        "end": {"dateTime": end},
+    }
+    if attendees:
+        body["attendees"] = [{"email": e} for e in attendees]
+    if description:
+        body["description"] = description
+    url = f"{_CALENDAR_API_BASE}/calendars/primary/events"
+    encoded = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=encoded,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with _OPENER.open(req) as resp:
+            status = resp.status
+            raw = resp.read()
+    except urllib.error.HTTPError as exc:
+        raw = exc.read()
+        raise RuntimeError(
+            f"Calendar API error: HTTP {exc.code} — {raw.decode('utf-8', errors='replace')}"
+        )
+    if status not in (200, 201):
+        raise RuntimeError(
+            f"Calendar API error: HTTP {status} — {raw.decode('utf-8', errors='replace')}"
+        )
+    return _normalize_event(json.loads(raw))
+
+
 def _calendar_get(url: str, access_token: str) -> dict:
     req = urllib.request.Request(
         url,

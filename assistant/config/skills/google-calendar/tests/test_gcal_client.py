@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import urllib.error
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "scripts"))
-from gcal_client import refresh_access_token, list_events
+from gcal_client import refresh_access_token, list_events, create_event
 
 
 def _make_response(body, status=200):
@@ -96,6 +96,34 @@ class TestListEvents(unittest.TestCase):
         mock_opener.open.side_effect = _make_http_error(403, b'{"error":"forbidden"}')
         with self.assertRaises(RuntimeError) as ctx:
             list_events("tok", "2026-04-16T00:00:00Z", "2026-04-16T23:59:00Z")
+        self.assertIn("403", str(ctx.exception))
+
+
+class TestCreateEvent(unittest.TestCase):
+
+    @patch("gcal_client._OPENER")
+    def test_returns_normalized_event_with_id_and_summary(self, mock_opener):
+        mock_opener.open.return_value = _make_response({
+            "id": "new-evt-abc",
+            "summary": "Lunch with Alice",
+            "start": {"dateTime": "2026-04-17T12:00:00Z"},
+            "end": {"dateTime": "2026-04-17T13:00:00Z"},
+        })
+        result = create_event(
+            access_token="tok",
+            summary="Lunch with Alice",
+            start="2026-04-17T12:00:00Z",
+            end="2026-04-17T13:00:00Z",
+        )
+        self.assertEqual(result["id"], "new-evt-abc")
+        self.assertEqual(result["summary"], "Lunch with Alice")
+        self.assertEqual(result["start"], "2026-04-17T12:00:00Z")
+
+    @patch("gcal_client._OPENER")
+    def test_raises_on_403(self, mock_opener):
+        mock_opener.open.side_effect = _make_http_error(403, b'{"error":"forbidden"}')
+        with self.assertRaises(RuntimeError) as ctx:
+            create_event("tok", "Meeting", "2026-04-17T12:00:00Z", "2026-04-17T13:00:00Z")
         self.assertIn("403", str(ctx.exception))
 
 
