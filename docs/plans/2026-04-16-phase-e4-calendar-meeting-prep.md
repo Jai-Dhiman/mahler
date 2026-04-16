@@ -958,16 +958,6 @@ class D1Client:
 )""",
             [],
         )
-
-    def get_upcoming_meeting(self) -> Optional[dict]:
-        """Return the next logged meeting starting within 2 hours, or None."""
-        rows = self.query(
-            "SELECT event_id, summary, start_time FROM meeting_prep_log "
-            "WHERE start_time > datetime('now') AND start_time < datetime('now', '+2 hours') "
-            "ORDER BY start_time ASC LIMIT 1",
-            [],
-        )
-        return rows[0] if rows else None
 ```
 
 - [ ] **Step 4: Run test — verify it PASSES**
@@ -1460,8 +1450,9 @@ git add assistant/config/skills/meeting-prep/ && git commit -m "feat(meeting-pre
 import sys
 import unittest
 from unittest.mock import patch
+from pathlib import Path
 
-sys.path.insert(0, "..")
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 class TestPluginReturnNone(unittest.TestCase):
@@ -1547,10 +1538,8 @@ def upcoming_meeting_context(
         meeting = _query_upcoming_meeting()
         if not meeting:
             return None
-        now = _now or datetime.now(timezone.utc)
-        start = datetime.fromisoformat(meeting["start_time"].replace("Z", "+00:00"))
-        minutes_until = int((start - now).total_seconds() / 60)
-        return {"context": f"Upcoming meeting in {minutes_until}min: {meeting['summary']}"}
+        # Context string with minutes added in Task 12
+        return None
     except Exception:
         return None
 
@@ -1581,6 +1570,7 @@ git add assistant/config/plugins/ && git commit -m "feat(calendar-aware): add pl
 **Interface under test:** `D1Client.get_upcoming_meeting() -> dict | None`
 
 **Files:**
+- Modify: `assistant/config/skills/meeting-prep/scripts/d1_client.py`
 - Modify: `assistant/config/skills/meeting-prep/tests/test_d1_client.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -1611,49 +1601,50 @@ cd assistant/config/skills/meeting-prep && python3 -m pytest tests/test_d1_clien
 ```
 Expected: FAIL — `AttributeError: 'D1Client' object has no attribute 'get_upcoming_meeting'`
 
-Wait — `get_upcoming_meeting` was already included in the Task 6 implementation above. If the subagent implementing Task 6 included it, this test will pass immediately. That means this task needs to verify it's there and working rather than implementing it fresh.
+- [ ] **Step 3: Implement**
 
-Since `get_upcoming_meeting` is already in the d1_client implementation from Task 6, run the test to confirm it passes. If the Task 6 subagent did not include it, add it now:
+Add to the `D1Client` class in `d1_client.py`:
 
 ```python
-def get_upcoming_meeting(self) -> Optional[dict]:
-    """Return the next logged meeting starting within 2 hours, or None."""
-    rows = self.query(
-        "SELECT event_id, summary, start_time FROM meeting_prep_log "
-        "WHERE start_time > datetime('now') AND start_time < datetime('now', '+2 hours') "
-        "ORDER BY start_time ASC LIMIT 1",
-        [],
-    )
-    return rows[0] if rows else None
+    def get_upcoming_meeting(self) -> Optional[dict]:
+        """Return the next logged meeting starting within 2 hours, or None."""
+        rows = self.query(
+            "SELECT event_id, summary, start_time FROM meeting_prep_log "
+            "WHERE start_time > datetime('now') AND start_time < datetime('now', '+2 hours') "
+            "ORDER BY start_time ASC LIMIT 1",
+            [],
+        )
+        return rows[0] if rows else None
 ```
 
-- [ ] **Step 3: Run test — verify it PASSES**
+- [ ] **Step 4: Run test — verify it PASSES**
 
 ```bash
 cd assistant/config/skills/meeting-prep && python3 -m pytest tests/test_d1_client.py -v
 ```
 Expected: PASS (all tests)
 
-- [ ] **Step 4: Commit** (only if changes were needed)
+- [ ] **Step 5: Commit**
 
 ```bash
-git add assistant/config/skills/meeting-prep/scripts/d1_client.py assistant/config/skills/meeting-prep/tests/test_d1_client.py && git commit -m "feat(meeting-prep): verify get_upcoming_meeting on d1_client"
+git add assistant/config/skills/meeting-prep/scripts/d1_client.py assistant/config/skills/meeting-prep/tests/test_d1_client.py && git commit -m "feat(meeting-prep): add get_upcoming_meeting to d1_client"
 ```
 
 ---
 
 ### Task 12: `plugin.py` — returns context string when meeting is within 2 hours
 
-**Group:** E (parallel with Tasks 5, 12; depends on Task 10)
+**Group:** E (parallel with Tasks 5; depends on Task 10 and Task 11)
 **Behavior being verified:** When a meeting exists within 2 hours, `upcoming_meeting_context` returns `{"context": "Upcoming meeting in Xmin: <summary>"}` with correct minutes.
 **Interface under test:** `upcoming_meeting_context(session_id, user_message, is_first_turn, _now=datetime, **kwargs)`
 
 **Files:**
+- Modify: `assistant/config/plugins/calendar-aware/plugin.py`
 - Modify: `assistant/config/plugins/calendar-aware/tests/test_plugin.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `test_plugin.py`:
+Add to `test_plugin.py` (add `from datetime import datetime, timezone` at the top import block):
 
 ```python
 from datetime import datetime, timezone
@@ -1695,11 +1686,32 @@ class TestPluginReturnContext(unittest.TestCase):
 ```bash
 cd assistant/config/plugins/calendar-aware && python3 -m pytest tests/test_plugin.py::TestPluginReturnContext -v
 ```
-Expected: FAIL — context string format mismatch or `_query_upcoming_meeting` not returning correct fields
+Expected: FAIL — `AssertionError: assertIsNotNone(None)` (Task 10 stub returns None for meeting branch)
 
-- [ ] **Step 3: Verify implementation is correct**
+- [ ] **Step 3: Implement**
 
-The `upcoming_meeting_context` function in `plugin.py` already handles this case. Confirm the format string is `f"Upcoming meeting in {minutes_until}min: {meeting['summary']}"`. If tests fail, ensure `start_time` uses `.replace("Z", "+00:00")` for `fromisoformat` compatibility on Python 3.10.
+Replace the stub `upcoming_meeting_context` body in `plugin.py` with the full implementation:
+
+```python
+def upcoming_meeting_context(
+    session_id: str,
+    user_message: str,
+    is_first_turn: bool,
+    _now: datetime | None = None,
+    **kwargs,
+) -> dict | None:
+    """Called before each LLM turn. Injects upcoming meeting context or returns None."""
+    try:
+        meeting = _query_upcoming_meeting()
+        if not meeting:
+            return None
+        now = _now or datetime.now(timezone.utc)
+        start = datetime.fromisoformat(meeting["start_time"].replace("Z", "+00:00"))
+        minutes_until = int((start - now).total_seconds() / 60)
+        return {"context": f"Upcoming meeting in {minutes_until}min: {meeting['summary']}"}
+    except Exception:
+        return None
+```
 
 - [ ] **Step 4: Run test — verify it PASSES**
 
@@ -1711,7 +1723,7 @@ Expected: PASS (all 4 tests)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add assistant/config/plugins/ && git commit -m "feat(calendar-aware): verify context string output with minutes and summary"
+git add assistant/config/plugins/ && git commit -m "feat(calendar-aware): add context string with minutes and meeting summary"
 ```
 
 ---
@@ -1980,14 +1992,15 @@ if 'meeting-prep' not in existing_skills:
 
 - [ ] **Step 3: Update `.env.example`**
 
-Add missing entries:
+Add the two genuinely new entries (after the existing `NOTION_WIKI_CONCEPTS_DB_ID=` line):
 
 ```bash
-# Google Calendar + meeting prep (Phase E4)
-GMAIL_REFRESH_TOKEN=
+# notion-tasks skill (Phase E4 — called from meeting-prep cron)
 NOTION_API_TOKEN=
 NOTION_DATABASE_ID=
 ```
+
+Note: `GMAIL_REFRESH_TOKEN=` already exists in `.env.example` (line 9) — do NOT add it again.
 
 - [ ] **Step 4: Verify Dockerfile builds (local check)**
 
@@ -2075,69 +2088,37 @@ One deployment concern: `entrypoint.sh` bridges `NOTION_API_TOKEN` and `NOTION_D
 ### Findings
 
 **[BLOCKER] (confidence: 9/10) — `sys.path.insert(0, "..")` in `test_plugin.py` resolves to the wrong directory.**
-
-Task 10, Step 1 sets up the test with:
-```python
-sys.path.insert(0, "..")
-```
-
-When run as `cd assistant/config/plugins/calendar-aware && python3 -m pytest tests/test_plugin.py`, `".."` resolves to `assistant/config/plugins/` — NOT `assistant/config/plugins/calendar-aware/` where `plugin.py` lives. The import `from plugin import upcoming_meeting_context` will fail with `ModuleNotFoundError` even after the implementation is written.
-
-**Required fix:** Change to `sys.path.insert(0, ".")` (adds `calendar-aware/` to path when run from that directory), or use the path-agnostic form:
-```python
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-```
+~~FIXED: Task 10 Step 1 test now uses `sys.path.insert(0, str(Path(__file__).parent.parent))` which correctly resolves to `calendar-aware/` regardless of working directory.~~
 
 ---
 
-**[BLOCKER] (confidence: 9/10) — Tasks 11 and 12 are horizontal slices: their tests will pass immediately because their implementations are already written in Tasks 6 and 10.**
-
-- **Task 11** tests `get_upcoming_meeting` on `D1Client`. But Task 6's Step 3 implementation includes `get_upcoming_meeting` in full. Task 11's Step 2 says "Expected: FAIL — AttributeError" but this error will not occur. The plan itself acknowledges this inline (line 1614): _"Wait — `get_upcoming_meeting` was already included in the Task 6 implementation above."_ This makes Task 11 a test-after-implementation task — exactly the horizontal slice the plan rules prohibit.
-
-- **Task 12** tests `upcoming_meeting_context` returning a context string with minutes. But Task 10's Step 3 implementation includes the complete happy path logic (`fromisoformat`, minutes calculation, context string). Task 12's Step 2 says "Expected: FAIL — context string format mismatch" but the implementation is already there and correct. Same violation.
-
-**Required fix (choose one approach):**
-
-Option A (simpler — fold tests up): Remove `get_upcoming_meeting` from Task 6's Step 3 implementation and the context-return logic from Task 10's Step 3 implementation. Tasks 11 and 12 then each have a genuinely failing test before implementing.
-
-Option B (simpler — fold tasks down): Remove Tasks 11 and 12 entirely. Add their test cases to Tasks 6 and 10 respectively as additional test classes in the same Step 1 block, then implement in Step 3.
-
-Option A preserves the single-test-per-task structure. Option B reduces task count. Either is acceptable. The build agent must NOT follow Tasks 11 and 12 as written.
+**[BLOCKER] (confidence: 9/10) — Tasks 11 and 12 were horizontal slices.**
+~~FIXED: `get_upcoming_meeting` removed from Task 6 implementation (Task 11 is now a genuine TDD cycle). `upcoming_meeting_context` in Task 10 now stubs the meeting branch with `return None`; Task 12 replaces the stub with the full context-string implementation (genuine failing test: `assertIsNotNone(None)`).~~
 
 ---
 
 **[RISK] (confidence: 7/10) — Hermes v0.9.0 `pre_llm_call` plugin API is not verified against actual Hermes source.**
 
-`plugin.py` uses `ctx.register_hook("pre_llm_call", upcoming_meeting_context)` in `register(ctx)`. The CLAUDE.md confirms the "pluggable context engine slot via `hermes plugins` (v0.9)" feature exists, but the exact method name (`register_hook`), hook name (`pre_llm_call`), and callback signature are not confirmed in any file in the repository. If the API differs, the plugin will either fail silently at load or error at startup.
+`plugin.py` uses `ctx.register_hook("pre_llm_call", upcoming_meeting_context)` in `register(ctx)`. The CLAUDE.md confirms the "pluggable context engine slot via `hermes plugins` (v0.9)" feature exists, but the exact method name (`register_hook`), hook name (`pre_llm_call`), and callback signature are not confirmed in any file in the repository. If the API differs, the plugin will fail at load or not inject context.
 
-Fallback: If the API call fails, the plugin's `upcoming_meeting_context` catch-all (`except Exception: return None`) would protect chat turns, but the plugin would never inject context. Run `flyctl ssh console --user hermes -C "hermes logs errors"` after the first deploy to verify the plugin loaded.
+Fallback: Run `flyctl ssh console --user hermes -C "hermes logs errors"` after the first deploy to confirm the plugin loaded. The `except Exception: return None` in `upcoming_meeting_context` ensures chat turns are never broken even if the hook never fires.
 
 ---
 
-**[RISK] (confidence: 8/10) — `.env.example` Task 14 adds a duplicate `GMAIL_REFRESH_TOKEN=` entry.**
-
-The existing `.env.example` (line 9) already has `GMAIL_REFRESH_TOKEN=`. Task 14 Step 3 adds a block including `GMAIL_REFRESH_TOKEN=` again under a new `# Google Calendar + meeting prep (Phase E4)` comment. This creates a duplicate key that is confusing and technically harmless but should be avoided.
-
-**Required fix:** Task 14 `.env.example` changes should only add the genuinely new entries: `NOTION_API_TOKEN=` and `NOTION_DATABASE_ID=`. Remove `GMAIL_REFRESH_TOKEN=` from the Task 14 block.
+**[RISK] (confidence: 8/10) — `.env.example` Task 14 duplicate `GMAIL_REFRESH_TOKEN=` entry.**
+~~FIXED: Task 14 Step 3 now only adds `NOTION_API_TOKEN=` and `NOTION_DATABASE_ID=` with a note not to duplicate the existing `GMAIL_REFRESH_TOKEN=`.~~
 
 ---
 
 **[RISK] (confidence: 6/10) — `dedup.py log` does not call `ensure_meeting_prep_table`.**
 
-`cmd_log` calls `_get_client()` then `client.insert_meeting_prep(...)` directly. If someone invokes `dedup.py log` standalone (e.g., debugging, manual recovery), they may get `sqlite3.OperationalError: no such table: meeting_prep_log`. In the normal SKILL.md flow this is safe because `check` always runs before `log` and `check` calls `ensure_meeting_prep_table`. Acceptable given the procedural constraint, but the build agent should be aware of this fragility.
+`cmd_log` calls `insert_meeting_prep` directly without `ensure_meeting_prep_table`. In the normal SKILL.md flow `check` always runs first and creates the table. Standalone `log` invocation (e.g., manual recovery) would fail with "no such table". Acceptable given the procedural constraint — the build agent should note this.
 
 ---
 
-**[RISK] (confidence: 5/10) — Task 5 test `test_create_passes_attendee_list_to_create_event` asserts on internal call signature.**
+**[RISK] (confidence: 5/10) — Task 5 test asserts on internal call signature.**
 
-```python
-call_kwargs = mock_create.call_args[1]
-self.assertEqual(call_kwargs["attendees"], ["alice@x.com", "bob@y.com"])
-```
-
-This tests that `create_event` was called with the correct `attendees` kwarg — verifying internal plumbing rather than user-observable output. Since `gcal_client` is mocked to avoid HTTP, this is the only observable point for the attendee-parsing behavior, making it pragmatically acceptable. Verify this is actually an issue; it may not be worth changing.
+`mock_create.call_args[1]` checks the `attendees` kwarg passed to `gcal_client.create_event`. Since `gcal_client` is mocked to avoid HTTP, this is the only observable point for attendee-parsing behavior. Pragmatically acceptable.
 
 ---
 
@@ -2148,26 +2129,19 @@ This tests that `create_event` was called with the correct `attendees` kwarg —
 | `email_triage_log` has `from_addr` column | SAFE | Confirmed in `email-triage/scripts/d1_client.py` line 93 |
 | Hermes v0.9.0 supports `ctx.register_hook("pre_llm_call", ...)` API | RISKY | Not verified in any file; CLAUDE.md only confirms the feature category exists |
 | `tasks.py list --due-before` is a valid argument | SAFE | Documented in `tasks.py` docstring line 6 |
-| `dedup.py check` exit codes are respected by Hermes shell execution | VALIDATE | Hermes exit code handling for script-invoked CLIs not confirmed in docs |
-| `CF_API_TOKEN` env var name in container matches what scripts expect | SAFE | Confirmed in `entrypoint.sh` and `triage.py` both use `CF_API_TOKEN` |
+| `dedup.py check` exit codes respected by Hermes shell execution | VALIDATE | Hermes exit code handling for script-invoked CLIs not confirmed in docs |
+| `CF_API_TOKEN` env var name matches what scripts expect | SAFE | Confirmed in `entrypoint.sh` and `triage.py` both use `CF_API_TOKEN` |
 | `plugin.py` hardcoded path `~/.hermes/skills/meeting-prep/scripts` exists in container | SAFE | Dockerfile COPY for meeting-prep creates this path |
-| `sys.path.insert(0, "..")` in `test_plugin.py` makes `plugin.py` importable | RISKY | When run from `calendar-aware/`, `..` resolves to `plugins/` not `calendar-aware/` — **this is Blocker 1** |
-| `NOTION_API_TOKEN` and `NOTION_DATABASE_ID` are set as Fly.io secrets | VALIDATE | Local `.env` has them; Fly.io secrets must be set separately with `flyctl secrets set` |
+| `NOTION_API_TOKEN` and `NOTION_DATABASE_ID` are set as Fly.io secrets | VALIDATE | Present in local `.env`; must be set with `flyctl secrets set` before deploy |
 
 ---
 
 ### Summary
 
 ```
-[BLOCKER] count: 2
-[RISK]    count: 5
+[BLOCKER] count: 0  (both resolved in this revision)
+[RISK]    count: 3  (env.example duplicate resolved; Hermes plugin API and dedup.log fragility remain)
 [QUESTION] count: 0
 ```
 
-**Blocker 1 fix (5 min):** Change `sys.path.insert(0, "..")` to `sys.path.insert(0, ".")` in Task 10 Step 1 test code.
-
-**Blocker 2 fix (10 min):** Choose Option A or B above for Tasks 11/12. Simplest: strip `get_upcoming_meeting` from Task 6 Step 3 and the context-return branch from Task 10 Step 3 so those tasks have genuinely failing tests.
-
-**Risk 3 fix (2 min):** Remove `GMAIL_REFRESH_TOKEN=` from Task 14 `.env.example` block.
-
-VERDICT: NEEDS_REWORK — [Blocker 1: test_plugin.py sys.path wrong directory; Blocker 2: Tasks 11/12 horizontal slices with pre-implemented tests]
+VERDICT: PROCEED_WITH_CAUTION — [Risk 1: verify Hermes pre_llm_call plugin API after first deploy via `hermes logs errors`; Risk 2: dedup.py log standalone invocation fragile if table not pre-created by check]
