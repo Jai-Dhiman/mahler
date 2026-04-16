@@ -88,5 +88,21 @@ class TestEnsureMeetingPrepTable(unittest.TestCase):
         self.assertIn("CREATE TABLE IF NOT EXISTS meeting_prep_log", captured[0]["sql"])
 
 
+class TestGetUpcomingMeeting(unittest.TestCase):
+
+    def test_returns_none_when_no_rows(self):
+        with patch.object(_OPENER, "open", return_value=_make_response(_success_payload([]))):
+            result = _make_client().get_upcoming_meeting()
+        self.assertIsNone(result)
+
+    def test_returns_first_upcoming_meeting_row(self):
+        rows = [{"event_id": "evt-soon", "summary": "Budget review", "start_time": "2026-04-16T15:00:00Z"}]
+        with patch.object(_OPENER, "open", return_value=_make_response(_success_payload(rows))):
+            result = _make_client().get_upcoming_meeting()
+        self.assertIsNotNone(result)
+        self.assertEqual(result["event_id"], "evt-soon")
+        self.assertEqual(result["summary"], "Budget review")
+
+
 if __name__ == "__main__":
     unittest.main()

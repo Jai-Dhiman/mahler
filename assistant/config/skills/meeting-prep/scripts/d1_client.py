@@ -77,6 +77,16 @@ class D1Client:
             [event_id, summary, start_time],
         )
 
+    def get_upcoming_meeting(self) -> Optional[dict]:
+        """Return the next logged meeting starting within 2 hours, or None."""
+        rows = self.query(
+            "SELECT event_id, summary, start_time FROM meeting_prep_log "
+            "WHERE start_time > datetime('now') AND start_time < datetime('now', '+2 hours') "
+            "ORDER BY start_time ASC LIMIT 1",
+            [],
+        )
+        return rows[0] if rows else None
+
     def ensure_meeting_prep_table(self) -> None:
         """Create meeting_prep_log table if it does not exist. Safe to call on every run."""
         self.query(
