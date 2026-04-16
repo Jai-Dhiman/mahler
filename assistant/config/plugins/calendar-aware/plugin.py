@@ -3,10 +3,13 @@ Calendar-aware pre_llm_call plugin for Mahler.
 Injects a one-line upcoming meeting reminder into every chat turn.
 Returns None silently on any failure -- must never break a chat turn.
 """
+import logging
 import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def _load_hermes_env() -> None:
@@ -27,8 +30,9 @@ def _load_hermes_env() -> None:
 def _query_upcoming_meeting() -> dict | None:
     """Query meeting_prep_log for the next meeting starting within 2 hours."""
     _load_hermes_env()
-    meeting_prep_scripts = Path.home() / ".hermes" / "skills" / "meeting-prep" / "scripts"
-    sys.path.insert(0, str(meeting_prep_scripts))
+    meeting_prep_scripts = str(Path.home() / ".hermes" / "skills" / "meeting-prep" / "scripts")
+    if meeting_prep_scripts not in sys.path:
+        sys.path.insert(0, meeting_prep_scripts)
     from d1_client import D1Client
     account_id = os.environ.get("CF_ACCOUNT_ID", "")
     database_id = os.environ.get("CF_D1_DATABASE_ID", "")
@@ -55,7 +59,8 @@ def upcoming_meeting_context(
         start = datetime.fromisoformat(meeting["start_time"].replace("Z", "+00:00"))
         minutes_until = int((start - now).total_seconds() / 60)
         return {"context": f"Upcoming meeting in {minutes_until}min: {meeting['summary']}"}
-    except Exception:
+    except Exception as exc:
+        logger.debug("calendar-aware plugin error: %s", exc)
         return None
 
 
