@@ -51,8 +51,10 @@ def upcoming_meeting_context(
         meeting = _query_upcoming_meeting()
         if not meeting:
             return None
-        # Context string with minutes added in Task 12
-        return None
+        now = _now or datetime.now(timezone.utc)
+        start = datetime.fromisoformat(meeting["start_time"].replace("Z", "+00:00"))
+        minutes_until = int((start - now).total_seconds() / 60)
+        return {"context": f"Upcoming meeting in {minutes_until}min: {meeting['summary']}"}
     except Exception:
         return None
 
