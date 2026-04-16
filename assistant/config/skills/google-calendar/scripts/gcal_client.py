@@ -47,3 +47,52 @@ def refresh_access_token(client_id: str, client_secret: str, refresh_token: str)
     if "access_token" not in data:
         raise RuntimeError(f"Token refresh response missing access_token: {data}")
     return data["access_token"]
+
+
+def list_events(
+    access_token: str,
+    time_min: str,
+    time_max: str,
+    max_results: int = 50,
+) -> list[dict]:
+    """Fetch calendar events in [time_min, time_max]. Returns normalized event dicts. Raises on API error."""
+    params = urllib.parse.urlencode({
+        "timeMin": time_min,
+        "timeMax": time_max,
+        "maxResults": max_results,
+        "singleEvents": "true",
+        "orderBy": "startTime",
+    })
+    url = f"{_CALENDAR_API_BASE}/calendars/primary/events?{params}"
+    data = _calendar_get(url, access_token)
+    return [_normalize_event(item) for item in data.get("items", [])]
+
+
+def _normalize_event(item: dict) -> dict:
+    start_obj = item.get("start", {})
+    end_obj = item.get("end", {})
+    return {
+        "id": item.get("id", ""),
+        "summary": item.get("summary", "(no title)"),
+        "start": start_obj.get("dateTime") or start_obj.get("date", ""),
+        "end": end_obj.get("dateTime") or end_obj.get("date", ""),
+        "attendees": [a["email"] for a in item.get("attendees", []) if "email" in a],
+        "description": item.get("description", ""),
+    }
+
+
+def _calendar_get(url: str, access_token: str) -> dict:
+    req = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {access_token}"},
+        method="GET",
+    )
+    try:
+        with _OPENER.open(req) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as exc:
+        raw = exc.read()
+        raise RuntimeError(
+            f"Calendar API error: HTTP {exc.code} — {raw.decode('utf-8', errors='replace')}"
+        )
+    return json.loads(raw)
