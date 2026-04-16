@@ -29,6 +29,8 @@ HERMES_ENV="$HOME/.hermes/.env"
   echo "NOTION_WIKI_READ_TOKEN=${NOTION_WIKI_READ_TOKEN}"
   echo "NOTION_WIKI_SOURCES_DB_ID=${NOTION_WIKI_SOURCES_DB_ID}"
   echo "NOTION_WIKI_CONCEPTS_DB_ID=${NOTION_WIKI_CONCEPTS_DB_ID}"
+  echo "NOTION_API_TOKEN=${NOTION_API_TOKEN:-}"
+  echo "NOTION_DATABASE_ID=${NOTION_DATABASE_ID:-}"
 } >> "$HOME/.hermes/.env"
 
 # Register cron jobs in Hermes v0.7.0 format (schedule object + next_run_at)
@@ -125,6 +127,14 @@ if 'morning-brief' not in existing_skills:
         '0 4 * * *',
     ))
     added.append('morning-brief (8am + 8pm PST)')
+
+if 'meeting-prep' not in existing_skills:
+    jobs.append(make_job(
+        ['meeting-prep', 'google-calendar', 'notion-tasks', 'notion-wiki'],
+        'Check if there is a meeting starting in 45 to 75 minutes. If so, check deduplication, gather context from recent emails, open tasks, and the wiki, synthesize a prep brief, post it to Discord, and log the event.',
+        '*/15 * * * *',
+    ))
+    added.append('meeting-prep (every 15 min)')
 
 with open(jobs_file, 'w') as f:
     json.dump({'jobs': jobs, 'updated_at': datetime.now(timezone.utc).isoformat()}, f, indent=2)

@@ -32,6 +32,9 @@ COPY --chown=hermes:hermes config/skills/urgent-alert /home/hermes/.hermes/skill
 COPY --chown=hermes:hermes config/skills/morning-brief /home/hermes/.hermes/skills/morning-brief
 COPY --chown=hermes:hermes config/skills/notion-tasks /home/hermes/.hermes/skills/notion-tasks
 COPY --chown=hermes:hermes config/skills/notion-wiki /home/hermes/.hermes/skills/notion-wiki
+COPY --chown=hermes:hermes config/skills/google-calendar /home/hermes/.hermes/skills/google-calendar
+COPY --chown=hermes:hermes config/skills/meeting-prep /home/hermes/.hermes/skills/meeting-prep
+COPY --chown=hermes:hermes config/plugins /home/hermes/.hermes/plugins
 
 # Copy priority map to Hermes workspace
 RUN mkdir -p /home/hermes/.hermes/workspace
