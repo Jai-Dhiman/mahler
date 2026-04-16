@@ -1,11 +1,12 @@
-import sys
 import json
+import pathlib
+import sys
 import unittest
 from io import BytesIO
 from unittest.mock import MagicMock, patch
 import urllib.error
 
-sys.path.insert(0, "scripts")
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "scripts"))
 from gcal_client import refresh_access_token
 
 

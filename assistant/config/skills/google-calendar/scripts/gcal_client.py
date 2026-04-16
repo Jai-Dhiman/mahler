@@ -37,16 +37,11 @@ def refresh_access_token(client_id: str, client_secret: str, refresh_token: str)
     )
     try:
         with _OPENER.open(req) as resp:
-            status = resp.status
             raw = resp.read()
     except urllib.error.HTTPError as exc:
         raw = exc.read()
         raise RuntimeError(
             f"Token refresh failed: HTTP {exc.code} — {raw.decode('utf-8', errors='replace')}"
-        )
-    if status != 200:
-        raise RuntimeError(
-            f"Token refresh failed: HTTP {status} — {raw.decode('utf-8', errors='replace')}"
         )
     data = json.loads(raw)
     if "access_token" not in data:
