@@ -52,8 +52,9 @@ class TestRefreshAccessToken(unittest.TestCase):
     @patch("outlook_client._OPENER")
     def test_success_returns_token(self, mock_opener):
         mock_opener.open.return_value = _make_response({"access_token": "tok123"})
-        result = refresh_access_token("client_id", "client_secret", "refresh_tok")
-        self.assertEqual(result, "tok123")
+        access_token, new_refresh = refresh_access_token("client_id", "client_secret", "refresh_tok")
+        self.assertEqual(access_token, "tok123")
+        self.assertEqual(new_refresh, "")
 
     @patch("outlook_client._OPENER")
     def test_raises_on_401(self, mock_opener):
@@ -85,7 +86,8 @@ class TestFetchUnreadEmails(unittest.TestCase):
                 junk_resp,
                 *[mark_read_resp for _ in junk_messages],
             ]
-            return fetch_unread_emails("client_id", "client_secret", "refresh_tok")
+            results, _ = fetch_unread_emails("client_id", "client_secret", "refresh_tok")
+            return results
 
     def test_inbox_fetch_returns_correct_shape(self):
         msg = _make_graph_message(
@@ -157,7 +159,7 @@ class TestFetchUnreadEmails(unittest.TestCase):
 
         with patch("outlook_client._OPENER") as mock_opener:
             mock_opener.open.side_effect = [token_resp, inbox_error, junk_error]
-            results = fetch_unread_emails("client_id", "client_secret", "refresh_tok")
+            results, _ = fetch_unread_emails("client_id", "client_secret", "refresh_tok")
 
         self.assertEqual(results, [])
 

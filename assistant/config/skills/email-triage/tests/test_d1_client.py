@@ -137,9 +137,10 @@ class TestD1ClientEnsureTables(unittest.TestCase):
             client = _make_client()
             client.ensure_tables()
 
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 3)
         self.assertIn("CREATE TABLE IF NOT EXISTS email_triage_log", calls[0])
         self.assertIn("CREATE TABLE IF NOT EXISTS triage_state", calls[1])
+        self.assertIn("CREATE TABLE IF NOT EXISTS mahler_kv", calls[2])
 
 
 class TestD1ClientAuthHeader(unittest.TestCase):
@@ -189,7 +190,7 @@ class TestD1ClientAuthHeader(unittest.TestCase):
             client = _make_client()
             client.ensure_tables()
 
-        self.assertEqual(len(captured_requests), 2)
+        self.assertEqual(len(captured_requests), 3)
         for req in captured_requests:
             self.assertEqual(req.get_header("Authorization"), "Bearer test-token-abc")
 
