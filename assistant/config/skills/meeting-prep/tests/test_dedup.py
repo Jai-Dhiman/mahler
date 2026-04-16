@@ -59,5 +59,26 @@ class TestDedupCheck(unittest.TestCase):
         self.assertIn("CF_ACCOUNT_ID", str(ctx.exception))
 
 
+class TestDedupLog(unittest.TestCase):
+
+    @patch.dict(os.environ, {
+        "CF_ACCOUNT_ID": "acct-abc",
+        "CF_D1_DATABASE_ID": "db-123",
+        "CF_API_TOKEN": "tok-xyz",
+    })
+    @patch("dedup.D1Client")
+    def test_log_calls_insert_with_correct_args(self, MockClient):
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            from dedup import main
+            main(["log", "--event-id", "evt123",
+                  "--summary", "Team standup",
+                  "--start-time", "2026-04-16T15:00:00Z"])
+        MockClient.return_value.insert_meeting_prep.assert_called_once_with(
+            "evt123", "Team standup", "2026-04-16T15:00:00Z"
+        )
+        self.assertIn("evt123", captured.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

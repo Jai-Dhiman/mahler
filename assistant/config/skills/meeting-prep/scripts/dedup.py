@@ -58,6 +58,12 @@ def cmd_check(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def cmd_log(args: argparse.Namespace) -> None:
+    client = _get_client()
+    client.insert_meeting_prep(args.event_id, args.summary, args.start_time)
+    print(f"Logged: {args.event_id}")
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description="Mahler meeting prep dedup")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -65,14 +71,14 @@ def main(argv=None) -> None:
     p_check = sub.add_parser("check")
     p_check.add_argument("--event-id", dest="event_id", required=True)
 
-    # log subcommand added in Task 8
-    sub.add_parser("log")
+    p_log = sub.add_parser("log")
+    p_log.add_argument("--event-id", dest="event_id", required=True)
+    p_log.add_argument("--summary", required=True)
+    p_log.add_argument("--start-time", dest="start_time", required=True)
 
     args = parser.parse_args(argv)
-    if args.command == "check":
-        cmd_check(args)
-    else:
-        raise RuntimeError(f"Unknown command: {args.command}")
+    dispatch = {"check": cmd_check, "log": cmd_log}
+    dispatch[args.command](args)
 
 
 if __name__ == "__main__":
