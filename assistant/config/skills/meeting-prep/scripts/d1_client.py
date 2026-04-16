@@ -1,6 +1,7 @@
 import json
 import re
 import ssl
+import urllib.error
 import urllib.request
 from typing import Optional
 
@@ -44,9 +45,12 @@ class D1Client:
                 "Content-Type": "application/json",
             },
         )
-        with _OPENER.open(req) as resp:
-            status = resp.status
-            raw = resp.read()
+        try:
+            with _OPENER.open(req) as resp:
+                status = resp.status
+                raw = resp.read()
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"D1 API error (connection failed): {exc.reason}") from exc
         if status != 200:
             raise RuntimeError(f"D1 API error {status}: {raw.decode('utf-8', errors='replace')}")
         data = json.loads(raw)

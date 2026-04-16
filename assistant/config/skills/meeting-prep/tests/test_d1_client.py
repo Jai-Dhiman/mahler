@@ -1,9 +1,10 @@
-import sys
 import json
+import pathlib
+import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, "scripts")
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "scripts"))
 from d1_client import D1Client, _OPENER
 
 
