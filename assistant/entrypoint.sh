@@ -33,7 +33,8 @@ HERMES_ENV="$HOME/.hermes/.env"
   echo "NOTION_DATABASE_ID=${NOTION_DATABASE_ID:-}"
 } >> "$HOME/.hermes/.env"
 
-# Register cron jobs in Hermes v0.7.0 format (schedule object + next_run_at)
+# Register cron jobs in Hermes cron format (schedule object + next_run_at).
+# Format was introduced in v0.7.0 and is still used through v0.9.0.
 CRON_DIR="$HOME/.hermes/cron"
 JOBS_FILE="$CRON_DIR/jobs.json"
 mkdir -p "$CRON_DIR"

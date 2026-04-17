@@ -64,7 +64,10 @@ _OPENER = _build_https_opener()
 _AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 _TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 _REDIRECT_URI = "http://localhost:1"
-_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
+_SCOPE = " ".join([
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/calendar.events",
+])
 
 
 def _generate_pkce() -> tuple[str, str]:

@@ -17,8 +17,11 @@ WORKDIR /home/hermes
 # Ensure ~/.local/bin is on PATH (where hermes symlink lands)
 ENV PATH="/home/hermes/.local/bin:${PATH}"
 
-# Install Hermes Agent via official script (non-interactive)
-RUN curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --skip-setup
+# Install Hermes Agent via official script, pinned to a release tag.
+# Bump HERMES_VERSION to upgrade; tags live at github.com/NousResearch/hermes-agent/releases.
+ARG HERMES_VERSION=v2026.4.13
+RUN curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh \
+    | bash -s -- --skip-setup --branch "${HERMES_VERSION}"
 
 # Copy custom config and entrypoint
 COPY --chown=hermes:hermes config/SOUL.md /home/hermes/.hermes/SOUL.md

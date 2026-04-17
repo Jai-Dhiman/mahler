@@ -35,6 +35,11 @@ The following environment variables must be set as Fly.io secrets before this sk
 
 ## Procedure
 
+### Invocation mode
+
+- **Cron invocation** (the hourly schedule): run the script in the foreground. The scheduler already treats the cron job as asynchronous from the user's perspective.
+- **Interactive invocation** (user asks "check my email" in Discord): run the script with `background=true` and `notify_on_complete=true` on the terminal tool call. A full triage run across Gmail + Outlook can take 30 seconds to several minutes depending on inbox volume because each unread message is a separate LLM classification. Backgrounding with `notify_on_complete` lets Mahler acknowledge the request and return control to the user immediately; the completion notification surfaces the result without polling. Optionally pass `watch_patterns=["URGENT", "RuntimeError"]` to get a mid-run nudge the moment an urgent email is classified or the script errors.
+
 Standard run (fetch, classify, store, alert on URGENT):
 
 ```bash

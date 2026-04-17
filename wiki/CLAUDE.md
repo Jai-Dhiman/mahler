@@ -79,7 +79,12 @@ The CLI prints `Created concept: <id>` or `Already exists: <id>`.
 
 ## Existing concepts
 
-These are the 20 concepts currently in the wiki. Use exact titles (case-insensitive) in `--concepts` flags:
+These are the 23 concepts currently in the wiki. Use exact titles (case-insensitive) in `--concepts` flags:
+
+**Music / piano AI**
+- `Music Representation Learning`
+- `Music AI Systems`
+- `Score Following and Music Education`
 
 **ML / AI core**
 - `Transformer Architecture`
