@@ -155,6 +155,8 @@ Organized in three layers (Knowledge → Execution → Architectural). Ordering 
 
 **Phase E4: Calendar + meeting flow — shipped.** Google Calendar skill (`gcal_client.py`, `gcal.py`) for listing and creating calendar events via Discord. Meeting prep skill (`d1_client.py`, `dedup.py`, `email_context.py`) delivers an intelligent prep brief ~1 hour before meetings, deduped via D1 `meeting_prep_log`. Calendar-aware plugin (`plugin.py`) injects upcoming meeting context on every LLM turn via the `pre_llm_call` hook.
 
+**Phase E4.1: Conversation history — shipped.** `conversation-history` plugin (`config/plugins/conversation-history/plugin.py`) injects the last 45 minutes of Discord channel history on the first turn of each new Hermes session, giving continuity across @mentions without requiring threads or explicit `/new` commands. Uses the same `pre_llm_call` hook and secure HTTPS opener pattern as other plugins. No D1 storage — Discord is the source of truth.
+
 **Phase E5: Relationship CRM.**
 - Per-person context tracking
 - Communication pattern detection feeding the morning brief
