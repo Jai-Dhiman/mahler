@@ -63,3 +63,18 @@ class TestProjectContextFormatsRows(unittest.TestCase):
         result = project_context("sess1", "any updates?", False)
         self.assertIsNotNone(result)
         self.assertIn("mahler", result["context"])
+
+
+class TestProjectContextErrorHandling(unittest.TestCase):
+
+    @patch("plugin._query_project_log", side_effect=Exception("D1 connection refused"))
+    def test_returns_none_silently_on_d1_error(self, _):
+        from plugin import project_context
+        result = project_context("sess1", "how are things going?", True)
+        self.assertIsNone(result)
+
+    @patch("plugin._query_project_log", side_effect=RuntimeError("API token invalid"))
+    def test_returns_none_silently_on_auth_error(self, _):
+        from plugin import project_context
+        result = project_context("sess1", "what is the status?", False)
+        self.assertIsNone(result)
