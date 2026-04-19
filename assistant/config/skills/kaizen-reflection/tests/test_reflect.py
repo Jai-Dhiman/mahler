@@ -90,5 +90,56 @@ class TestReflectRunNoProposals(unittest.TestCase):
         mock_llm.assert_not_called()
 
 
+class TestReflectApply(unittest.TestCase):
+
+    def _make_proposal(self, **overrides) -> str:
+        base = {
+            "sender": "news@acme.com",
+            "current_tier": "NEEDS_ACTION",
+            "proposed_tier": "FYI",
+            "evidence": "5 occurrences in 7 days with no follow-up",
+        }
+        base.update(overrides)
+        return json.dumps(base)
+
+    def test_writes_updated_map_to_d1(self):
+        current_map = "## NEEDS_ACTION\n\n**Examples:**\n- Direct questions"
+        updated_map = "## FYI\n\n**Examples:**\n- news@acme.com"
+
+        mock_d1 = MagicMock()
+        mock_d1.get_priority_map.return_value = current_map
+
+        with (
+            _patch_env(),
+            patch("reflect.D1Client", return_value=mock_d1),
+            patch("reflect._call_llm", return_value=updated_map),
+        ):
+            import reflect
+            reflect.main(["--apply", self._make_proposal()])
+
+        mock_d1.set_priority_map.assert_called_once_with(updated_map)
+
+    def test_raises_on_invalid_proposal_json(self):
+        with (
+            _patch_env(),
+            patch("reflect.D1Client"),
+        ):
+            import reflect
+            with self.assertRaises(RuntimeError) as ctx:
+                reflect.main(["--apply", "not-valid-json"])
+        self.assertIn("Invalid proposal JSON", str(ctx.exception))
+
+    def test_raises_on_proposal_missing_required_keys(self):
+        incomplete = json.dumps({"sender": "news@acme.com"})
+        with (
+            _patch_env(),
+            patch("reflect.D1Client"),
+        ):
+            import reflect
+            with self.assertRaises(RuntimeError) as ctx:
+                reflect.main(["--apply", incomplete])
+        self.assertIn("missing required keys", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -75,6 +75,20 @@ def _call_llm(prompt: str, api_key: str, model: str) -> str:
         raise RuntimeError(f"Unexpected OpenRouter response shape: {data}") from exc
 
 
+_APPLY_PROMPT = """\
+You are editing an email classification priority map in markdown format.
+
+Current priority map:
+{priority_map}
+
+Apply this change: move the sender "{sender}" from {current_tier} to {proposed_tier}.
+Evidence: {evidence}
+
+If {sender} appears as an example under {current_tier}, move that line to {proposed_tier}.
+If it does not appear explicitly, add it as a new example under {proposed_tier}.
+Return the complete updated priority map as a markdown document. No other text.\
+"""
+
 _PROPOSAL_PROMPT = """\
 You are analyzing email triage patterns for a personal chief-of-staff assistant.
 
@@ -136,9 +150,42 @@ def _run(since_days: int, env: dict) -> None:
     print(json.dumps(proposals))
 
 
+def _apply(proposal_json: str, env: dict) -> None:
+    try:
+        proposal = json.loads(proposal_json)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Invalid proposal JSON: {exc}") from exc
+
+    required_keys = {"sender", "current_tier", "proposed_tier", "evidence"}
+    missing = required_keys - proposal.keys()
+    if missing:
+        raise RuntimeError(f"Proposal missing required keys: {missing}")
+
+    d1 = D1Client(
+        account_id=env["CF_ACCOUNT_ID"],
+        database_id=env["CF_D1_DATABASE_ID"],
+        api_token=env["CF_API_TOKEN"],
+    )
+    priority_map = d1.get_priority_map()
+    model = os.environ.get("OPENROUTER_MODEL", _DEFAULT_MODEL)
+
+    prompt = _APPLY_PROMPT.format(
+        priority_map=priority_map,
+        sender=proposal["sender"],
+        current_tier=proposal["current_tier"],
+        proposed_tier=proposal["proposed_tier"],
+        evidence=proposal["evidence"],
+    )
+    updated_map = _call_llm(prompt, env["OPENROUTER_API_KEY"], model)
+    d1.set_priority_map(updated_map)
+    print(f"Priority map updated. Moved {proposal['sender']} to {proposal['proposed_tier']}.")
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Mahler kaizen reflection")
-    parser.add_argument("--run", action="store_true", required=True)
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--run", action="store_true")
+    group.add_argument("--apply", metavar="PROPOSAL_JSON")
     parser.add_argument("--since-days", type=int, default=7, metavar="N")
     return parser.parse_args(argv)
 
@@ -147,7 +194,10 @@ def main(argv: list[str] | None = None) -> None:
     _supplement_env_from_hermes()
     args = _parse_args(argv)
     env = _load_env()
-    _run(since_days=args.since_days, env=env)
+    if args.run:
+        _run(since_days=args.since_days, env=env)
+    else:
+        _apply(proposal_json=args.apply, env=env)
 
 
 if __name__ == "__main__":
