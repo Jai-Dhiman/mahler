@@ -153,10 +153,7 @@ Phases are organized by execution wave — what can run in parallel vs. what is 
 - URGENT / NEEDS_ACTION / FYI / NOISE classification against `priority_map` in D1
 - Store results in `email_triage_log`
 
-**Phase E2a: Honcho Memory Backend.** Wire Honcho as the persistent memory provider. Runs dialectic reasoning after each turn — derives insights about preferences, communication style, goals, and habits over time. Foundation for CRM, life tracking, and kaizen scope expansion. No prerequisites; deploy as early as possible so it starts accumulating signal.
-- Configure Honcho in `config.yaml`
-- `honcho_profile`, `honcho_search`, `honcho_context`, `honcho_conclude` tools available to agent
-- All subsequent phases deposit signal into Honcho; it compounds automatically
+**Phase E2a: Honcho Memory Backend — shipped.** Honcho wired as the persistent memory provider. Config at `config/honcho.json` (`workspace: mahler`, `recallMode: hybrid`, `dialecticCadence: 3`). `HONCHO_API_KEY` bridged via `entrypoint.sh`. `SOUL.md` rules instruct Mahler to call `honcho_conclude` for durable facts and `honcho_search` for context-enriched answers. All subsequent phases deposit signal into Honcho automatically.
 
 **Phase E3: Kaizen Loop — shipped.** Priority map in D1, `kaizen-context` plugin injects it on every turn, `kaizen-reflection` skill runs weekly to propose reclassifications. See `config/plugins/kaizen-context/` and `config/skills/kaizen-reflection/`.
 
@@ -169,11 +166,11 @@ Phases are organized by execution wave — what can run in parallel vs. what is 
 
 **Phase E4.1: Conversation history — shipped.** `conversation-history` plugin injects last 45 minutes of Discord channel history on the first turn of each new session.
 
-**Phase E4b: Project Awareness.** Bridge between Claude Code development sessions and Mahler's context. A Claude Code `SessionStop` hook writes a structured summary to D1 `project_log` after each session. A `project-context` Hermes plugin injects recent project activity into every LLM turn. Enables weekly project health cron and frustration/win tracking over time. No dependency on E2 — fully independent.
-- Claude Code hook (local): writes `(project, date, git_summary, blockers, wins)` to D1 via CF API
-- D1 table: `project_log`
-- `project-context` plugin: `pre_llm_call` injects last 7 days of project activity
-- Weekly project health cron: surfaces stalled projects, momentum patterns
+**Phase E4b: Project Awareness — shipped.** Claude Code `SessionStop` hook (`assistant/hooks/project_log.py`) keyword-scans session transcripts, calls OpenRouter to synthesize a blocker summary, and writes win/blocker entries to D1 `project_log`. The `/ship` skill logs shipped wins automatically. The `project-context` Hermes plugin (`config/plugins/project-context/`) injects the last 7 days of project activity as context on every LLM turn.
+- D1 table: `project_log (project, entry_type, summary, git_ref, created_at)`
+- `assistant/hooks/project_log.py`: CLI — `win` mode (called by /ship), `blocker` mode (SessionStop hook)
+- `config/plugins/project-context/plugin.py`: `pre_llm_call` plugin injects recent wins/blockers
+- SessionStop hook registered in `~/.claude/settings.json`; requires `~/.mahler.env` with CF + OpenRouter creds
 
 **Phase E5: Relationship CRM.** D1-backed contact tracking for professional and personal relationships. Tracks last contact date, open commitments, important context per person. Proactive follow-up detection sweeps sent Gmail threads for no-reply after N days (depends on E2). Honcho provides relationship memory layer on top. No formal pipeline UI — Discord commands for CRUD + summary.
 - D1 table: `contacts (name, type, last_contact, context, open_commitments)`
@@ -209,8 +206,8 @@ Phases are organized by execution wave — what can run in parallel vs. what is 
 Dependencies determine three parallel waves:
 
 **Wave 1 — No prerequisites, start immediately (run in parallel):**
-- E2a: Honcho memory backend
-- E4b: Project Awareness (SessionStop hook)
+- E2a: Honcho memory backend — shipped
+- E4b: Project Awareness (SessionStop hook) — shipped
 - E8: Evening Task Sweep — shipped
 
 **Wave 2 — After Wave 1 is live (run in parallel):**

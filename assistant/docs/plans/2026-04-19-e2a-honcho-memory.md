@@ -12,7 +12,7 @@
 ## Prerequisites (manual — do before running tasks)
 
 1. Create a Honcho account at https://honcho.dev
-2. Note your workspace ID and confirm the cloud `baseUrl` (expected: `https://demo.honcho.dev`)
+2. Note your workspace ID — cloud `baseUrl` is `https://api.honcho.dev` (production endpoint for paying customers)
 3. Generate an API key
 4. Replace the two placeholders in Task 1's `honcho.json` content before committing
 5. Run `flyctl secrets set HONCHO_API_KEY=<your-key>` from the `assistant/` directory
@@ -56,7 +56,7 @@ Replace `<HONCHO_WORKSPACE_ID>` with the actual workspace ID from your Honcho da
 
 ```json
 {
-  "baseUrl": "https://demo.honcho.dev",
+  "baseUrl": "https://api.honcho.dev",
   "workspace": "<HONCHO_WORKSPACE_ID>",
   "aiPeer": "mahler",
   "peerName": "jai",
@@ -333,3 +333,142 @@ All three behavioral tests pass. No deployment rollback needed. E2a is live and 
 # No commit needed — this task is deploy + verify only.
 # Update CLAUDE.md roadmap to mark E2a as shipped (separate commit after verification).
 ```
+
+---
+
+## Challenge Review
+
+### CEO Pass
+
+**Premise:** Correct problem, correct framing. Every session starts cold; Honcho is the right layer to fix that. The downstream compounding argument (E5, E3+, E10 all benefit from early signal) justifies starting now.
+
+**Real pain:** Latent, not acute. Nothing breaks today, but delay taxes future phases. Worth building now.
+
+**Direct path:** Yes. One config file + three file edits + one Fly secret is the minimum viable wiring. Nothing extraneous added.
+
+**Existing coverage:** None. No Honcho integration exists anywhere in the assistant codebase. The plan builds from scratch on a clean surface.
+
+**Scope:** 5 files touched, 0 new services introduced (Honcho cloud is external). Well under the smell threshold.
+
+**12-Month alignment:**
+```
+CURRENT STATE                    THIS PLAN                    12-MONTH IDEAL
+Zero cross-session memory  →  Honcho accumulates signal  →  Rich preference/habit/
+Grok only knows kaizen          from day one via hybrid       commitment model drives
+priority map + last 45min       recall, SOUL.md rules,        proactive CRM, kaizen
+of Discord history              and explicit tools            scope, and reflection
+```
+Strong alignment. No tech debt conflict identified.
+
+**Alternatives:** Documented in spec (context-only, tools-only, hybrid). Trade-offs are explained. Good.
+
+---
+
+### Engineering Pass
+
+**Architecture — data flow:**
+```
+Discord message
+      ↓
+Hermes gateway
+      ↓
+LLM turn (Grok via OpenRouter)
+      ↓ (auto-injected by Honcho hybrid mode)
+honcho context block in system prompt
+      ↓ (agent writes during turn)
+honcho_conclude → Honcho cloud API (demo.honcho.dev)
+                        ↓
+              Dreaming background process
+              (dialectic synthesis async)
+```
+
+Config chain: `~/.hermes/honcho.json` (path/schema unverified) + `HONCHO_API_KEY` from `~/.hermes/.env` (bridged via entrypoint.sh).
+
+**Dockerfile edit precision:** Plan targets line 45 (`COPY --chown=hermes:hermes config/priority-map.md`). Verified against actual Dockerfile — line 45 is exactly that line. Insertion point is correct.
+
+**entrypoint.sh edit precision:** Plan targets the first `{ ... } > "$HERMES_ENV"` block (lines 7–23), inserting before the closing `}`. Verified: line 22 is `echo "OPENROUTER_MODEL=..."`, line 23 is `} > "$HERMES_ENV"`. The second `>>` append block (lines 28–34) handles NOTION vars independently. No conflict. Correct.
+
+**Security:** `HONCHO_API_KEY` flows only through Fly secrets → process env → `~/.hermes/.env` (container-local). Workspace ID in honcho.json is non-secret. Pattern is safe.
+
+[OBS] — `baseUrl` updated to `https://api.honcho.dev` (production endpoint for paying customers). `demo.honcho.dev` was the original placeholder; confirmed as unauthenticated testing only. Risk resolved.
+
+[RISK] (confidence: 6/10) — `~/.hermes/honcho.json` as the Honcho config discovery path is the plan's single most load-bearing unverified assumption. If Hermes v0.9.0 requires a `memory:` section in `config.yaml` to activate the Honcho plugin (and merely auto-discovering a JSON file is insufficient), Task 1 produces a file that Hermes silently ignores. Mahler deploys and appears healthy, but memory never accumulates. The Honcho dashboard check in Task 4 Step 3 is the only failsafe. Verify against Hermes v0.9.0 release notes or source before executing Task 1. Add a `memory:` section to config.yaml if required.
+
+[RISK] (confidence: 5/10) — Empty `HONCHO_API_KEY` behavior is untested. If the Fly secret isn't set before deploy, `HONCHO_API_KEY=` (empty string) lands in `~/.hermes/.env`. How Hermes handles this is unknown: graceful disable, silent auth failure, or startup crash. The prerequisites list `flyctl secrets set` as step 5 before tasks begin, which is adequate mitigation — but a crash-on-empty-key scenario would make the container unresponsive. Add a guard to Task 4 pre-flight: `flyctl secrets list | grep HONCHO_API_KEY` before deploying.
+
+[RISK] (confidence: 7/10) — Task 4 Step 5 (persistence test) is non-deterministic. The 2-minute Dreaming wait may be insufficient; Honcho's SLA for Dreaming processing is not specified. Additionally, Grok may produce a contextually plausible response ("I'd suggest async first") from its base training without actually using Honcho memory, producing a false pass. Treat Step 5 as a best-effort smoke test, not a guarantee. True persistence validation requires checking the Honcho dashboard directly for the persisted insight rather than inferring from model output.
+
+**Module Depth Audit:**
+
+| Module | Interface | Implementation | Verdict |
+|--------|-----------|----------------|---------|
+| config/honcho.json | 7 fields | All Honcho dialectic scheduling, context injection, tool registration, Dreaming, API auth hidden inside Hermes | DEEP |
+| Dockerfile (modified) | +1 COPY line | — | N/A |
+| entrypoint.sh (modified) | +1 echo line | — | N/A |
+| config/SOUL.md (modified) | +3 rule lines | — | N/A |
+
+No shallow module issues.
+
+**Test philosophy:** No unit/integration tests introduced because no application logic is introduced. All verification is infrastructure-level (file existence, env var presence, live behavioral tests). This is correct for the nature of the change.
+
+**Vertical slice audit:** Each task is genuinely one change → one verify → one commit. No horizontal slicing. Group A tasks (1, 2, 3) are fully independent and correctly parallelized.
+
+**Test coverage:**
+```
+config/honcho.json
+  ├── [TESTED ★★] file exists in Docker image — Task 1 Step 4
+  └── [TESTED ★]  recallMode field present — Task 1 Step 4 (reads full JSON)
+
+HONCHO_API_KEY bridge
+  ├── [TESTED ★★] key appears in .env when env var set — Task 2 Step 4
+  └── [GAP]       empty-key behavior when secret not set — no test
+
+SOUL.md content
+  ├── [TESTED ★]  paragraph appended correctly — Task 3 Step 3
+  └── [TESTED ★★] agent follows rules in production — Task 4 Steps 4-5
+
+Live Honcho integration
+  ├── [TESTED ★★] session created in dashboard on first message — Task 4 Step 3
+  ├── [TESTED ★★] honcho_conclude called for stated preference — Task 4 Step 4
+  └── [TESTED ★]  cross-session recall (non-deterministic) — Task 4 Step 5
+```
+
+**Failure modes:**
+- Task 1 build failure: caught loudly at Step 4 docker run. Clean.
+- Task 2/3 commit failures: changes are trivial and reversible. Low risk.
+- Deploy failure (Task 4 Step 2): current deployment continues unmodified. Clean rollback.
+- Honcho misconfiguration (wrong workspace, wrong baseUrl): caught at Task 4 Step 3 dashboard check. The plan provides explicit recovery steps. Good.
+- Silent memory failure (honcho.json path wrong, Dreaming not running): only detectable via Task 4 Step 3 dashboard check. If that check is skipped or misread, E2a appears shipped but Honcho accumulates nothing. No other defense.
+
+---
+
+### Presumption Inventory
+
+| Assumption | Verdict | Reason |
+|------------|---------|--------|
+| `~/.hermes/honcho.json` is Hermes v0.9.0's Honcho config discovery path | RISKY | Unverified against Hermes source or release notes. If wrong, file is silently ignored. |
+| No `memory:` section needed in config.yaml to enable Honcho | RISKY | config.yaml has no memory config today; if plugin enablement is required there, Task 1 is incomplete. |
+| `https://api.honcho.dev` is the correct production endpoint for paying customers | SAFE | Confirmed via Hermes docs. `demo.honcho.dev` is unauthenticated testing only; plan updated to use `api.honcho.dev`. |
+| Hermes v0.9.0 includes `honcho_conclude`, `honcho_search`, `honcho_profile`, `honcho_context` tools | VALIDATE | CLAUDE.md notes "Honcho plugin overhauls (v0.8/v0.9)" — tools likely present but exact names unconfirmed. |
+| `recallMode: "hybrid"` is a valid honcho.json schema value | VALIDATE | Documented in spec, not verified against Hermes source schema. |
+| `HONCHO_API_KEY` is the env var name Hermes's Honcho provider reads from ~/.hermes/.env | VALIDATE | Common convention; plausible but unconfirmed. |
+| Honcho Dreaming runs automatically from dialecticCadence/dialecticDepth config | VALIDATE | Reasonable given the fields exist, but background process requirements unconfirmed. |
+| 2-minute wait is sufficient for Dreaming to process a turn | RISKY | Honcho's Dreaming SLA is not documented in the plan. Could be longer. |
+
+---
+
+### Summary
+
+```
+[RISK]     count: 4
+[QUESTION] count: 2
+[BLOCKER]  count: 0
+```
+
+[OBS] — RESOLVED: Hermes reads Honcho config from `$HERMES_HOME/honcho.json` (`~/.hermes/honcho.json`) via auto-discovery. No `memory:` section required in config.yaml.
+
+[OBS] — RESOLVED: Production endpoint is `https://api.honcho.dev`. Plan updated.
+
+The plan is minimal, correctly scoped, and the risks are all caught at Task 4 behavioral validation — making deploy-time verification the failsafe for the unverified assumptions. The three RISKY presumptions (honcho.json path, config.yaml memory section, demo URL durability) are the only items that could silently undermine the phase without being caught.
+
+VERDICT: PROCEED_WITH_CAUTION — confirm the two QUESTIONS above before executing Task 1, and treat Task 4 Step 3 (dashboard session check) as a hard gate, not an optional smoke test.

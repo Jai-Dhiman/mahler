@@ -65,4 +65,4 @@ This phase is pure wiring. No custom plugin. No forked Hermes code. The entire i
 ## Open Questions
 
 - Q: What is Jai's Honcho workspace ID after provisioning?  Default: placeholder `<HONCHO_WORKSPACE_ID>` in honcho.json — must be replaced before deploying.
-- Q: What is the Honcho cloud baseUrl?  Default: `https://demo.honcho.dev` per docs — confirm after account creation.
+- Q: What is the Honcho cloud baseUrl?  Resolved: `https://api.honcho.dev` is the production endpoint for paying customers. `https://demo.honcho.dev` is for unauthenticated testing only.
