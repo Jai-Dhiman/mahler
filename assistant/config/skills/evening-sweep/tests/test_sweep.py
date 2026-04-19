@@ -38,6 +38,7 @@ class TestCompletedTodaySection(unittest.TestCase):
         mock_client.list_tasks.side_effect = [
             [_make_task(title="Write tests", status="Done", priority="High",
                         last_edited_time="2026-04-19T20:00:00.000Z")],
+            [],  # overdue query (added in this task)
         ]
 
         with patch("sys.stdout", new_callable=StringIO) as mock_out:
@@ -47,6 +48,32 @@ class TestCompletedTodaySection(unittest.TestCase):
         self.assertIn("=== COMPLETED TODAY ===", output)
         self.assertIn("Write tests", output)
         mock_client.list_tasks.assert_any_call(status="Done", last_edited_after="2026-04-19")
+
+
+class TestPastDueSection(unittest.TestCase):
+
+    @patch.dict(os.environ, {"NOTION_API_TOKEN": "tok", "NOTION_DATABASE_ID": "db-id"})
+    @patch("sweep.NotionClient")
+    def test_past_due_task_shows_days_overdue_and_done_tasks_excluded(self, mock_cls):
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.list_tasks.side_effect = [
+            [],  # completed
+            [
+                _make_task(title="File taxes", status="Not started", due="2026-04-16"),
+                _make_task(title="Already done", status="Done", due="2026-04-15"),
+            ],  # overdue
+        ]
+
+        with patch("sys.stdout", new_callable=StringIO) as mock_out:
+            sweep.main(_today=date(2026, 4, 19))
+
+        output = mock_out.getvalue()
+        self.assertIn("=== PAST DUE (not done) ===", output)
+        self.assertIn("File taxes", output)
+        self.assertIn("3 days overdue", output)
+        self.assertNotIn("Already done", output)
+        mock_client.list_tasks.assert_any_call(due_before="2026-04-18")
 
 
 if __name__ == "__main__":
