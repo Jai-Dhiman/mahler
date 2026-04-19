@@ -56,6 +56,7 @@ assistant/
 - **Discord settings** (token, home_channel, allowed_users) are set via env vars, not config.yaml. Hermes's `_apply_env_overrides()` handles them.
 - **Python package management:** use `uv`, not pip.
 - **JS package management:** use `bun`, not npm.
+- **SessionStop hook** registered in `~/.claude/settings.json` pointing to `assistant/hooks/project_log.py` (blocker mode).
 
 ## Deployment
 
