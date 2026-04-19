@@ -45,8 +45,13 @@ async fn fetch(mut req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
             if path == "/trigger/morning-scan" {
                 if let Err(r) = check_auth(&req, &env) { return Ok(r); }
-                handlers::morning_scan::run(&env).await?;
-                return Response::from_json(&serde_json::json!({ "ok": true, "handler": "morning_scan" }));
+                let force = req.url().map(|u| u.query().unwrap_or("").contains("force=true")).unwrap_or(false);
+                if force {
+                    handlers::morning_scan::run_forced(&env).await?;
+                } else {
+                    handlers::morning_scan::run(&env).await?;
+                }
+                return Response::from_json(&serde_json::json!({ "ok": true, "handler": "morning_scan", "forced": force }));
             }
 
             if path == "/trigger/position-monitor" {

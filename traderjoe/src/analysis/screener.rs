@@ -29,7 +29,9 @@ impl Default for ScreenerConfig {
             min_credit_pct: cfg.min_credit_pct,
             min_spread_width: cfg.min_spread_width,
             max_spread_width: 10.0,
-            min_open_interest: 100,
+            // indicative feed does not provide openInterest; rely on bid-ask spread
+            // and volume for liquidity screening instead.
+            min_open_interest: 0,
             min_volume: 1,
             max_bid_ask_spread_pct: 0.08,
         }

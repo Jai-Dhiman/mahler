@@ -33,9 +33,17 @@ fn date_from_iso(iso: &str) -> &str {
 }
 
 pub async fn run(env: &Env) -> Result<()> {
+    run_inner(env, false).await
+}
+
+pub async fn run_forced(env: &Env) -> Result<()> {
+    run_inner(env, true).await
+}
+
+async fn run_inner(env: &Env, force: bool) -> Result<()> {
     use chrono::Utc;
     let start = Utc::now();
-    console_log!("Morning scan starting at {}", start.to_rfc3339());
+    console_log!("Morning scan starting at {} (force={})", start.to_rfc3339(), force);
 
     let db = D1Client::new(env.d1("DB")?);
     let kv = KvClient::new(env.kv("KV")?);
@@ -72,7 +80,7 @@ pub async fn run(env: &Env) -> Result<()> {
         env.var("ENVIRONMENT")?.to_string() == "paper",
     );
 
-    if !alpaca.is_market_open().await? {
+    if !force && !alpaca.is_market_open().await? {
         console_log!("Market is closed, skipping scan");
         return Ok(());
     }
@@ -137,8 +145,13 @@ pub async fn run(env: &Env) -> Result<()> {
         };
 
         if chain.contracts.is_empty() {
+            console_log!("{}: empty options chain, skipping", symbol);
             continue;
         }
+        console_log!(
+            "{}: chain has {} contracts, underlying price {:.2}",
+            symbol, chain.contracts.len(), chain.underlying_price
+        );
 
         let history = match db.get_iv_history(symbol, 252).await {
             Ok(h) => h,
@@ -166,6 +179,11 @@ pub async fn run(env: &Env) -> Result<()> {
         }
 
         let mut spreads = screener.screen_chain(&chain, &iv_metrics);
+        let found = spreads.len().min(2);
+        console_log!(
+            "{}: IV percentile {:.0}, current IV {:.3} — {} spread(s) found",
+            symbol, iv_metrics.iv_percentile, iv_metrics.current_iv, found
+        );
         for scored in spreads.drain(..).take(2) {
             all_opportunities.push((scored, symbol.to_string(), iv_metrics.clone()));
         }
@@ -175,6 +193,7 @@ pub async fn run(env: &Env) -> Result<()> {
         b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
     });
 
+    let opportunities_found = all_opportunities.len();
     let mut trades_placed = 0usize;
 
     for (scored, _symbol, iv_metrics) in all_opportunities.into_iter().take(cfg.max_trades_per_scan) {
@@ -270,21 +289,24 @@ pub async fn run(env: &Env) -> Result<()> {
 
     let duration_ms = (Utc::now() - start).num_milliseconds();
     let vix_value = vix_data.as_ref().map(|v| v.vix);
-    db.log_scan(
+    if let Err(e) = db.log_scan(
         "morning",
         cfg.underlyings.len() as i64,
-        0,
+        opportunities_found as i64,
         trades_placed as i64,
         vix_value,
         false,
         duration_ms,
         None,
-    ).await.ok();
+    ).await {
+        console_log!("WARN: scan_log write failed: {:?}", e);
+        discord.send_error("scan_log write failed", &format!("{:?}", e)).await.ok();
+    }
 
     discord.send_scan_summary(
         "morning",
         cfg.underlyings.len() as i64,
-        0,
+        opportunities_found as i64,
         trades_placed as i64,
         vix_value,
     ).await.ok();

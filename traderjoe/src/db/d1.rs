@@ -93,7 +93,7 @@ impl D1Client {
                 short_strike.into(),
                 long_strike.into(),
                 expiration.into(),
-                contracts.into(),
+                (contracts as f64).into(),
                 entry_credit.into(),
                 max_loss.into(),
                 broker_order_id.map(|s| s.into()).unwrap_or(worker::wasm_bindgen::JsValue::NULL),
@@ -212,12 +212,12 @@ impl D1Client {
             .bind(&[
                 now.as_str().into(),
                 scan_type.into(),
-                underlyings_scanned.into(),
-                opportunities_found.into(),
-                trades_placed.into(),
+                (underlyings_scanned as f64).into(),
+                (opportunities_found as f64).into(),
+                (trades_placed as f64).into(),
                 vix.map(|v| v.into()).unwrap_or(worker::wasm_bindgen::JsValue::NULL),
                 (circuit_breaker_active as i32).into(),
-                duration_ms.into(),
+                (duration_ms as f64).into(),
                 notes.map(|s| s.into()).unwrap_or(worker::wasm_bindgen::JsValue::NULL),
             ])?
             .run()

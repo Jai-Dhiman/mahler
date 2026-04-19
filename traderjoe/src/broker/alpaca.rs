@@ -96,21 +96,48 @@ impl AlpacaClient {
     }
 
     pub async fn get_options_chain(&self, symbol: &str) -> Result<OptionsChain> {
-        let url = format!(
-            "{}/v2/options/snapshots/{}?feed=indicative&limit=1000",
+        use chrono::{Duration, Utc};
+
+        // Fetch only contracts in the 30-45 DTE window using date filters.
+        // Without filters, limit=1000 returns near-term contracts alphabetically,
+        // none of which fall in the 30-45 DTE window the screener needs.
+        let today = Utc::now().date_naive();
+        let exp_min = (today + Duration::days(30)).format("%Y-%m-%d").to_string();
+        let exp_max = (today + Duration::days(45)).format("%Y-%m-%d").to_string();
+
+        // The options snapshots endpoint does not include an underlying price field.
+        // Fetch stock snapshot separately for the current price.
+        let stock_url = format!(
+            "{}/v2/stocks/snapshots?symbols={}&feed=iex",
             self.data_url, symbol
         );
-        let json: Value = self.get(&url).await?;
-
-        let underlying_price = json["underlying"]["latestTrade"]["p"]
+        let stock_json: Value = self.get(&stock_url).await.unwrap_or_default();
+        let underlying_price = stock_json[symbol]["latestTrade"]["p"]
             .as_f64()
+            .or_else(|| stock_json[symbol]["latestQuote"]["ap"].as_f64())
             .unwrap_or(0.0);
 
         let mut contracts: Vec<OptionContract> = Vec::new();
         let mut expirations: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut page_token: Option<String> = None;
 
-        if let Some(snapshots) = json["snapshots"].as_object() {
-            for (occ_symbol, data) in snapshots {
+        loop {
+            let url = if let Some(ref token) = page_token {
+                format!(
+                    "{}/v1beta1/options/snapshots/{}?feed=indicative&limit=1000&expiration_date_gte={}&expiration_date_lte={}&next_page_token={}",
+                    self.data_url, symbol, exp_min, exp_max, token
+                )
+            } else {
+                format!(
+                    "{}/v1beta1/options/snapshots/{}?feed=indicative&limit=1000&expiration_date_gte={}&expiration_date_lte={}",
+                    self.data_url, symbol, exp_min, exp_max
+                )
+            };
+
+            let json: Value = self.get(&url).await?;
+
+            if let Some(snapshots) = json["snapshots"].as_object() {
+                for (occ_symbol, data) in snapshots {
                 let greeks = &data["greeks"];
                 let quote = &data["latestQuote"];
 
@@ -156,6 +183,13 @@ impl AlpacaClient {
             }
         }
 
+            // Paginate until all contracts in the DTE window are fetched.
+            match json["next_page_token"].as_str() {
+                Some(token) if !token.is_empty() => page_token = Some(token.to_string()),
+                _ => break,
+            }
+        }
+
         let mut expirations_vec: Vec<String> = expirations.into_iter().collect();
         expirations_vec.sort();
 
@@ -195,18 +229,19 @@ impl AlpacaClient {
             "type": "limit",
             "time_in_force": "day",
             "order_class": "mleg",
+            "qty": order.contracts.to_string(),
             "limit_price": format!("{:.2}", order.limit_price),
             "legs": [
                 {
                     "symbol": order.short_occ_symbol,
-                    "ratio_qty": order.contracts.to_string(),
-                    "side": "sell_to_open",
+                    "ratio_qty": "1",
+                    "side": "sell",
                     "position_effect": "open"
                 },
                 {
                     "symbol": order.long_occ_symbol,
-                    "ratio_qty": order.contracts.to_string(),
-                    "side": "buy_to_open",
+                    "ratio_qty": "1",
+                    "side": "buy",
                     "position_effect": "open"
                 }
             ]
@@ -223,7 +258,15 @@ impl AlpacaClient {
 
         let req = Request::new_with_init(&url, &init)?;
         let mut resp = Fetch::Request(req).send().await?;
+        let status = resp.status_code();
         let json: Value = resp.json().await?;
+
+        if json["id"].is_null() || json["id"].as_str().map(|s| s.is_empty()).unwrap_or(true) {
+            return Err(worker::Error::RustError(format!(
+                "Order rejected (HTTP {}): {}",
+                status, json
+            )));
+        }
 
         Ok(Order {
             id: json["id"].as_str().unwrap_or("").to_string(),
@@ -238,18 +281,19 @@ impl AlpacaClient {
             "type": "limit",
             "time_in_force": "day",
             "order_class": "mleg",
+            "qty": order.contracts.to_string(),
             "limit_price": format!("{:.2}", order.limit_price),
             "legs": [
                 {
                     "symbol": order.short_occ_symbol,
-                    "ratio_qty": order.contracts.to_string(),
-                    "side": "buy_to_close",
+                    "ratio_qty": "1",
+                    "side": "buy",
                     "position_effect": "close"
                 },
                 {
                     "symbol": order.long_occ_symbol,
-                    "ratio_qty": order.contracts.to_string(),
-                    "side": "sell_to_close",
+                    "ratio_qty": "1",
+                    "side": "sell",
                     "position_effect": "close"
                 }
             ]
@@ -266,7 +310,15 @@ impl AlpacaClient {
 
         let req = Request::new_with_init(&url, &init)?;
         let mut resp = Fetch::Request(req).send().await?;
+        let status = resp.status_code();
         let json: Value = resp.json().await?;
+
+        if json["id"].is_null() || json["id"].as_str().map(|s| s.is_empty()).unwrap_or(true) {
+            return Err(worker::Error::RustError(format!(
+                "Closing order rejected (HTTP {}): {}",
+                status, json
+            )));
+        }
 
         Ok(Order {
             id: json["id"].as_str().unwrap_or("").to_string(),
