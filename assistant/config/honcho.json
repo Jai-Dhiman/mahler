@@ -1,0 +1,9 @@
+{
+  "baseUrl": "https://api.honcho.dev",
+  "workspace": "<HONCHO_WORKSPACE_ID>",
+  "aiPeer": "mahler",
+  "peerName": "jai",
+  "recallMode": "hybrid",
+  "dialecticCadence": 3,
+  "dialecticDepth": 2
+}
