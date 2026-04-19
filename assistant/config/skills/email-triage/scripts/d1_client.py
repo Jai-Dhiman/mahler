@@ -144,6 +144,14 @@ class D1Client:
             [content],
         )
 
+    def get_recent_project_log(self, days: int = 7) -> list[dict]:
+        """Return project_log rows from the last N days, newest first."""
+        return self.query(
+            "SELECT project, entry_type, summary, git_ref, created_at FROM project_log "
+            "WHERE created_at >= datetime('now', ? || ' days') ORDER BY created_at DESC",
+            [f"-{days}"],
+        )
+
     def insert_project_log(self, project: str, entry_type: str, summary: str, git_ref: str) -> None:
         """Insert one project log entry. Raises RuntimeError on D1 failure."""
         self.query(

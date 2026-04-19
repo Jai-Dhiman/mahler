@@ -294,5 +294,33 @@ class TestD1ClientInsertProjectLog(unittest.TestCase):
                 client.insert_project_log("mahler", "blocker", "Stuck on X", "")
 
 
+class TestD1ClientGetRecentProjectLog(unittest.TestCase):
+
+    def test_returns_rows_within_requested_day_window(self):
+        rows = [
+            {"project": "mahler", "entry_type": "win", "summary": "Shipped kaizen", "git_ref": "abc", "created_at": "2026-04-19 10:00:00"},
+        ]
+
+        def capture_open(req):
+            body = json.loads(req.data.decode("utf-8"))
+            if "project_log" in body["sql"] and "SELECT" in body["sql"]:
+                return _make_response(_success_payload(rows))
+            return _make_response(_success_payload([]))
+
+        with patch.object(_OPENER, "open", side_effect=capture_open):
+            client = _make_client()
+            result = client.get_recent_project_log(days=7)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["project"], "mahler")
+        self.assertEqual(result[0]["entry_type"], "win")
+
+    def test_returns_empty_list_when_no_entries(self):
+        with patch.object(_OPENER, "open", return_value=_make_response(_success_payload([]))):
+            client = _make_client()
+            result = client.get_recent_project_log(days=7)
+        self.assertEqual(result, [])
+
+
 if __name__ == "__main__":
     unittest.main()
