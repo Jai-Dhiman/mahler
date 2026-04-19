@@ -137,10 +137,11 @@ class TestD1ClientEnsureTables(unittest.TestCase):
             client = _make_client()
             client.ensure_tables()
 
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 4)
         self.assertIn("CREATE TABLE IF NOT EXISTS email_triage_log", calls[0])
         self.assertIn("CREATE TABLE IF NOT EXISTS triage_state", calls[1])
         self.assertIn("CREATE TABLE IF NOT EXISTS mahler_kv", calls[2])
+        self.assertIn("CREATE TABLE IF NOT EXISTS priority_map", calls[3])
 
 
 class TestD1ClientAuthHeader(unittest.TestCase):
@@ -190,7 +191,7 @@ class TestD1ClientAuthHeader(unittest.TestCase):
             client = _make_client()
             client.ensure_tables()
 
-        self.assertEqual(len(captured_requests), 3)
+        self.assertEqual(len(captured_requests), 4)
         for req in captured_requests:
             self.assertEqual(req.get_header("Authorization"), "Bearer test-token-abc")
 
@@ -204,6 +205,44 @@ class TestD1ClientInit(unittest.TestCase):
     def test_invalid_database_id_raises(self):
         with self.assertRaises(ValueError):
             D1Client(account_id="acct-123", database_id="bad id!", api_token="tok")
+
+
+class TestGetPriorityMap(unittest.TestCase):
+
+    def test_returns_content_when_row_exists(self):
+        rows = [{"content": "## URGENT\nDrop everything.", "version": 1, "updated_at": "2026-04-18T00:00:00Z"}]
+        with patch.object(_OPENER, "open", return_value=_make_response(_success_payload(rows))):
+            client = _make_client()
+            result = client.get_priority_map()
+        self.assertEqual(result, "## URGENT\nDrop everything.")
+
+    def test_raises_when_no_row_exists(self):
+        with patch.object(_OPENER, "open", return_value=_make_response(_success_payload([]))):
+            client = _make_client()
+            with self.assertRaises(RuntimeError) as ctx:
+                client.get_priority_map()
+        self.assertIn("priority_map table is empty", str(ctx.exception))
+
+
+class TestSetPriorityMap(unittest.TestCase):
+
+    def test_calls_d1_with_insert_sql_and_new_content(self):
+        calls = []
+
+        def fake_open(req, timeout=None):
+            calls.append(req)
+            payload = {"result": [{"results": [], "success": True}], "success": True, "errors": [], "messages": []}
+            return _make_response(payload)
+
+        with patch.object(_OPENER, "open", side_effect=fake_open):
+            client = _make_client()
+            client.set_priority_map("## URGENT\nUpdated content.")
+
+        self.assertEqual(len(calls), 1)
+        import json as _json
+        body = _json.loads(calls[0].data.decode("utf-8"))
+        self.assertIn("priority_map", body["sql"])
+        self.assertIn("## URGENT\nUpdated content.", body["params"])
 
 
 if __name__ == "__main__":

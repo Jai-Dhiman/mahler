@@ -124,6 +124,26 @@ class D1Client:
             [key, value],
         )
 
+    def get_priority_map(self) -> str:
+        """Read current priority map content from D1. Raises RuntimeError if no row exists."""
+        rows = self.query(
+            "SELECT content FROM priority_map ORDER BY version DESC LIMIT 1",
+            [],
+        )
+        if not rows:
+            raise RuntimeError(
+                "priority_map table is empty — run migrate.py to seed initial content"
+            )
+        return rows[0]["content"]
+
+    def set_priority_map(self, content: str) -> None:
+        """Write updated priority map content to D1, incrementing version."""
+        self.query(
+            "INSERT INTO priority_map (content, version, updated_at) "
+            "VALUES (?, COALESCE((SELECT MAX(version) FROM priority_map), 0) + 1, datetime('now'))",
+            [content],
+        )
+
     def ensure_tables(self) -> None:
         """Create tables if they don't exist. Safe to call on every run."""
         self.query(
@@ -153,6 +173,14 @@ class D1Client:
             """CREATE TABLE IF NOT EXISTS mahler_kv (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)""",
+            [],
+        )
+        self.query(
+            """CREATE TABLE IF NOT EXISTS priority_map (
+    version INTEGER PRIMARY KEY,
+    content TEXT NOT NULL,
     updated_at TEXT NOT NULL
 )""",
             [],
