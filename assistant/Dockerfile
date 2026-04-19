@@ -44,6 +44,7 @@ COPY --chown=hermes:hermes config/plugins /home/hermes/.hermes/plugins
 # Copy priority map to Hermes workspace
 RUN mkdir -p /home/hermes/.hermes/workspace
 COPY --chown=hermes:hermes config/priority-map.md /home/hermes/.hermes/workspace/priority-map.md
+COPY --chown=hermes:hermes config/honcho.json /home/hermes/.hermes/honcho.json
 
 # Entrypoint writes env vars to ~/.hermes/.env then starts gateway
 CMD ["/home/hermes/entrypoint.sh"]
