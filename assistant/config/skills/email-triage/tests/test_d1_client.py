@@ -137,11 +137,31 @@ class TestD1ClientEnsureTables(unittest.TestCase):
             client = _make_client()
             client.ensure_tables()
 
-        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(calls), 5)
         self.assertIn("CREATE TABLE IF NOT EXISTS email_triage_log", calls[0])
         self.assertIn("CREATE TABLE IF NOT EXISTS triage_state", calls[1])
         self.assertIn("CREATE TABLE IF NOT EXISTS mahler_kv", calls[2])
         self.assertIn("CREATE TABLE IF NOT EXISTS priority_map", calls[3])
+
+
+class TestD1ClientProjectLogTable(unittest.TestCase):
+
+    def test_ensure_tables_creates_project_log_table(self):
+        calls = []
+
+        def capture_open(req):
+            body = json.loads(req.data.decode("utf-8"))
+            calls.append(body["sql"])
+            return _make_response(_success_payload([]))
+
+        with patch.object(_OPENER, "open", side_effect=capture_open):
+            client = _make_client()
+            client.ensure_tables()
+
+        self.assertEqual(len(calls), 5)
+        self.assertIn("CREATE TABLE IF NOT EXISTS project_log", calls[4])
+        self.assertIn("entry_type", calls[4])
+        self.assertIn("summary", calls[4])
 
 
 class TestD1ClientAuthHeader(unittest.TestCase):
@@ -191,7 +211,7 @@ class TestD1ClientAuthHeader(unittest.TestCase):
             client = _make_client()
             client.ensure_tables()
 
-        self.assertEqual(len(captured_requests), 4)
+        self.assertEqual(len(captured_requests), 5)
         for req in captured_requests:
             self.assertEqual(req.get_header("Authorization"), "Bearer test-token-abc")
 

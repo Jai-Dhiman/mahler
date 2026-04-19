@@ -185,3 +185,14 @@ class D1Client:
 )""",
             [],
         )
+        self.query(
+            """CREATE TABLE IF NOT EXISTS project_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project TEXT NOT NULL,
+    entry_type TEXT NOT NULL CHECK(entry_type IN ('win', 'blocker')),
+    summary TEXT NOT NULL,
+    git_ref TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+)""",
+            [],
+        )
