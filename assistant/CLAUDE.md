@@ -80,7 +80,7 @@ flyctl status
 Available for custom skills:
 
 - **D1 Database:** `mahler-db` (ID: `b6cb2eac-2903-46bd-baea-b4ff2dc904d0`)
-  - Tables: `email_triage_log`, `triage_state`, `meeting_prep_log`
+  - Tables: `email_triage_log`, `triage_state`, `meeting_prep_log`, `priority_map`
   - Shared with traderjoe (assistant tables are prefixed by purpose, not name)
 - **KV Namespace:** `KV` (ID: `0a93ac9040324708a8b9f00eed8715e9`)
 
@@ -149,9 +149,7 @@ Organized in three layers (Knowledge → Execution → Architectural). Ordering 
 - Classification engine (URGENT / NEEDS_ACTION / FYI / NOISE) using priority map
 - Store triage results in Cloudflare D1
 
-**Phase E3: Kaizen Loop (pulled forward from old Phase 8).** Every triage/brief writes an outcome row to D1: what was surfaced, what the human actioned, what was ignored. Weekly reflection skill reads the log and proposes `SOUL.md` / priority-map edits for human approval. This is the compounding layer — pulled forward so every later phase contributes training data from day one instead of being retrofitted later.
-
-- **v0.9 rescope:** use the pluggable context engine slot (`hermes plugins`) to inject the priority-map + last N outcome rows on every turn, instead of stuffing them into `SOUL.md`. Cleaner, keeps SOUL.md focused on personality, and the context engine is the designed seam for exactly this.
+**Phase E3: Kaizen Loop — shipped.** Priority map moved from container filesystem to D1 (survives deploys). `kaizen-context` plugin (`config/plugins/kaizen-context/plugin.py`) injects the current priority map on every LLM turn via `pre_llm_call`. `kaizen-reflection` skill (`config/skills/kaizen-reflection/`) runs weekly (Sundays 18:00 UTC): `reflect.py --run` queries `email_triage_log` patterns, calls LLM to propose reclassifications, posts proposals to Discord; `reflect.py --apply PROPOSAL_JSON` applies an approved proposal and writes the updated map back to D1. `migrate.py --file PATH` seeds the D1 `priority_map` table on first deploy. Post-deploy one-time step: `flyctl ssh console --user hermes -C "python3 ~/.hermes/skills/kaizen-reflection/scripts/migrate.py --file ~/.hermes/workspace/priority-map.md"`.
 
 **Phase E4: Calendar + meeting flow — shipped.** Google Calendar skill (`gcal_client.py`, `gcal.py`) for listing and creating calendar events via Discord. Meeting prep skill (`d1_client.py`, `dedup.py`, `email_context.py`) delivers an intelligent prep brief ~1 hour before meetings, deduped via D1 `meeting_prep_log`. Calendar-aware plugin (`plugin.py`) injects upcoming meeting context on every LLM turn via the `pre_llm_call` hook.
 
