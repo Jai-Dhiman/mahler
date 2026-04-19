@@ -229,7 +229,7 @@ class TestSetPriorityMap(unittest.TestCase):
     def test_calls_d1_with_insert_sql_and_new_content(self):
         calls = []
 
-        def fake_open(req, timeout=None):
+        def fake_open(req):
             calls.append(req)
             payload = {"result": [{"results": [], "success": True}], "success": True, "errors": [], "messages": []}
             return _make_response(payload)
@@ -239,8 +239,7 @@ class TestSetPriorityMap(unittest.TestCase):
             client.set_priority_map("## URGENT\nUpdated content.")
 
         self.assertEqual(len(calls), 1)
-        import json as _json
-        body = _json.loads(calls[0].data.decode("utf-8"))
+        body = json.loads(calls[0].data.decode("utf-8"))
         self.assertIn("priority_map", body["sql"])
         self.assertIn("## URGENT\nUpdated content.", body["params"])
 
