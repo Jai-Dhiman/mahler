@@ -63,3 +63,72 @@ class TestLogBlockerNoKeyword(unittest.TestCase):
             from project_log import log_blocker_if_triggered
             log_blocker_if_triggered(transcript, "/tmp/project")
         mock_client.insert_project_log.assert_not_called()
+
+
+class TestLogBlockerKeywordMatch(unittest.TestCase):
+
+    def test_writes_blocker_row_when_keyword_matched(self):
+        transcript = {
+            "cwd": "/Users/jdhiman/Documents/mahler",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "the main issue is that the model isn't giving accurate scores",
+                },
+                {"role": "assistant", "content": "Let me look into that."},
+            ],
+        }
+        mock_client = MagicMock()
+
+        with patch("project_log._get_d1_client", return_value=mock_client), \
+             patch("project_log._call_openrouter",
+                   return_value="The scoring model produces inaccurate outputs, blocking feature completion."), \
+             patch("project_log._derive_project_name", return_value="mahler"), \
+             patch("project_log._derive_git_ref", return_value="abc1234"):
+            from project_log import log_blocker_if_triggered
+            log_blocker_if_triggered(transcript, "/Users/jdhiman/Documents/mahler")
+
+        mock_client.insert_project_log.assert_called_once_with(
+            "mahler",
+            "blocker",
+            "The scoring model produces inaccurate outputs, blocking feature completion.",
+            "abc1234",
+        )
+
+    def test_does_not_write_when_openrouter_returns_empty_string(self):
+        transcript = {
+            "cwd": "/tmp/project",
+            "messages": [
+                {"role": "user", "content": "i am stuck on this issue"},
+            ],
+        }
+        mock_client = MagicMock()
+
+        with patch("project_log._get_d1_client", return_value=mock_client), \
+             patch("project_log._call_openrouter", return_value=""), \
+             patch("project_log._derive_project_name", return_value="project"), \
+             patch("project_log._derive_git_ref", return_value=""):
+            from project_log import log_blocker_if_triggered
+            log_blocker_if_triggered(transcript, "/tmp/project")
+
+        mock_client.insert_project_log.assert_not_called()
+
+    def test_uses_transcript_key_as_fallback_for_messages(self):
+        transcript = {
+            "cwd": "/tmp/project",
+            "transcript": [
+                {"role": "user", "content": "blocked on the D1 migration"},
+            ],
+        }
+        mock_client = MagicMock()
+
+        with patch("project_log._get_d1_client", return_value=mock_client), \
+             patch("project_log._call_openrouter", return_value="D1 migration is blocking progress."), \
+             patch("project_log._derive_project_name", return_value="project"), \
+             patch("project_log._derive_git_ref", return_value=""):
+            from project_log import log_blocker_if_triggered
+            log_blocker_if_triggered(transcript, "/tmp/project")
+
+        mock_client.insert_project_log.assert_called_once()
+        args = mock_client.insert_project_log.call_args[0]
+        self.assertEqual(args[1], "blocker")

@@ -166,7 +166,16 @@ def log_win(project: str, summary: str, git_ref: str) -> None:
 def log_blocker_if_triggered(transcript: dict, cwd: str) -> None:
     if not _scan_for_keywords(transcript):
         return
-    # OpenRouter synthesis implemented in Task 8
+    _load_mahler_env()
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    model = "x-ai/grok-4.1-fast"
+    summary = _call_openrouter(transcript, api_key, model)
+    if not summary:
+        return
+    project = _derive_project_name(cwd)
+    git_ref = _derive_git_ref(cwd)
+    client = _get_d1_client()
+    client.insert_project_log(project, "blocker", summary, git_ref)
 
 
 def main() -> None:
