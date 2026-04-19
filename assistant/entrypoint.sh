@@ -137,6 +137,14 @@ if 'meeting-prep' not in existing_skills:
     ))
     added.append('meeting-prep (every 15 min)')
 
+if 'kaizen-reflection' not in existing_skills:
+    jobs.append(make_job(
+        ['kaizen-reflection'],
+        'Run the weekly kaizen reflection: analyze email triage patterns from the past 7 days, generate reclassification proposals, and present each to Discord with approve/deny buttons.',
+        '0 18 * * 0',
+    ))
+    added.append('kaizen-reflection (Sundays 18:00 UTC)')
+
 with open(jobs_file, 'w') as f:
     json.dump({'jobs': jobs, 'updated_at': datetime.now(timezone.utc).isoformat()}, f, indent=2)
 
