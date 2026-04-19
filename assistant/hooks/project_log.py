@@ -155,7 +155,10 @@ def _call_openrouter(transcript: dict, api_key: str, model: str) -> str:
     opener.add_handler(urllib.request.UnknownHandler())
     with opener.open(req, timeout=15) as resp:
         data = json.loads(resp.read().decode("utf-8"))
-    return data["choices"][0]["message"]["content"].strip()
+    choices = data.get("choices") or []
+    if not choices:
+        return ""
+    return choices[0].get("message", {}).get("content", "").strip()
 
 
 def log_win(project: str, summary: str, git_ref: str) -> None:
