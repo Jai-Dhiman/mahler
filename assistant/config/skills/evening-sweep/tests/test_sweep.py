@@ -126,5 +126,16 @@ class TestEmptyBuckets(unittest.TestCase):
         self.assertEqual(output.count("none"), 3)
 
 
+class TestMissingEnvVars(unittest.TestCase):
+
+    def test_missing_notion_api_token_raises_runtime_error(self):
+        env_without_token = {k: v for k, v in os.environ.items()
+                             if k not in ("NOTION_API_TOKEN", "NOTION_DATABASE_ID")}
+        with patch.dict(os.environ, env_without_token, clear=True):
+            with self.assertRaises(RuntimeError) as ctx:
+                sweep.main(_today=date(2026, 4, 19))
+        self.assertIn("environment variable", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

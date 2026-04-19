@@ -30,6 +30,10 @@ from notion_client import NotionClient  # noqa: E402
 def _get_client() -> NotionClient:
     api_token = os.environ.get("NOTION_API_TOKEN")
     database_id = os.environ.get("NOTION_DATABASE_ID")
+    if not api_token:
+        raise RuntimeError("NOTION_API_TOKEN environment variable is not set")
+    if not database_id:
+        raise RuntimeError("NOTION_DATABASE_ID environment variable is not set")
     return NotionClient(api_token, database_id)
 
 
