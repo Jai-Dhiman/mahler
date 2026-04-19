@@ -102,5 +102,41 @@ class TestLastEditedAfterFilter(unittest.TestCase):
         self.assertNotIn("filter", body)
 
 
+class TestCombinedFilters(unittest.TestCase):
+
+    def _capture_body(self, **kwargs) -> dict:
+        from notion_client import _OPENER
+        captured = []
+
+        def side_effect(req):
+            captured.append(req)
+            return _make_response(_list_response([]))
+
+        with patch.object(_OPENER, "open", side_effect=side_effect):
+            client = _make_client()
+            client.list_tasks(**kwargs)
+
+        return json.loads(captured[0].data.decode("utf-8"))
+
+    def test_status_and_last_edited_after_combined_with_and(self):
+        body = self._capture_body(
+            status="Done", priority=None, due_before=None, last_edited_after="2026-04-19"
+        )
+        self.assertIn("and", body["filter"])
+        and_clause = body["filter"]["and"]
+        self.assertEqual(len(and_clause), 2)
+        self.assertIn(
+            {"property": "Status", "status": {"equals": "Done"}},
+            and_clause,
+        )
+        self.assertIn(
+            {
+                "timestamp": "last_edited_time",
+                "last_edited_time": {"on_or_after": "2026-04-19"},
+            },
+            and_clause,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
