@@ -42,6 +42,7 @@ def main(argv=None, _today=None):
 
     completed = client.list_tasks(status="Done", last_edited_after=today_str)
     overdue_raw = client.list_tasks(due_before=yesterday)
+    open_tasks = client.list_tasks()
 
     print("=== COMPLETED TODAY ===")
     for t in completed:
@@ -54,6 +55,15 @@ def main(argv=None, _today=None):
         days_over = (today - date.fromisoformat(t["due"])).days
         day_word = "day" if days_over == 1 else "days"
         print(f"- {t['title']} (due={t['due']}, {days_over} {day_word} overdue)")
+
+    print("\n=== OPEN TASKS ===")
+    for t in open_tasks:
+        parts = [t["title"]]
+        if t["due"]:
+            parts.append(f"due={t['due']}")
+        if t["priority"]:
+            parts.append(f"priority={t['priority']}")
+        print(f"- {', '.join(parts)}")
 
 
 if __name__ == "__main__":
