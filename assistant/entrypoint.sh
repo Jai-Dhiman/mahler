@@ -145,6 +145,14 @@ if 'kaizen-reflection' not in existing_skills:
     ))
     added.append('kaizen-reflection (Sundays 18:00 UTC)')
 
+if 'evening-sweep' not in existing_skills:
+    jobs.append(make_job(
+        ['evening-sweep'],
+        'Run the evening task sweep: query today\'s completed, past-due, and open tasks from Notion, pick the top 3 priorities for tomorrow, post a summary to Discord, and check in on any overdue items.',
+        '0 1 * * *',
+    ))
+    added.append('evening-sweep (01:00 UTC / 6pm Pacific)')
+
 with open(jobs_file, 'w') as f:
     json.dump({'jobs': jobs, 'updated_at': datetime.now(timezone.utc).isoformat()}, f, indent=2)
 
