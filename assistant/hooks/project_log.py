@@ -164,7 +164,9 @@ def log_win(project: str, summary: str, git_ref: str) -> None:
 
 
 def log_blocker_if_triggered(transcript: dict, cwd: str) -> None:
-    pass  # implemented in Task 6
+    if not _scan_for_keywords(transcript):
+        return
+    # OpenRouter synthesis implemented in Task 8
 
 
 def main() -> None:
