@@ -133,7 +133,7 @@ These are capabilities now available in the runtime that Mahler does not yet use
 
 ## Roadmap
 
-Organized in three layers (Knowledge → Execution → Architectural). Ordering inside Execution is by ROI, not chronology.
+Phases are organized by execution wave — what can run in parallel vs. what is blocked. See "Execution Order" below.
 
 ### Knowledge Layer
 
@@ -141,36 +141,90 @@ Organized in three layers (Knowledge → Execution → Architectural). Ordering 
 
 ### Execution Layer
 
-**Phase E1: Trader-analyst morning brief.** Extend the existing `morning-brief` skill to pull traderjoe state (open positions, yesterday's fills, credit-spread deltas, rationale) from shared D1 and deliver an opinionated read in `#mahler`. Highest-leverage next move given the traderjoe/assistant crossover — the daily brief becomes the single place positions, P&L, and priorities land.
+**Phase E2: Email Triage.** Gmail OAuth2 fetch → classify → D1. This is the primary prerequisite for morning-brief having real content, urgent-alert firing on real data, and kaizen-reflection having email patterns to learn from. Gmail only (no Outlook planned). Classification uses the priority map already in D1 from E3. Activates: `morning-brief`, `urgent-alert`, `kaizen-reflection`, and Tier 1 finance parsing.
+- Google Workspace OAuth2 skill (reuses Calendar OAuth already deployed in E4)
+- URGENT / NEEDS_ACTION / FYI / NOISE classification against `priority_map` in D1
+- Store results in `email_triage_log`
 
-**Phase E2: Email Triage depth.**
-- Gmail + Outlook fetch skills (OAuth2 / MSAL auth)
-- Junk folder rescue for Outlook
-- Classification engine (URGENT / NEEDS_ACTION / FYI / NOISE) using priority map
-- Store triage results in Cloudflare D1
+**Phase E2a: Honcho Memory Backend.** Wire Honcho as the persistent memory provider. Runs dialectic reasoning after each turn — derives insights about preferences, communication style, goals, and habits over time. Foundation for CRM, life tracking, and kaizen scope expansion. No prerequisites; deploy as early as possible so it starts accumulating signal.
+- Configure Honcho in `config.yaml`
+- `honcho_profile`, `honcho_search`, `honcho_context`, `honcho_conclude` tools available to agent
+- All subsequent phases deposit signal into Honcho; it compounds automatically
 
-**Phase E3: Kaizen Loop — shipped.** Priority map moved from container filesystem to D1 (survives deploys). `kaizen-context` plugin (`config/plugins/kaizen-context/plugin.py`) injects the current priority map on every LLM turn via `pre_llm_call`. `kaizen-reflection` skill (`config/skills/kaizen-reflection/`) runs weekly (Sundays 18:00 UTC): `reflect.py --run` queries `email_triage_log` patterns, calls LLM to propose reclassifications, posts proposals to Discord; `reflect.py --apply PROPOSAL_JSON` applies an approved proposal and writes the updated map back to D1. `migrate.py --file PATH` seeds the D1 `priority_map` table on first deploy. Post-deploy one-time step: `flyctl ssh console --user hermes -C "python3 ~/.hermes/skills/kaizen-reflection/scripts/migrate.py --file ~/.hermes/workspace/priority-map.md"`.
+**Phase E3: Kaizen Loop — shipped.** Priority map in D1, `kaizen-context` plugin injects it on every turn, `kaizen-reflection` skill runs weekly to propose reclassifications. See `config/plugins/kaizen-context/` and `config/skills/kaizen-reflection/`.
 
-**Phase E4: Calendar + meeting flow — shipped.** Google Calendar skill (`gcal_client.py`, `gcal.py`) for listing and creating calendar events via Discord. Meeting prep skill (`d1_client.py`, `dedup.py`, `email_context.py`) delivers an intelligent prep brief ~1 hour before meetings, deduped via D1 `meeting_prep_log`. Calendar-aware plugin (`plugin.py`) injects upcoming meeting context on every LLM turn via the `pre_llm_call` hook.
+**Phase E3+: Expand Kaizen Scope.** Broaden the kaizen loop beyond email patterns to watch conversation patterns, project logs, and reflection journal entries. Also add the reflection journal: a weekly cron (Sunday evening) asks 2-3 structured questions (what went well, what drained you, what are you avoiding), stores answers in D1, feeds them into both Honcho and kaizen-reflection. Depends on: E2a (Honcho), E4b (project log data).
+- Expand `reflect.py` to query `project_log` and `reflection_log` in addition to `email_triage_log`
+- Add `reflection-journal` skill: cron + Discord command for manual entries
+- Reflection answers feed `honcho_conclude` for durable preference facts
 
-**Phase E4.1: Conversation history — shipped.** `conversation-history` plugin (`config/plugins/conversation-history/plugin.py`) injects the last 45 minutes of Discord channel history on the first turn of each new Hermes session, giving continuity across @mentions without requiring threads or explicit `/new` commands. Uses the same `pre_llm_call` hook and secure HTTPS opener pattern as other plugins. No D1 storage — Discord is the source of truth.
+**Phase E4: Calendar + meeting flow — shipped.** Google Calendar skill, meeting prep brief ~1 hour before meetings, calendar-aware plugin. See `config/skills/google-calendar/` and `config/skills/meeting-prep/`.
 
-**Phase E5: Relationship CRM.**
-- Per-person context tracking
-- Communication pattern detection feeding the morning brief
+**Phase E4.1: Conversation history — shipped.** `conversation-history` plugin injects last 45 minutes of Discord channel history on the first turn of each new session.
 
-**Phase E6: Approval Gates.** Email draft composition with Discord-based approval flow. Depends on E2.
+**Phase E4b: Project Awareness.** Bridge between Claude Code development sessions and Mahler's context. A Claude Code `SessionStop` hook writes a structured summary to D1 `project_log` after each session. A `project-context` Hermes plugin injects recent project activity into every LLM turn. Enables weekly project health cron and frustration/win tracking over time. No dependency on E2 — fully independent.
+- Claude Code hook (local): writes `(project, date, git_summary, blockers, wins)` to D1 via CF API
+- D1 table: `project_log`
+- `project-context` plugin: `pre_llm_call` injects last 7 days of project activity
+- Weekly project health cron: surfaces stalled projects, momentum patterns
 
-- **v0.8 unblock:** approval buttons now render as native Discord slash commands (`/approve`, `/deny`) with inline buttons + per-turn authorization. The ergonomic blocker that deferred this phase is gone; the only remaining work is draft generation + plumbing the approval hook into the send step.
+**Phase E5: Relationship CRM.** D1-backed contact tracking for professional and personal relationships. Tracks last contact date, open commitments, important context per person. Proactive follow-up detection sweeps sent Gmail threads for no-reply after N days (depends on E2). Honcho provides relationship memory layer on top. No formal pipeline UI — Discord commands for CRUD + summary.
+- D1 table: `contacts (name, type, last_contact, context, open_commitments)`
+- `relationship-manager` skill: add/update/list contacts, weekly follow-up sweep
+- Follow-up detection: queries `email_triage_log` for sent threads with no reply (depends on E2)
+- Depends on: E2a (Honcho for relationship memory), soft dependency on E2 for follow-up detection
 
-### Architectural (deferred, needs design spike)
+**Phase E7: Meeting Follow-Through.** After a meeting, extract action items from notes and push them to Notion tasks + update the relevant contact in CRM. Closes the loop that meeting-prep opens. Depends on E5 (CRM for contact update).
+- `meeting-followthrough` skill: Discord command to process notes → structured action items
+- Pushes to `notion-tasks` skill
+- Updates `contacts` table with meeting outcome and any new commitments
 
-**Phase A1: Multi-agent profiles.** Hermes v0.6.0 introduced subagent profiles; Mahler runs as a single monolithic agent today. Natural split: `research` (wiki + web), `ops` (email / calendar / tasks), `trader` (traderjoe state, rationale, risk). Each subagent reads the shared notion-wiki.
+**Phase E8: Evening Task Sweep + Daily Rhythm.** 6pm Pacific cron reviews today's Notion tasks (completed, stalled, rolled-forward), flags patterns, stages tomorrow's top priorities, posts a short summary to Discord. Pairs with the morning brief to give the day a close. No hard dependencies — fully independent.
+- `evening-sweep` skill: cron at 01:00 UTC (6pm Pacific)
+- Queries Notion for today's tasks, categorizes outcomes
+- Surfaces tasks rolled forward 3+ times (stalled pattern)
+- Posts embed to `#mahler`
 
-- **v0.9 note:** profile handling saw significant work — "profile paths fixed in Docker — profiles go to mounted volume" (#7170), per-profile subprocess HOME isolation (#7357), profile-scoped memory isolation (v0.8). The Fly container blocker is probably resolvable now: mount a Fly volume at the profile directory and the state survives redeploys. Still worth a short spike, not a full design pass.
-- **Not a prerequisite for E1–E6.** Pursue only when a concrete boundary problem (context bleed, conflicting personas, skill scoping) makes it worth the architectural cost.
+**Phase E9: Finance Layer.**
+- **Tier 1 (depends on E2):** Parse financial emails from Gmail — Wells Fargo transaction alerts, Wealthfront weekly/monthly summaries, Rocket Money reports. Classification patterns added to email triage. Monthly finance summary posted to Discord.
+- **Tier 2 (independent):** Plaid read-only integration as a separate CF Worker cron. Pulls balances and transaction categories daily, writes summaries to D1. Mahler reads D1; never touches credentials. Wells Fargo and Wealthfront both supported via Plaid. Credentials stored only in Fly.io secrets.
+- Security constraints: D1 stores summarized data only (spend by category, portfolio value, net worth trend), never raw transactions. Read-only scope everywhere.
+
+**Phase E10: Life Tracking.** Low-friction personal tracking via Discord — health/fitness logs, reading tracker (compounds with notion-wiki), personal goals and habit patterns. Weekly reflection cron surfaces trends. Also adds curated news signal to morning brief: a configurable watchlist of domains (markets, AI, trading research) with a brief "things worth 10 minutes" section.
+- `life-log` skill: Discord commands for health, reading, goal entries → D1 `life_log` table
+- `morning-brief+` extension: adds curated news section (configurable source list)
+- Weekly life-tracking review cron → feeds Honcho + reflection journal
+- No dependencies; fully independent
+
+### Execution Order
+
+Dependencies determine three parallel waves:
+
+**Wave 1 — No prerequisites, start immediately (run in parallel):**
+- E2a: Honcho memory backend
+- E4b: Project Awareness (SessionStop hook)
+- E8: Evening Task Sweep
+
+**Wave 2 — After Wave 1 is live (run in parallel):**
+- E2: Gmail OAuth2 fetch + classify (E2a gives it Honcho to learn from immediately)
+- E5: Relationship CRM (needs E2a for Honcho layer; follow-up detection added later when E2 ships)
+- E10: Life Tracking (independent; benefits from E2a)
+
+**Wave 3 — After E2 ships:**
+- E3+: Expand Kaizen + Reflection Journal (needs email data + E2a)
+- E7: Meeting Follow-Through (needs E5 CRM)
+- E9 Tier 1: Finance email parsing (needs Gmail)
+
+**Wave 4 — After Wave 3:**
+- E9 Tier 2: Plaid integration (independent but low urgency until Tier 1 proves value)
+
+### Architectural (deferred)
+
+**Phase A1: Multi-agent profiles.** Not a prerequisite for any phase above. Revisit when a concrete boundary problem (context bleed, conflicting personas) appears. v0.9.0 fixed the Fly volume blocker for profiles — worth a spike when the monolithic agent shows strain.
 
 ### Retired
 
-- **Phase 7: Wiki Bridge** — replaced by notion-wiki (K1). Local filesystem → KV sync approach was one-way with no query surface.
-- **Phase 8: Kaizen Loop** — pulled forward to E3.
+- **Phase E1: Trader-analyst morning brief** — traderjoe state already surfaces in the traderjoe Discord channel. Revisit if a unified brief becomes worth the plumbing.
+- **Phase E6: Approval Gates** — removed. No email drafting planned.
+- **Phase 7: Wiki Bridge** — replaced by K1 (notion-wiki).
+- **Phase 8: Kaizen Loop** — shipped as E3.
