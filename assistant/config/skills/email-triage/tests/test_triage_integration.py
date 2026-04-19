@@ -85,6 +85,7 @@ class TestDeduplication(unittest.TestCase):
         email_new = _make_email("new-001")
 
         d1 = _make_d1(already_processed_ids={"existing-001"})
+        d1.get_priority_map.return_value = "priority map"
 
         with (
             _patch_env(),
@@ -93,7 +94,6 @@ class TestDeduplication(unittest.TestCase):
             patch("triage.gmail_client.fetch_unread_emails", return_value=[email_existing, email_new]),
             patch("triage.outlook_client.fetch_unread_emails", return_value=([], "")),
             patch("triage.classify_batch", return_value=[_llm_result("new-001", "FYI")]),
-            patch("triage._load_priority_map", return_value="priority map"),
         ):
             main([])
 
@@ -116,6 +116,7 @@ class TestPrefilterSkipsLLM(unittest.TestCase):
         )
 
         d1 = _make_d1()
+        d1.get_priority_map.return_value = "priority map"
 
         with (
             _patch_env(),
@@ -124,7 +125,6 @@ class TestPrefilterSkipsLLM(unittest.TestCase):
             patch("triage.gmail_client.fetch_unread_emails", return_value=[noise_email]),
             patch("triage.outlook_client.fetch_unread_emails", return_value=([], "")),
             patch("triage.classify_batch") as mock_classify,
-            patch("triage._load_priority_map", return_value="priority map"),
         ):
             main([])
 
@@ -144,6 +144,7 @@ class TestUrgentAlert(unittest.TestCase):
         urgent_email = _make_email("urgent-001", from_addr="ceo@corp.com", subject="CRITICAL")
 
         d1 = _make_d1()
+        d1.get_priority_map.return_value = "priority map"
 
         with (
             _patch_env(),
@@ -152,7 +153,6 @@ class TestUrgentAlert(unittest.TestCase):
             patch("triage.gmail_client.fetch_unread_emails", return_value=[urgent_email]),
             patch("triage.outlook_client.fetch_unread_emails", return_value=([], "")),
             patch("triage.classify_batch", return_value=[_llm_result("urgent-001", "URGENT", "Needs attention now")]),
-            patch("triage._load_priority_map", return_value="priority map"),
             patch("triage.send_urgent_alert") as mock_alert,
         ):
             main([])
@@ -172,6 +172,7 @@ class TestD1BeforeAlert(unittest.TestCase):
         urgent_email = _make_email("urgent-002", subject="Server is down")
 
         d1 = _make_d1()
+        d1.get_priority_map.return_value = "priority map"
         call_order = []
 
         d1.insert_triage_result.side_effect = lambda *a, **kw: call_order.append("d1_insert")
@@ -186,7 +187,6 @@ class TestD1BeforeAlert(unittest.TestCase):
             patch("triage.gmail_client.fetch_unread_emails", return_value=[urgent_email]),
             patch("triage.outlook_client.fetch_unread_emails", return_value=([], "")),
             patch("triage.classify_batch", return_value=[_llm_result("urgent-002", "URGENT", "Down now")]),
-            patch("triage._load_priority_map", return_value="priority map"),
             patch("triage.send_urgent_alert", side_effect=fake_alert),
         ):
             main([])
@@ -211,6 +211,8 @@ class TestDryRun(unittest.TestCase):
         # dry-run doesn't require DISCORD_TRIAGE_WEBHOOK
         env = {k: v for k, v in _BASE_ENV.items() if k != "DISCORD_TRIAGE_WEBHOOK"}
 
+        d1.get_priority_map.return_value = "priority map"
+
         with (
             patch.dict("os.environ", env, clear=True),
             patch("triage.D1Client", return_value=d1),
@@ -218,7 +220,6 @@ class TestDryRun(unittest.TestCase):
             patch("triage.gmail_client.fetch_unread_emails", return_value=[urgent_email]),
             patch("triage.outlook_client.fetch_unread_emails", return_value=([], "")),
             patch("triage.classify_batch", return_value=[_llm_result("dry-001", "URGENT", "Dry fire")]),
-            patch("triage._load_priority_map", return_value="priority map"),
             patch("triage.send_urgent_alert") as mock_alert,
         ):
             main(["--dry-run"])
@@ -263,13 +264,14 @@ class TestMissingEnvVar(unittest.TestCase):
         env = {k: v for k, v in _BASE_ENV.items() if k != "DISCORD_TRIAGE_WEBHOOK"}
         d1 = _make_d1()
 
+        d1.get_priority_map.return_value = "priority map"
+
         with (
             patch.dict("os.environ", env, clear=True),
             patch("triage.D1Client", return_value=d1),
             patch("triage.gmail_client.refresh_access_token", return_value="tok"),
             patch("triage.gmail_client.fetch_unread_emails", return_value=[]),
             patch("triage.outlook_client.fetch_unread_emails", return_value=([], "")),
-            patch("triage._load_priority_map", return_value="priority map"),
         ):
             # Should not raise
             main(["--dry-run"])
@@ -292,6 +294,8 @@ class TestLLMClassificationError(unittest.TestCase):
             {"message_id": "err-002", "classification": "NEEDS_ACTION", "summary": "", "classification_error": True},
         ]
 
+        d1.get_priority_map.return_value = "priority map"
+
         with (
             _patch_env(),
             patch("triage.D1Client", return_value=d1),
@@ -299,7 +303,6 @@ class TestLLMClassificationError(unittest.TestCase):
             patch("triage.gmail_client.fetch_unread_emails", return_value=[email1, email2]),
             patch("triage.outlook_client.fetch_unread_emails", return_value=([], "")),
             patch("triage.classify_batch", return_value=error_results),
-            patch("triage._load_priority_map", return_value="priority map"),
             patch("triage.send_urgent_alert") as mock_alert,
         ):
             # Should not raise
@@ -325,6 +328,8 @@ class TestGmailFailurePartialSuccess(unittest.TestCase):
 
         d1 = _make_d1()
 
+        d1.get_priority_map.return_value = "priority map"
+
         with (
             _patch_env(),
             patch("triage.D1Client", return_value=d1),
@@ -332,7 +337,6 @@ class TestGmailFailurePartialSuccess(unittest.TestCase):
             patch("triage.gmail_client.fetch_unread_emails", side_effect=RuntimeError("Gmail down")),
             patch("triage.outlook_client.fetch_unread_emails", return_value=([outlook_email], "")),
             patch("triage.classify_batch", return_value=[_llm_result("out-001", "FYI", "From Outlook")]),
-            patch("triage._load_priority_map", return_value="priority map"),
         ):
             # Should not raise; Gmail error is caught and logged
             main([])
@@ -410,6 +414,46 @@ class TestClassifyBatchErrorHandling(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["classification"], "NEEDS_ACTION")
         self.assertTrue(results[0]["classification_error"])
+
+
+# ---------------------------------------------------------------------------
+# Test 9: Priority map read from D1
+# ---------------------------------------------------------------------------
+
+class TestPriorityMapFromD1(unittest.TestCase):
+
+    def test_triage_uses_priority_map_from_d1(self):
+        email = _make_email("msg-pm-001")
+        d1 = _make_d1()
+        d1.get_priority_map.return_value = "## URGENT\nTest priority map."
+
+        with (
+            _patch_env(),
+            patch("triage.D1Client", return_value=d1),
+            patch("triage.gmail_client.refresh_access_token", return_value="tok"),
+            patch("triage.gmail_client.fetch_unread_emails", return_value=[email]),
+            patch("triage.outlook_client.fetch_unread_emails", return_value=([], "")),
+            patch("triage.classify_batch", return_value=[_llm_result("msg-pm-001", "FYI")]) as mock_classify,
+        ):
+            main(["--dry-run"])
+
+        args, _ = mock_classify.call_args
+        self.assertEqual(args[1], "## URGENT\nTest priority map.")
+
+    def test_triage_raises_when_d1_priority_map_unavailable(self):
+        d1 = _make_d1()
+        d1.get_priority_map.side_effect = RuntimeError("priority_map table is empty")
+
+        with (
+            _patch_env(),
+            patch("triage.D1Client", return_value=d1),
+            patch("triage.gmail_client.refresh_access_token", return_value="tok"),
+            patch("triage.gmail_client.fetch_unread_emails", return_value=[]),
+            patch("triage.outlook_client.fetch_unread_emails", return_value=([], "")),
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                main(["--dry-run"])
+        self.assertIn("priority_map table is empty", str(ctx.exception))
 
 
 if __name__ == "__main__":

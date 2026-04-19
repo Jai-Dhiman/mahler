@@ -148,27 +148,6 @@ def _kv_put(account_id: str, api_token: str, key: str, value: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Priority map loader
-# ---------------------------------------------------------------------------
-
-def _load_priority_map() -> str:
-    custom = os.environ.get("PRIORITY_MAP_PATH")
-    if custom:
-        p = Path(custom).expanduser()
-        with open(p, "r", encoding="utf-8") as f:
-            return f.read()
-
-    hermes_path = Path("/home/hermes/.hermes/workspace/priority-map.md")
-    if hermes_path.exists():
-        with open(hermes_path, "r", encoding="utf-8") as f:
-            return f.read()
-
-    fallback = Path(__file__).parent.parent / "priority-map.md"
-    with open(fallback, "r", encoding="utf-8") as f:
-        return f.read()
-
-
-# ---------------------------------------------------------------------------
 # LLM classification
 # ---------------------------------------------------------------------------
 
@@ -400,7 +379,7 @@ def main(argv: list[str] | None = None) -> None:
             to_classify.append(email)
 
     # 8. LLM classify remaining in batches of 20
-    priority_map = _load_priority_map()
+    priority_map = d1.get_priority_map()
     api_key = env["OPENROUTER_API_KEY"]
     model = os.environ.get("OPENROUTER_MODEL", _DEFAULT_MODEL)
 
