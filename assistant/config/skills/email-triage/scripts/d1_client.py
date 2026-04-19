@@ -144,6 +144,13 @@ class D1Client:
             [content],
         )
 
+    def insert_project_log(self, project: str, entry_type: str, summary: str, git_ref: str) -> None:
+        """Insert one project log entry. Raises RuntimeError on D1 failure."""
+        self.query(
+            "INSERT INTO project_log (project, entry_type, summary, git_ref) VALUES (?, ?, ?, ?)",
+            [project, entry_type, summary, git_ref],
+        )
+
     def ensure_tables(self) -> None:
         """Create tables if they don't exist. Safe to call on every run."""
         self.query(

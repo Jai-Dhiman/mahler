@@ -264,5 +264,35 @@ class TestSetPriorityMap(unittest.TestCase):
         self.assertIn("## URGENT\nUpdated content.", body["params"])
 
 
+class TestD1ClientInsertProjectLog(unittest.TestCase):
+
+    def test_insert_project_log_sends_correct_sql_and_params(self):
+        captured = []
+
+        def capture_open(req):
+            body = json.loads(req.data.decode("utf-8"))
+            captured.append(body)
+            return _make_response(_success_payload([]))
+
+        with patch.object(_OPENER, "open", side_effect=capture_open):
+            client = _make_client()
+            client.insert_project_log("mahler", "win", "Shipped kaizen-reflection skill", "abc1234")
+
+        self.assertEqual(len(captured), 1)
+        self.assertIn("INSERT INTO project_log", captured[0]["sql"])
+        params = captured[0]["params"]
+        self.assertEqual(params[0], "mahler")
+        self.assertEqual(params[1], "win")
+        self.assertEqual(params[2], "Shipped kaizen-reflection skill")
+        self.assertEqual(params[3], "abc1234")
+
+    def test_insert_project_log_raises_on_d1_error(self):
+        error_payload = {"success": False, "errors": [{"message": "table locked"}], "result": [], "messages": []}
+        with patch.object(_OPENER, "open", return_value=_make_response(error_payload)):
+            client = _make_client()
+            with self.assertRaises(RuntimeError):
+                client.insert_project_log("mahler", "blocker", "Stuck on X", "")
+
+
 if __name__ == "__main__":
     unittest.main()
