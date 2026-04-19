@@ -36,6 +36,12 @@ assistant/
           notion_client.py  # Notion API client (pages, databases, filters)
           tasks.py          # CLI: create, list, update, complete, delete
         tests/
+      evening-sweep/      # Evening task sweep skill (cron at 01:00 UTC / 6pm Pacific)
+        SKILL.md
+        scripts/
+          notion_client.py  # Notion API client (completed, past-due, open task queries)
+          sweep.py          # CLI: run sweep, post summary to Discord, pick top 3 for tomorrow
+        tests/
   .env                    # Local secrets (gitignored)
   .env.example            # Template for required secrets
   docs/
@@ -179,11 +185,12 @@ Phases are organized by execution wave — what can run in parallel vs. what is 
 - Pushes to `notion-tasks` skill
 - Updates `contacts` table with meeting outcome and any new commitments
 
-**Phase E8: Evening Task Sweep + Daily Rhythm.** 6pm Pacific cron reviews today's Notion tasks (completed, stalled, rolled-forward), flags patterns, stages tomorrow's top priorities, posts a short summary to Discord. Pairs with the morning brief to give the day a close. No hard dependencies — fully independent.
-- `evening-sweep` skill: cron at 01:00 UTC (6pm Pacific)
-- Queries Notion for today's tasks, categorizes outcomes
-- Surfaces tasks rolled forward 3+ times (stalled pattern)
-- Posts embed to `#mahler`
+**Phase E8: Evening Task Sweep + Daily Rhythm — shipped.** 6pm Pacific cron reviews today's Notion tasks (completed, stalled, rolled-forward), flags patterns, stages tomorrow's top priorities, posts a short summary to Discord. Pairs with the morning brief to give the day a close. No hard dependencies — fully independent.
+- Skill path: `config/skills/evening-sweep/` (cron at 01:00 UTC / 6pm Pacific via `entrypoint.sh`)
+- Queries Notion for completed-today, past-due, and open tasks
+- Posts structured summary to Discord; picks top 3 tasks for tomorrow; checks in on overdue items
+- `scripts/notion_client.py`: Notion API client with date-filtered queries
+- `scripts/sweep.py`: sweep runner, Discord post formatting, top-3 selection logic
 
 **Phase E9: Finance Layer.**
 - **Tier 1 (depends on E2):** Parse financial emails from Gmail — Wells Fargo transaction alerts, Wealthfront weekly/monthly summaries, Rocket Money reports. Classification patterns added to email triage. Monthly finance summary posted to Discord.
@@ -203,7 +210,7 @@ Dependencies determine three parallel waves:
 **Wave 1 — No prerequisites, start immediately (run in parallel):**
 - E2a: Honcho memory backend
 - E4b: Project Awareness (SessionStop hook)
-- E8: Evening Task Sweep
+- E8: Evening Task Sweep — shipped
 
 **Wave 2 — After Wave 1 is live (run in parallel):**
 - E2: Gmail OAuth2 fetch + classify (E2a gives it Honcho to learn from immediately)
