@@ -75,19 +75,6 @@ def _call_llm(prompt: str, api_key: str, model: str) -> str:
         raise RuntimeError(f"Unexpected OpenRouter response shape: {data}") from exc
 
 
-_APPLY_PROMPT = """\
-You are editing an email classification priority map in markdown format.
-
-Current priority map:
-{priority_map}
-
-Apply this change: move the sender "{sender}" from {current_tier} to {proposed_tier}.
-Evidence: {evidence}
-
-If {sender} appears as an example under {current_tier}, move that line to {proposed_tier}.
-If it does not appear explicitly, add it as a new example under {proposed_tier}.
-Return the complete updated priority map as a markdown document. No other text.\
-"""
 
 _PROPOSAL_PROMPT = """\
 You are analyzing email triage patterns for a personal chief-of-staff assistant.
@@ -169,14 +156,24 @@ def _apply(proposal_json: str, env: dict) -> None:
     priority_map = d1.get_priority_map()
     model = os.environ.get("OPENROUTER_MODEL", _DEFAULT_MODEL)
 
-    prompt = _APPLY_PROMPT.format(
-        priority_map=priority_map,
-        sender=proposal["sender"],
-        current_tier=proposal["current_tier"],
-        proposed_tier=proposal["proposed_tier"],
-        evidence=proposal["evidence"],
+    sender = proposal["sender"]
+    current_tier = proposal["current_tier"]
+    proposed_tier = proposal["proposed_tier"]
+    evidence = proposal["evidence"]
+    prompt = (
+        "You are editing an email classification priority map in markdown format.\n\n"
+        f"Current priority map:\n{priority_map}\n\n"
+        f'Apply this change: move the sender "{sender}" from {current_tier} to {proposed_tier}.\n'
+        f"Evidence: {evidence}\n\n"
+        f"If {sender} appears as an example under {current_tier}, move that line to {proposed_tier}.\n"
+        f"If it does not appear explicitly, add it as a new example under {proposed_tier}.\n"
+        "Return the complete updated priority map as a markdown document. No other text."
     )
     updated_map = _call_llm(prompt, env["OPENROUTER_API_KEY"], model)
+    if not updated_map.strip() or "##" not in updated_map:
+        raise RuntimeError(
+            "LLM returned implausible priority map (missing ## headings) — aborting write"
+        )
     d1.set_priority_map(updated_map)
     print(f"Priority map updated. Moved {proposal['sender']} to {proposal['proposed_tier']}.")
 

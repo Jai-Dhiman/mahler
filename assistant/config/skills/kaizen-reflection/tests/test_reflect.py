@@ -140,6 +140,38 @@ class TestReflectApply(unittest.TestCase):
                 reflect.main(["--apply", incomplete])
         self.assertIn("missing required keys", str(ctx.exception))
 
+    def test_raises_and_does_not_write_when_llm_call_fails(self):
+        mock_d1 = MagicMock()
+        mock_d1.get_priority_map.return_value = "## NEEDS_ACTION\n- Direct questions"
+
+        with (
+            _patch_env(),
+            patch("reflect.D1Client", return_value=mock_d1),
+            patch("reflect._call_llm", side_effect=RuntimeError("OpenRouter auth failure")),
+        ):
+            import reflect
+            with self.assertRaises(RuntimeError) as ctx:
+                reflect.main(["--apply", self._make_proposal()])
+
+        self.assertIn("OpenRouter", str(ctx.exception))
+        mock_d1.set_priority_map.assert_not_called()
+
+    def test_raises_and_does_not_write_when_llm_returns_implausible_map(self):
+        mock_d1 = MagicMock()
+        mock_d1.get_priority_map.return_value = "## NEEDS_ACTION\n- Direct questions"
+
+        with (
+            _patch_env(),
+            patch("reflect.D1Client", return_value=mock_d1),
+            patch("reflect._call_llm", return_value="Sorry, I cannot help with that."),
+        ):
+            import reflect
+            with self.assertRaises(RuntimeError) as ctx:
+                reflect.main(["--apply", self._make_proposal()])
+
+        self.assertIn("implausible priority map", str(ctx.exception))
+        mock_d1.set_priority_map.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

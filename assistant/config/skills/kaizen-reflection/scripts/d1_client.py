@@ -63,6 +63,8 @@ class D1Client:
 
     def get_triage_patterns(self, since_days: int = 7, min_count: int = 3) -> list[dict]:
         """Return senders appearing >= min_count times at the same tier in the last since_days days."""
+        if not isinstance(since_days, int) or since_days <= 0:
+            raise ValueError(f"since_days must be a positive integer, got {since_days!r}")
         return self.query(
             """SELECT from_addr, classification, COUNT(*) AS occurrence_count
                FROM email_triage_log
