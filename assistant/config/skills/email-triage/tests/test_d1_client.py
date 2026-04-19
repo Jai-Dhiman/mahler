@@ -137,11 +137,31 @@ class TestD1ClientEnsureTables(unittest.TestCase):
             client = _make_client()
             client.ensure_tables()
 
-        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(calls), 5)
         self.assertIn("CREATE TABLE IF NOT EXISTS email_triage_log", calls[0])
         self.assertIn("CREATE TABLE IF NOT EXISTS triage_state", calls[1])
         self.assertIn("CREATE TABLE IF NOT EXISTS mahler_kv", calls[2])
         self.assertIn("CREATE TABLE IF NOT EXISTS priority_map", calls[3])
+
+
+class TestD1ClientProjectLogTable(unittest.TestCase):
+
+    def test_ensure_tables_creates_project_log_table(self):
+        calls = []
+
+        def capture_open(req):
+            body = json.loads(req.data.decode("utf-8"))
+            calls.append(body["sql"])
+            return _make_response(_success_payload([]))
+
+        with patch.object(_OPENER, "open", side_effect=capture_open):
+            client = _make_client()
+            client.ensure_tables()
+
+        self.assertEqual(len(calls), 5)
+        self.assertIn("CREATE TABLE IF NOT EXISTS project_log", calls[4])
+        self.assertIn("entry_type", calls[4])
+        self.assertIn("summary", calls[4])
 
 
 class TestD1ClientAuthHeader(unittest.TestCase):
@@ -191,7 +211,7 @@ class TestD1ClientAuthHeader(unittest.TestCase):
             client = _make_client()
             client.ensure_tables()
 
-        self.assertEqual(len(captured_requests), 4)
+        self.assertEqual(len(captured_requests), 5)
         for req in captured_requests:
             self.assertEqual(req.get_header("Authorization"), "Bearer test-token-abc")
 
@@ -242,6 +262,64 @@ class TestSetPriorityMap(unittest.TestCase):
         body = json.loads(calls[0].data.decode("utf-8"))
         self.assertIn("priority_map", body["sql"])
         self.assertIn("## URGENT\nUpdated content.", body["params"])
+
+
+class TestD1ClientInsertProjectLog(unittest.TestCase):
+
+    def test_insert_project_log_sends_correct_sql_and_params(self):
+        captured = []
+
+        def capture_open(req):
+            body = json.loads(req.data.decode("utf-8"))
+            captured.append(body)
+            return _make_response(_success_payload([]))
+
+        with patch.object(_OPENER, "open", side_effect=capture_open):
+            client = _make_client()
+            client.insert_project_log("mahler", "win", "Shipped kaizen-reflection skill", "abc1234")
+
+        self.assertEqual(len(captured), 1)
+        self.assertIn("INSERT INTO project_log", captured[0]["sql"])
+        params = captured[0]["params"]
+        self.assertEqual(params[0], "mahler")
+        self.assertEqual(params[1], "win")
+        self.assertEqual(params[2], "Shipped kaizen-reflection skill")
+        self.assertEqual(params[3], "abc1234")
+
+    def test_insert_project_log_raises_on_d1_error(self):
+        error_payload = {"success": False, "errors": [{"message": "table locked"}], "result": [], "messages": []}
+        with patch.object(_OPENER, "open", return_value=_make_response(error_payload)):
+            client = _make_client()
+            with self.assertRaises(RuntimeError):
+                client.insert_project_log("mahler", "blocker", "Stuck on X", "")
+
+
+class TestD1ClientGetRecentProjectLog(unittest.TestCase):
+
+    def test_returns_rows_within_requested_day_window(self):
+        rows = [
+            {"project": "mahler", "entry_type": "win", "summary": "Shipped kaizen", "git_ref": "abc", "created_at": "2026-04-19 10:00:00"},
+        ]
+
+        def capture_open(req):
+            body = json.loads(req.data.decode("utf-8"))
+            if "project_log" in body["sql"] and "SELECT" in body["sql"]:
+                return _make_response(_success_payload(rows))
+            return _make_response(_success_payload([]))
+
+        with patch.object(_OPENER, "open", side_effect=capture_open):
+            client = _make_client()
+            result = client.get_recent_project_log(days=7)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["project"], "mahler")
+        self.assertEqual(result[0]["entry_type"], "win")
+
+    def test_returns_empty_list_when_no_entries(self):
+        with patch.object(_OPENER, "open", return_value=_make_response(_success_payload([]))):
+            client = _make_client()
+            result = client.get_recent_project_log(days=7)
+        self.assertEqual(result, [])
 
 
 if __name__ == "__main__":

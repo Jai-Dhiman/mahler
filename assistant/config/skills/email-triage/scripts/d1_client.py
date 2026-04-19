@@ -144,6 +144,21 @@ class D1Client:
             [content],
         )
 
+    def get_recent_project_log(self, days: int = 7) -> list[dict]:
+        """Return project_log rows from the last N days, newest first."""
+        return self.query(
+            "SELECT project, entry_type, summary, git_ref, created_at FROM project_log "
+            "WHERE created_at >= datetime('now', ? || ' days') ORDER BY created_at DESC",
+            [f"-{days}"],
+        )
+
+    def insert_project_log(self, project: str, entry_type: str, summary: str, git_ref: str) -> None:
+        """Insert one project log entry. Raises RuntimeError on D1 failure."""
+        self.query(
+            "INSERT INTO project_log (project, entry_type, summary, git_ref) VALUES (?, ?, ?, ?)",
+            [project, entry_type, summary, git_ref],
+        )
+
     def ensure_tables(self) -> None:
         """Create tables if they don't exist. Safe to call on every run."""
         self.query(
@@ -182,6 +197,17 @@ class D1Client:
     version INTEGER PRIMARY KEY,
     content TEXT NOT NULL,
     updated_at TEXT NOT NULL
+)""",
+            [],
+        )
+        self.query(
+            """CREATE TABLE IF NOT EXISTS project_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project TEXT NOT NULL,
+    entry_type TEXT NOT NULL CHECK(entry_type IN ('win', 'blocker')),
+    summary TEXT NOT NULL,
+    git_ref TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 )""",
             [],
         )
