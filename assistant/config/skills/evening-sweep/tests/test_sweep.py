@@ -107,5 +107,24 @@ class TestOpenTasksSection(unittest.TestCase):
         mock_client.list_tasks.assert_any_call()
 
 
+class TestEmptyBuckets(unittest.TestCase):
+
+    @patch.dict(os.environ, {"NOTION_API_TOKEN": "tok", "NOTION_DATABASE_ID": "db-id"})
+    @patch("sweep.NotionClient")
+    def test_all_empty_buckets_print_none_for_each_section(self, mock_cls):
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.list_tasks.side_effect = [[], [], []]
+
+        with patch("sys.stdout", new_callable=StringIO) as mock_out:
+            sweep.main(_today=date(2026, 4, 19))
+
+        output = mock_out.getvalue()
+        self.assertIn("=== COMPLETED TODAY ===", output)
+        self.assertIn("=== PAST DUE (not done) ===", output)
+        self.assertIn("=== OPEN TASKS ===", output)
+        self.assertEqual(output.count("none"), 3)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -45,25 +45,34 @@ def main(argv=None, _today=None):
     open_tasks = client.list_tasks()
 
     print("=== COMPLETED TODAY ===")
-    for t in completed:
-        priority_part = f", priority={t['priority']}" if t["priority"] else ""
-        print(f"- {t['title']}{priority_part}")
+    if completed:
+        for t in completed:
+            priority_part = f", priority={t['priority']}" if t["priority"] else ""
+            print(f"- {t['title']}{priority_part}")
+    else:
+        print("none")
 
     print("\n=== PAST DUE (not done) ===")
     past_due = [t for t in overdue_raw if t["status"] != "Done"]
-    for t in past_due:
-        days_over = (today - date.fromisoformat(t["due"])).days
-        day_word = "day" if days_over == 1 else "days"
-        print(f"- {t['title']} (due={t['due']}, {days_over} {day_word} overdue)")
+    if past_due:
+        for t in past_due:
+            days_over = (today - date.fromisoformat(t["due"])).days
+            day_word = "day" if days_over == 1 else "days"
+            print(f"- {t['title']} (due={t['due']}, {days_over} {day_word} overdue)")
+    else:
+        print("none")
 
     print("\n=== OPEN TASKS ===")
-    for t in open_tasks:
-        parts = [t["title"]]
-        if t["due"]:
-            parts.append(f"due={t['due']}")
-        if t["priority"]:
-            parts.append(f"priority={t['priority']}")
-        print(f"- {', '.join(parts)}")
+    if open_tasks:
+        for t in open_tasks:
+            parts = [t["title"]]
+            if t["due"]:
+                parts.append(f"due={t['due']}")
+            if t["priority"]:
+                parts.append(f"priority={t['priority']}")
+            print(f"- {', '.join(parts)}")
+    else:
+        print("none")
 
 
 if __name__ == "__main__":
