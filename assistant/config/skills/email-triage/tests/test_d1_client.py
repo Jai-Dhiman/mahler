@@ -137,7 +137,7 @@ class TestD1ClientEnsureTables(unittest.TestCase):
             client = _make_client()
             client.ensure_tables()
 
-        self.assertEqual(len(calls), 5)
+        self.assertEqual(len(calls), 7)
         self.assertIn("CREATE TABLE IF NOT EXISTS email_triage_log", calls[0])
         self.assertIn("CREATE TABLE IF NOT EXISTS triage_state", calls[1])
         self.assertIn("CREATE TABLE IF NOT EXISTS mahler_kv", calls[2])
@@ -158,7 +158,7 @@ class TestD1ClientProjectLogTable(unittest.TestCase):
             client = _make_client()
             client.ensure_tables()
 
-        self.assertEqual(len(calls), 5)
+        self.assertEqual(len(calls), 7)
         self.assertIn("CREATE TABLE IF NOT EXISTS project_log", calls[4])
         self.assertIn("entry_type", calls[4])
         self.assertIn("summary", calls[4])
@@ -211,7 +211,7 @@ class TestD1ClientAuthHeader(unittest.TestCase):
             client = _make_client()
             client.ensure_tables()
 
-        self.assertEqual(len(captured_requests), 5)
+        self.assertEqual(len(captured_requests), 7)
         for req in captured_requests:
             self.assertEqual(req.get_header("Authorization"), "Bearer test-token-abc")
 
@@ -320,6 +320,77 @@ class TestD1ClientGetRecentProjectLog(unittest.TestCase):
             client = _make_client()
             result = client.get_recent_project_log(days=7)
         self.assertEqual(result, [])
+
+
+class TestGetUnattributedRecent(unittest.TestCase):
+
+    def test_returns_urgent_outlook_rows_with_conversation_id(self):
+        rows = [{
+            "message_id": "msg-1",
+            "conversation_id": "conv-abc",
+            "from_addr": "boss@work.com",
+            "subject": "Urgent",
+            "classification": "URGENT",
+        }]
+        with patch.object(_OPENER, "open", return_value=_make_response(_success_payload(rows))):
+            client = _make_client()
+            result = client.get_unattributed_recent(since_days=3)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["conversation_id"], "conv-abc")
+        self.assertEqual(result[0]["classification"], "URGENT")
+
+    def test_returns_empty_list_when_no_unattributed_rows(self):
+        with patch.object(_OPENER, "open", return_value=_make_response(_success_payload([]))):
+            client = _make_client()
+            result = client.get_unattributed_recent(since_days=3)
+
+        self.assertEqual(result, [])
+
+
+class TestMarkReplied(unittest.TestCase):
+
+    def test_mark_replied_sends_update_with_replied_at_and_message_id(self):
+        captured = []
+
+        def fake_open(req, **kwargs):
+            body = json.loads(req.data)
+            captured.append(body)
+            return _make_response(_success_payload([]))
+
+        with patch.object(_OPENER, "open", side_effect=fake_open):
+            client = _make_client()
+            client.mark_replied("msg-1", "2026-04-19T10:00:00Z")
+
+        self.assertEqual(len(captured), 1)
+        self.assertIn("UPDATE", captured[0]["sql"])
+        self.assertIn("replied_at", captured[0]["sql"])
+        self.assertIn("2026-04-19T10:00:00Z", captured[0]["params"])
+        self.assertIn("msg-1", captured[0]["params"])
+
+
+class TestInsertTriageResultConversationId(unittest.TestCase):
+
+    def test_insert_includes_conversation_id_in_request_params(self):
+        captured = []
+
+        def fake_open(req, **kwargs):
+            body = json.loads(req.data)
+            captured.append(body)
+            return _make_response(_success_payload([]))
+
+        with patch.object(_OPENER, "open", side_effect=fake_open):
+            client = _make_client()
+            client.insert_triage_result({
+                "message_id": "msg-1",
+                "source": "outlook",
+                "classification": "URGENT",
+                "processed_at": "2026-04-19T10:00:00Z",
+                "conversation_id": "conv-abc",
+            })
+
+        insert_call = next(c for c in captured if "INSERT" in c.get("sql", ""))
+        self.assertIn("conv-abc", insert_call["params"])
 
 
 if __name__ == "__main__":
