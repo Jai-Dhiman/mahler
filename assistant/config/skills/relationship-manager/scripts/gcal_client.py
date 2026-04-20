@@ -53,7 +53,7 @@ def list_events(
     access_token: str,
     time_min: str,
     time_max: str,
-    max_results: int = 50,
+    max_results: int = 250,
 ) -> list[dict]:
     """Fetch calendar events in [time_min, time_max]. Returns normalized event dicts. Raises on API error."""
     results = []
@@ -62,7 +62,7 @@ def list_events(
         params: dict = {
             "timeMin": time_min,
             "timeMax": time_max,
-            "maxResults": 250,
+            "maxResults": max_results,
             "singleEvents": "true",
             "orderBy": "startTime",
         }
