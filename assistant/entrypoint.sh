@@ -126,7 +126,7 @@ if 'morning-brief' not in existing_skills:
     jobs.append(make_job(
         ['morning-brief'],
         'Post the evening email brief: query the last 12 hours of triage results and post a structured summary to Discord.',
-        '0 4 * * *',
+        '0 1 * * *',
     ))
     added.append('morning-brief (8am + 8pm PST)')
 
