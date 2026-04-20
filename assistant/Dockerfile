@@ -40,6 +40,8 @@ COPY --chown=hermes:hermes config/skills/meeting-prep /home/hermes/.hermes/skill
 COPY --chown=hermes:hermes config/skills/kaizen-reflection /home/hermes/.hermes/skills/kaizen-reflection
 COPY --chown=hermes:hermes config/skills/reflection-journal /home/hermes/.hermes/skills/reflection-journal
 COPY --chown=hermes:hermes config/skills/evening-sweep /home/hermes/.hermes/skills/evening-sweep
+COPY --chown=hermes:hermes config/skills/relationship-manager /home/hermes/.hermes/skills/relationship-manager
+COPY --chown=hermes:hermes config/skills/meeting-followthrough /home/hermes/.hermes/skills/meeting-followthrough
 COPY --chown=hermes:hermes config/plugins /home/hermes/.hermes/plugins
 
 # Copy priority map to Hermes workspace
