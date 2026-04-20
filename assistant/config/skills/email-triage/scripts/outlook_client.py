@@ -213,9 +213,9 @@ def fetch_sent_replies(
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     conv_filter = " or ".join(
-        f"conversationId eq '{cid}'" for cid in conversation_ids[:50]
+        f"conversationId eq '{cid.replace(chr(39), chr(39)*2)}'" for cid in conversation_ids[:50]
     )
-    filter_expr = f"({conv_filter}) and sentDateTime ge {cutoff}"
+    filter_expr = f"({conv_filter}) and sentDateTime ge '{cutoff}'"
     params = urllib.parse.urlencode({
         "$filter": filter_expr,
         "$select": "conversationId,sentDateTime",
