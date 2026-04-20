@@ -70,6 +70,16 @@ class D1Client:
             )
         """)
 
+    def get_contact(self, name: str) -> dict:
+        rows = self.query(
+            "SELECT id, name, email, type, last_contact, context, created_at "
+            "FROM contacts WHERE lower(name) = lower(?) LIMIT 1",
+            [name],
+        )
+        if not rows:
+            raise RuntimeError(f"Contact not found: {name!r}")
+        return rows[0]
+
     def upsert_contact(self, name: str, email: str, contact_type: str, context: str) -> None:
         self.query(
             """
