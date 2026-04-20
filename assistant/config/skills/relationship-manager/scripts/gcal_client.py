@@ -56,16 +56,26 @@ def list_events(
     max_results: int = 50,
 ) -> list[dict]:
     """Fetch calendar events in [time_min, time_max]. Returns normalized event dicts. Raises on API error."""
-    params = urllib.parse.urlencode({
-        "timeMin": time_min,
-        "timeMax": time_max,
-        "maxResults": max_results,
-        "singleEvents": "true",
-        "orderBy": "startTime",
-    })
-    url = f"{_CALENDAR_API_BASE}/calendars/primary/events?{params}"
-    data = _calendar_get(url, access_token)
-    return [_normalize_event(item) for item in data.get("items", [])]
+    results = []
+    page_token = None
+    while True:
+        params: dict = {
+            "timeMin": time_min,
+            "timeMax": time_max,
+            "maxResults": 250,
+            "singleEvents": "true",
+            "orderBy": "startTime",
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        url = f"{_CALENDAR_API_BASE}/calendars/primary/events?{urllib.parse.urlencode(params)}"
+        data = _calendar_get(url, access_token)
+        for item in data.get("items", []):
+            results.append(_normalize_event(item))
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+    return results
 
 
 def _normalize_event(item: dict) -> dict:
@@ -76,7 +86,7 @@ def _normalize_event(item: dict) -> dict:
         "summary": item.get("summary", "(no title)"),
         "start": start_obj.get("dateTime") or start_obj.get("date", ""),
         "end": end_obj.get("dateTime") or end_obj.get("date", ""),
-        "attendees": [a["email"] for a in item.get("attendees", []) if "email" in a],
+        "attendees": [a["email"] for a in item.get("attendees", []) if "email" in a and not a.get("self")],
         "description": item.get("description", ""),
     }
 
