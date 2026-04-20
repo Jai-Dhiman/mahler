@@ -132,3 +132,40 @@ class TestLogBlockerKeywordMatch(unittest.TestCase):
         mock_client.insert_project_log.assert_called_once()
         args = mock_client.insert_project_log.call_args[0]
         self.assertEqual(args[1], "blocker")
+
+
+class TestLogSessionHeartbeat(unittest.TestCase):
+
+    def test_writes_session_row_with_project_ref_branch(self):
+        mock_client = MagicMock()
+        with patch("project_log._get_d1_client", return_value=mock_client), \
+             patch("project_log._derive_project_name", return_value="mahler"), \
+             patch("project_log._derive_git_ref", return_value="abc1234"), \
+             patch("project_log._derive_branch", return_value="main"):
+            from project_log import log_session_heartbeat
+            log_session_heartbeat("/Users/jdhiman/Documents/mahler")
+
+        mock_client.ensure_tables.assert_called_once()
+        mock_client.insert_session_heartbeat.assert_called_once_with("mahler", "abc1234", "main")
+
+    def test_works_outside_git_repo(self):
+        mock_client = MagicMock()
+        with patch("project_log._get_d1_client", return_value=mock_client), \
+             patch("project_log._derive_project_name", return_value="tmp"), \
+             patch("project_log._derive_git_ref", return_value=""), \
+             patch("project_log._derive_branch", return_value=""):
+            from project_log import log_session_heartbeat
+            log_session_heartbeat("/tmp/project")
+
+        mock_client.insert_session_heartbeat.assert_called_once_with("tmp", "", "")
+
+    def test_propagates_d1_exception(self):
+        mock_client = MagicMock()
+        mock_client.insert_session_heartbeat.side_effect = RuntimeError("D1 error")
+        with patch("project_log._get_d1_client", return_value=mock_client), \
+             patch("project_log._derive_project_name", return_value="mahler"), \
+             patch("project_log._derive_git_ref", return_value="abc"), \
+             patch("project_log._derive_branch", return_value="main"):
+            from project_log import log_session_heartbeat
+            with self.assertRaises(RuntimeError):
+                log_session_heartbeat("/Users/jdhiman/Documents/mahler")

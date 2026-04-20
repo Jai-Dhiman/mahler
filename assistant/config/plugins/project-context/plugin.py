@@ -37,13 +37,26 @@ def _query_project_log() -> list[dict]:
 
 
 def _format_entries(rows: list[dict]) -> str:
+    sessions = [r for r in rows if r.get("entry_type") == "session"]
+    events = [r for r in rows if r.get("entry_type") in ("win", "blocker")]
+
     lines = ["Recent project activity (last 3 days):\n"]
-    for row in rows:
+
+    if sessions:
+        counts: dict[str, int] = {}
+        for r in sessions:
+            p = r.get("project", "unknown")
+            counts[p] = counts.get(p, 0) + 1
+        parts = [f"{p} ({n} session{'s' if n > 1 else ''})" for p, n in counts.items()]
+        lines.append(f"Active: {', '.join(parts)}")
+
+    for row in events:
         project = row.get("project", "unknown")
         entry_type = row.get("entry_type", "").upper()
         summary = row.get("summary", "")
         created_at = (row.get("created_at") or "")[:10]
         lines.append(f"[{project}] {created_at} — {entry_type}: {summary}")
+
     return "\n".join(lines)
 
 

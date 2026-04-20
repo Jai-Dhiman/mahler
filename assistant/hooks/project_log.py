@@ -83,6 +83,19 @@ def _derive_git_ref(cwd: str) -> str:
     return ""
 
 
+def _derive_branch(cwd: str) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+    return ""
+
+
 def _scan_for_keywords(transcript: dict) -> bool:
     messages = transcript.get("messages", transcript.get("transcript", []))
     for msg in messages:
@@ -161,6 +174,15 @@ def _call_openrouter(transcript: dict, api_key: str, model: str) -> str:
     return choices[0].get("message", {}).get("content", "").strip()
 
 
+def log_session_heartbeat(cwd: str) -> None:
+    project = _derive_project_name(cwd)
+    git_ref = _derive_git_ref(cwd)
+    branch = _derive_branch(cwd)
+    client = _get_d1_client()
+    client.ensure_tables()
+    client.insert_session_heartbeat(project, git_ref, branch)
+
+
 def log_win(project: str, summary: str, git_ref: str) -> None:
     client = _get_d1_client()
     client.insert_project_log(project, "win", summary, git_ref)
@@ -186,6 +208,7 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="mode")
 
     subparsers.add_parser("blocker")
+    subparsers.add_parser("stop")
 
     win_parser = subparsers.add_parser("win")
     win_parser.add_argument("--project", required=True)
@@ -194,7 +217,17 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    if args.mode == "blocker":
+    if args.mode == "stop":
+        try:
+            data = json.loads(sys.stdin.read())
+            cwd = data.get("cwd", os.getcwd())
+            log_blocker_if_triggered(data, cwd)
+            log_session_heartbeat(cwd)
+        except Exception as exc:
+            print(f"project_log stop error: {exc}", file=sys.stderr)
+        sys.exit(0)
+
+    elif args.mode == "blocker":
         try:
             data = json.loads(sys.stdin.read())
             cwd = data.get("cwd", os.getcwd())

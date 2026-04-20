@@ -181,6 +181,39 @@ class D1Client:
             [project, entry_type, summary, git_ref],
         )
 
+    def insert_session_heartbeat(self, project: str, git_ref: str, branch: str) -> None:
+        """Insert a lightweight session heartbeat with no LLM summary."""
+        self.query(
+            "INSERT INTO project_log (project, entry_type, git_ref, branch) VALUES (?, 'session', ?, ?)",
+            [project, git_ref, branch],
+        )
+
+    def _migrate_project_log_v2(self) -> None:
+        """Recreate project_log to add session entry type, nullable summary, and branch column."""
+        cols = self.query("PRAGMA table_info(project_log)", [])
+        col_names = {c["name"] for c in cols}
+        if "branch" in col_names:
+            return
+        self.query(
+            """CREATE TABLE project_log_v2 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project TEXT NOT NULL,
+                entry_type TEXT NOT NULL CHECK(entry_type IN ('win', 'blocker', 'session')),
+                summary TEXT,
+                git_ref TEXT,
+                branch TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )""",
+            [],
+        )
+        self.query(
+            "INSERT INTO project_log_v2 (id, project, entry_type, summary, git_ref, created_at) "
+            "SELECT id, project, entry_type, summary, git_ref, created_at FROM project_log",
+            [],
+        )
+        self.query("DROP TABLE project_log", [])
+        self.query("ALTER TABLE project_log_v2 RENAME TO project_log", [])
+
     def _add_column_if_missing(self, table: str, column: str, col_type: str) -> None:
         """Add a column to a table if not already present.
 
@@ -239,12 +272,14 @@ class D1Client:
             """CREATE TABLE IF NOT EXISTS project_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project TEXT NOT NULL,
-    entry_type TEXT NOT NULL CHECK(entry_type IN ('win', 'blocker')),
-    summary TEXT NOT NULL,
+    entry_type TEXT NOT NULL CHECK(entry_type IN ('win', 'blocker', 'session')),
+    summary TEXT,
     git_ref TEXT,
+    branch TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 )""",
             [],
         )
+        self._migrate_project_log_v2()
         self._add_column_if_missing("email_triage_log", "conversation_id", "TEXT")
         self._add_column_if_missing("email_triage_log", "replied_at", "TEXT")
