@@ -50,9 +50,13 @@ assistant/
       morning-brief/      # Daily brief with news feed (news_sources.json)
       notion-tasks/       # Notion task CRUD via Discord
       notion-wiki/        # Search/read personal knowledge wiki
+      memory-kaizen/      # Sunday 19:00 UTC cron: distills Honcho conclusions into patterns
+      project-synthesis/  # Sunday 18:00 UTC cron: D1 project_log → LLM synthesis → Honcho
       reflection-journal/ # Sunday cron: reflection questions → D1 → Honcho
       relationship-manager/ # Contact CRM with Google Calendar auto-sync
       urgent-alert/       # Fires on URGENT-classified emails
+    shared/
+      honcho_client.py    # Shared honcho-ai SDK client (conclude, list_conclusions, query_conclusions)
 ```
 
 ## Key Conventions
@@ -91,4 +95,4 @@ flyctl status
 
 ## Roadmap
 
-**Shipped:** K1 (notion-wiki), E2 (email-triage + reply-attribution), E2a (Honcho memory), E3 (kaizen-reflection + kaizen-context), E3+ (reflection-journal + project analysis), E4 (google-calendar + meeting-prep + calendar-aware), E4.1 (conversation-history), E4b (project-context + SessionStop hook), E5 (relationship-manager), E7 (fathom-webhook CF Worker + meeting-followthrough skill), E8 (evening-sweep), E10 morning-brief news extension.
+**Shipped:** K1 (notion-wiki), E2 (email-triage + reply-attribution), E2a (Honcho memory), E3 (kaizen-reflection + kaizen-context), E3+ (reflection-journal + project analysis), E4 (google-calendar + meeting-prep + calendar-aware), E4.1 (conversation-history), E4b (project-context + SessionStop hook), E5 (relationship-manager), E7 (fathom-webhook CF Worker + meeting-followthrough skill), E8 (evening-sweep), E10 morning-brief news extension, memory-loop (shared honcho-ai SDK client + project-synthesis + memory-kaizen Sunday cron skills).
