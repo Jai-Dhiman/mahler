@@ -1,0 +1,10 @@
+name = "fathom-webhook"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "0a93ac9040324708a8b9f00eed8715e9"
+
+[vars]
+DISCORD_BOT_USER_ID = ""
