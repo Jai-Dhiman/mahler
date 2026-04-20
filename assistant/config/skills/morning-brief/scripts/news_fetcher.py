@@ -12,6 +12,7 @@ def _build_opener() -> urllib.request.OpenerDirector:
     ctx.check_hostname = True
     ctx.verify_mode = ssl.CERT_REQUIRED
     opener = urllib.request.OpenerDirector()
+    opener.add_handler(urllib.request.HTTPHandler())
     opener.add_handler(urllib.request.HTTPSHandler(context=ctx))
     opener.add_handler(urllib.request.HTTPRedirectHandler())
     opener.add_handler(urllib.request.UnknownHandler())
