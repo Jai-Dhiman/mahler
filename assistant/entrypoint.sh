@@ -165,7 +165,7 @@ if 'relationship-manager' not in existing_skills:
 if 'reflection-journal' not in existing_skills:
     jobs.append(make_job(
         ['reflection-journal'],
-        "Run the weekly reflection journal: post the three reflection questions to Discord and wait for the user\'s reply. Once the user replies, record the response with --record.",
+        'Run the weekly reflection journal: post the three reflection questions to Discord and wait for the user\'s reply. Once the user replies, record the response with --record.',
         '0 2 * * 0',
     ))
     added.append('reflection-journal (Sundays 02:00 UTC)')
