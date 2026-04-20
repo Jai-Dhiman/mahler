@@ -2,7 +2,6 @@ import argparse
 import json
 import os
 import ssl
-import sys
 import urllib.error
 import urllib.request
 from datetime import datetime
