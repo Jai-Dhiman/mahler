@@ -2,19 +2,22 @@ import argparse
 import json
 import os
 import ssl
+import sys
 import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
 
 from d1_client import D1Client
+
+_SHARED_DIR = str(Path.home() / ".hermes" / "shared")
+if _SHARED_DIR not in sys.path:
+    sys.path.insert(0, _SHARED_DIR)
+
 import honcho_client
 
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 _DEFAULT_MODEL = "x-ai/grok-4.1-fast"
-_HONCHO_BASE_URL = "https://api.honcho.dev"
-_HONCHO_APP_NAME = "mahler"
-_HONCHO_USER_ID = "jai"
 _REQUIRED_ENV = [
     "CF_ACCOUNT_ID",
     "CF_D1_DATABASE_ID",
@@ -139,13 +142,7 @@ def _record(answer_text: str, env: dict) -> None:
         if line.startswith("FACT: ")
     ]
     for fact in facts:
-        honcho_client.conclude(
-            fact,
-            env["HONCHO_API_KEY"],
-            _HONCHO_BASE_URL,
-            _HONCHO_APP_NAME,
-            _HONCHO_USER_ID,
-        )
+        honcho_client.conclude(fact, session_id="reflection-journal")
     print("Reflection recorded.")
 
 

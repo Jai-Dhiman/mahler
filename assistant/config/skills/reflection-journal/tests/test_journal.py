@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "shared"))
 
 _BASE_ENV = {
     "CF_ACCOUNT_ID": "acct123",
