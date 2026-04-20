@@ -189,6 +189,7 @@ def classify_batch(
 
     body = json.dumps({
         "model": model,
+        "max_tokens": 800,
         "messages": [
             {
                 "role": "system",
@@ -224,6 +225,9 @@ def classify_batch(
 
     try:
         data = json.loads(raw)
+        cached = data.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+        if cached:
+            print(f"[cache] {cached} cached prompt tokens", file=sys.stderr)
         content = data["choices"][0]["message"]["content"]
         results = json.loads(content)
         if not isinstance(results, list):

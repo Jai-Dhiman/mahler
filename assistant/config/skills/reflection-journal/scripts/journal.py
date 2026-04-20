@@ -58,11 +58,15 @@ def _build_https_opener() -> urllib.request.OpenerDirector:
 _OPENER = _build_https_opener()
 
 
-def _call_llm(prompt: str, api_key: str, model: str) -> str:
-    body = json.dumps({
+def _call_llm(prompt: str, api_key: str, model: str, max_tokens: int | None = None) -> str:
+    import sys
+    payload: dict = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-    }).encode("utf-8")
+    }
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         _OPENROUTER_URL,
         data=body,
@@ -77,6 +81,9 @@ def _call_llm(prompt: str, api_key: str, model: str) -> str:
             data = json.loads(resp.read())
     except urllib.error.HTTPError as exc:
         raise RuntimeError(f"OpenRouter error: HTTP {exc.code}") from exc
+    cached = data.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    if cached:
+        sys.stderr.write(f"[cache] {cached} cached prompt tokens\n")
     try:
         return data["choices"][0]["message"]["content"]
     except (KeyError, IndexError) as exc:
@@ -124,7 +131,7 @@ def _record(answer_text: str, env: dict) -> None:
 
     model = os.environ.get("OPENROUTER_MODEL", _DEFAULT_MODEL)
     prompt = _SYNTHESIS_PROMPT.format(raw_text=answer_text)
-    raw = _call_llm(prompt, env["OPENROUTER_API_KEY"], model)
+    raw = _call_llm(prompt, env["OPENROUTER_API_KEY"], model, max_tokens=200)
 
     facts = [
         line[len("FACT: "):].strip()

@@ -50,7 +50,25 @@ class TestProjectContextFormatsRows(unittest.TestCase):
         self.assertIn("kaizen-reflection", result["context"])
 
     @patch("plugin._query_project_log")
-    def test_returns_context_on_non_first_turn(self, mock_query):
+    def test_returns_context_on_first_turn(self, mock_query):
+        mock_query.return_value = [
+            {
+                "project": "mahler",
+                "entry_type": "win",
+                "summary": "Shipped morning-brief improvements",
+                "created_at": "2026-04-19 08:00:00",
+            },
+        ]
+        from plugin import project_context
+        result = project_context("sess1", "any updates?", True)
+        self.assertIsNotNone(result)
+        self.assertIn("mahler", result["context"])
+
+
+class TestSkipsNonFirstTurn(unittest.TestCase):
+
+    @patch("plugin._query_project_log")
+    def test_returns_none_on_non_first_turn_with_rows(self, mock_query):
         mock_query.return_value = [
             {
                 "project": "mahler",
@@ -61,8 +79,8 @@ class TestProjectContextFormatsRows(unittest.TestCase):
         ]
         from plugin import project_context
         result = project_context("sess1", "any updates?", False)
-        self.assertIsNotNone(result)
-        self.assertIn("mahler", result["context"])
+        self.assertIsNone(result)
+        mock_query.assert_not_called()
 
 
 class TestProjectContextErrorHandling(unittest.TestCase):

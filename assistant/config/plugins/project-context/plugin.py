@@ -53,6 +53,8 @@ def project_context(
     is_first_turn: bool,
     **kwargs,
 ) -> dict | None:
+    if not is_first_turn:
+        return None
     try:
         rows = _query_project_log()
         if not rows:

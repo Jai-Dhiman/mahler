@@ -47,11 +47,14 @@ def _build_https_opener() -> urllib.request.OpenerDirector:
 _OPENER = _build_https_opener()
 
 
-def _call_llm(prompt: str, api_key: str, model: str) -> str:
-    body = json.dumps({
+def _call_llm(prompt: str, api_key: str, model: str, max_tokens: int | None = None) -> str:
+    payload: dict = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-    }).encode("utf-8")
+    }
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         _OPENROUTER_URL,
         data=body,
@@ -70,6 +73,9 @@ def _call_llm(prompt: str, api_key: str, model: str) -> str:
                 f"OpenRouter auth failure: HTTP {exc.code} — check OPENROUTER_API_KEY"
             ) from exc
         raise RuntimeError(f"OpenRouter error: HTTP {exc.code}") from exc
+    cached = data.get("usage", {}).get("prompt_tokens_details", {}).get("cached_tokens", 0)
+    if cached:
+        sys.stderr.write(f"[cache] {cached} cached prompt tokens\n")
     try:
         return data["choices"][0]["message"]["content"]
     except (KeyError, IndexError) as exc:
@@ -97,36 +103,24 @@ Return a JSON array (no other text). Each element must have exactly these fields
 If no reclassifications are warranted, return an empty JSON array: []\
 """
 
-_PROJECT_ANALYSIS_PROMPT = """\
-You are analyzing project activity logs for a personal chief-of-staff assistant.
+_COMBINED_ANALYSIS_PROMPT = """\
+You are analyzing project and reflection data for a personal chief-of-staff assistant.
 
-Recent project activity (last 7 days):
+## Project Activity (last 7 days)
 {project_log_text}
 
-Identify 1-3 meaningful patterns across these entries. Focus on:
+## Reflection Entries (last 4 weeks)
+{reflections_text}
+
+Identify 2-5 meaningful patterns across both sections. Focus on:
 - Projects with many blockers and no wins (possible focus or morale issue)
 - Recurring themes in blockers across different projects
-- Sustained absence of progress in an area that was recently active
+- Recurring sources of energy drain or avoidance from reflections
+- Consistent sources of satisfaction or momentum
 
 For each meaningful pattern, write one concise fact in plain English.
 Return each fact on its own line, prefixed with "FACT: ".
 If no meaningful patterns exist, return "NO_PATTERNS".\
-"""
-
-_REFLECTION_ANALYSIS_PROMPT = """\
-You are analyzing weekly reflection journal entries for a personal chief-of-staff assistant.
-
-Recent reflections (last 4 weeks):
-{reflections_text}
-
-Identify recurring themes that appear in at least 2 reflections. Focus on:
-- Recurring sources of energy drain
-- Persistent avoidance patterns
-- Consistent sources of satisfaction or momentum
-
-For each recurring theme, write one concise fact in plain English.
-Return each fact on its own line, prefixed with "FACT: ".
-If no recurring themes exist across multiple reflections, return "NO_PATTERNS".\
 """
 
 _HONCHO_BASE_URL = "https://api.honcho.dev"
@@ -134,54 +128,30 @@ _HONCHO_APP_NAME = "mahler"
 _HONCHO_USER_ID = "jai"
 
 
-def _run_project_analysis(d1: D1Client, env: dict) -> None:
+def _run_combined_analysis(d1: D1Client, env: dict) -> None:
     honcho_api_key = os.environ.get("HONCHO_API_KEY")
     if not honcho_api_key:
         sys.stderr.write(
-            "WARNING: HONCHO_API_KEY not set — skipping project analysis\n"
+            "WARNING: HONCHO_API_KEY not set — skipping combined analysis\n"
         )
         return
-    rows = d1.get_recent_project_log(since_days=7)
-    if not rows:
+    project_rows = d1.get_recent_project_log(since_days=7)
+    reflection_rows = d1.get_recent_reflections(since_weeks=4)
+    if not project_rows and not reflection_rows:
         return
     project_log_text = "\n".join(
         "[{project}] {created_at} — {entry_type}: {summary}".format(**r)
-        for r in rows
-    )
-    model = os.environ.get("OPENROUTER_MODEL", _DEFAULT_MODEL)
-    prompt = _PROJECT_ANALYSIS_PROMPT.format(project_log_text=project_log_text)
-    raw = _call_llm(prompt, env["OPENROUTER_API_KEY"], model)
-    facts = [
-        line[len("FACT: "):].strip()
-        for line in raw.splitlines()
-        if line.startswith("FACT: ")
-    ]
-    for fact in facts:
-        honcho_client.conclude(
-            fact,
-            honcho_api_key,
-            _HONCHO_BASE_URL,
-            _HONCHO_APP_NAME,
-            _HONCHO_USER_ID,
-        )
-
-
-def _run_reflection_analysis(d1: D1Client, env: dict) -> None:
-    honcho_api_key = os.environ.get("HONCHO_API_KEY")
-    if not honcho_api_key:
-        sys.stderr.write(
-            "WARNING: HONCHO_API_KEY not set — skipping reflection analysis\n"
-        )
-        return
-    rows = d1.get_recent_reflections(since_weeks=4)
-    if not rows:
-        return
+        for r in project_rows
+    ) if project_rows else "(no project activity)"
     reflections_text = "\n\n".join(
-        "[{week_of}]: {raw_text}".format(**r) for r in rows
-    )
+        "[{week_of}]: {raw_text}".format(**r) for r in reflection_rows
+    ) if reflection_rows else "(no reflections)"
     model = os.environ.get("OPENROUTER_MODEL", _DEFAULT_MODEL)
-    prompt = _REFLECTION_ANALYSIS_PROMPT.format(reflections_text=reflections_text)
-    raw = _call_llm(prompt, env["OPENROUTER_API_KEY"], model)
+    prompt = _COMBINED_ANALYSIS_PROMPT.format(
+        project_log_text=project_log_text,
+        reflections_text=reflections_text,
+    )
+    raw = _call_llm(prompt, env["OPENROUTER_API_KEY"], model, max_tokens=400)
     facts = [
         line[len("FACT: "):].strip()
         for line in raw.splitlines()
@@ -233,7 +203,7 @@ def _run(since_days: int, env: dict) -> None:
         prompt = _PROPOSAL_PROMPT.format(
             priority_map=priority_map, patterns=patterns_text
         )
-        raw = _call_llm(prompt, env["OPENROUTER_API_KEY"], model)
+        raw = _call_llm(prompt, env["OPENROUTER_API_KEY"], model, max_tokens=600)
         try:
             proposals = json.loads(raw)
             if not isinstance(proposals, list):
@@ -248,14 +218,9 @@ def _run(since_days: int, env: dict) -> None:
             print("No proposals this week.")
 
     try:
-        _run_project_analysis(d1, env)
+        _run_combined_analysis(d1, env)
     except Exception as exc:
-        sys.stderr.write(f"WARNING: project analysis failed: {exc}\n")
-
-    try:
-        _run_reflection_analysis(d1, env)
-    except Exception as exc:
-        sys.stderr.write(f"WARNING: reflection analysis failed: {exc}\n")
+        sys.stderr.write(f"WARNING: combined analysis failed: {exc}\n")
 
 
 def _apply(proposal_json: str, env: dict) -> None:
