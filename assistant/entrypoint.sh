@@ -154,6 +154,14 @@ if 'evening-sweep' not in existing_skills:
     ))
     added.append('evening-sweep (01:00 UTC / 6pm Pacific)')
 
+if 'relationship-manager' not in existing_skills:
+    jobs.append(make_job(
+        ['relationship-manager'],
+        'Run the daily calendar sync for the relationship CRM: call python3 ~/.hermes/skills/relationship-manager/scripts/contacts.py sync-calendar --days 1 to fetch yesterday\'s Google Calendar events and update last_contact for any attendees that match known contacts.',
+        '0 8 * * *',
+    ))
+    added.append('relationship-manager (08:00 UTC / midnight Pacific)')
+
 with open(jobs_file, 'w') as f:
     json.dump({'jobs': jobs, 'updated_at': datetime.now(timezone.utc).isoformat()}, f, indent=2)
 
