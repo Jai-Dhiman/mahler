@@ -185,6 +185,7 @@ class D1Client:
         """Add a column to a table if not already present.
 
         Silently ignores the SQLite duplicate-column error. Raises on any other error.
+        All arguments must be string literals from call sites — never user-controlled input.
         """
         try:
             self.query(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}", [])

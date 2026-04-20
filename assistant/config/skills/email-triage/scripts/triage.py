@@ -352,7 +352,7 @@ def _run_attribution_pass(env: dict, d1: D1Client, dry_run: bool) -> None:
             print(f"  Attribution: {attributed_count} replies attributed")
 
     except Exception as exc:
-        print(f"WARNING: Attribution pass failed: {exc}", file=sys.stderr)
+        print(f"WARNING: Attribution pass failed: {exc!r}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------

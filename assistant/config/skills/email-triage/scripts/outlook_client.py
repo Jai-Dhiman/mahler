@@ -1,6 +1,7 @@
 import json
 import re
 import ssl
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -233,6 +234,7 @@ def fetch_sent_replies(
         try:
             dt = datetime.fromisoformat(sent_raw.replace("Z", "+00:00"))
             result[conv_id] = dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        except Exception:
+        except Exception as exc:
+            print(f"WARNING: Could not parse sentDateTime {sent_raw!r}: {exc}", file=sys.stderr)
             result[conv_id] = sent_raw
     return result
