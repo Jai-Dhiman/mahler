@@ -53,6 +53,9 @@ export async function verifySignature(
   return false;
 }
 
+// Non-atomic read-then-write: CF KV has no compare-and-set, so two concurrent
+// requests for the same recording_id can both pass this check. Acceptable given
+// Fathom's low retry frequency and the narrow window.
 export async function checkAndSetDedup(kv: KVNamespace, recordingId: number): Promise<boolean> {
   const key = `fathom:${recordingId}`;
   const existing = await kv.get(key);
@@ -127,7 +130,12 @@ export default {
     const isDup = await checkAndSetDedup(env.KV, meeting.recording_id);
     if (isDup) return new Response("OK", { status: 200 });
 
-    const summary = await extractSummary(meeting, env.FATHOM_API_KEY);
+    let summary: string;
+    try {
+      summary = await extractSummary(meeting, env.FATHOM_API_KEY);
+    } catch (err) {
+      return new Response(`Failed to fetch summary: ${(err as Error).message}`, { status: 500 });
+    }
     const message = buildDiscordMessage(
       meeting.title,
       meeting.calendar_invitees ?? [],

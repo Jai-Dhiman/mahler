@@ -281,4 +281,18 @@ describe("fetch handler", () => {
     const resp = await SELF.fetch(req);
     expect(resp.status).toBe(500);
   });
+
+  it("returns 500 when Fathom summary API fails for a new recording", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 503 }));
+    const body = JSON.stringify({ ...FIXTURE_MEETING, recording_id: 77705, default_summary: null });
+    const req = await signedRequest(body, 77705);
+    const resp = await SELF.fetch(req);
+    expect(resp.status).toBe(500);
+  });
+
+  it("returns 405 for non-POST requests", async () => {
+    const req = new Request("https://fathom-webhook.workers.dev/", { method: "GET" });
+    const resp = await SELF.fetch(req);
+    expect(resp.status).toBe(405);
+  });
 });
