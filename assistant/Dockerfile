@@ -23,6 +23,9 @@ ARG HERMES_VERSION=v2026.4.13
 RUN curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh \
     | bash -s -- --skip-setup --branch "${HERMES_VERSION}"
 
+# Install additional Python dependencies
+RUN pip install honcho-ai
+
 # Copy custom config and entrypoint
 COPY --chown=hermes:hermes config/SOUL.md /home/hermes/.hermes/SOUL.md
 COPY --chown=hermes:hermes config/config.yaml /home/hermes/.hermes/config.yaml
@@ -42,6 +45,9 @@ COPY --chown=hermes:hermes config/skills/reflection-journal /home/hermes/.hermes
 COPY --chown=hermes:hermes config/skills/evening-sweep /home/hermes/.hermes/skills/evening-sweep
 COPY --chown=hermes:hermes config/skills/relationship-manager /home/hermes/.hermes/skills/relationship-manager
 COPY --chown=hermes:hermes config/skills/meeting-followthrough /home/hermes/.hermes/skills/meeting-followthrough
+COPY --chown=hermes:hermes config/shared /home/hermes/.hermes/shared
+COPY --chown=hermes:hermes config/skills/project-synthesis /home/hermes/.hermes/skills/project-synthesis
+COPY --chown=hermes:hermes config/skills/memory-kaizen /home/hermes/.hermes/skills/memory-kaizen
 COPY --chown=hermes:hermes config/plugins /home/hermes/.hermes/plugins
 
 # Copy priority map to Hermes workspace
