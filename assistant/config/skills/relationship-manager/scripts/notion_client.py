@@ -23,7 +23,7 @@ _OPENER = _build_https_opener()
 def _extract_task(page: dict) -> dict:
     props = page.get("properties", {})
     title_list = props.get("Task name", {}).get("title", [])
-    title = title_list[0]["plain_text"] if title_list else ""
+    title = title_list[0].get("plain_text", "") if title_list else ""
     status_sel = props.get("Status", {}).get("status")
     status = status_sel["name"] if status_sel else "Todo"
     due_obj = props.get("Due date", {}).get("date")
@@ -76,7 +76,7 @@ class NotionClient:
             data = self._request("POST", f"/databases/{self.database_id}/query", body)
             for page in data.get("results", []):
                 results.append(_extract_task(page))
-            if not data.get("has_more"):
+            if not data.get("has_more") or not data.get("next_cursor"):
                 break
-            cursor = data.get("next_cursor")
+            cursor = data["next_cursor"]
         return results

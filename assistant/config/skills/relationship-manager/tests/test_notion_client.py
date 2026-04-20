@@ -1,6 +1,11 @@
 import json
+import sys
+import os
 import pytest
 from unittest.mock import patch, MagicMock
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+from notion_client import NotionClient
 
 
 def _make_notion_response(results, has_more=False, next_cursor=None, status=200):
@@ -31,7 +36,6 @@ def _page_fixture(title="[Alice Chen] Send IC memo", status="In progress", due="
 def test_list_tasks_for_contact_sends_correct_filter():
     with patch("notion_client._OPENER") as mock_opener:
         mock_opener.open.return_value = _make_notion_response(results=[_page_fixture()])
-        from notion_client import NotionClient
         client = NotionClient(api_token="ntok", database_id="ndb1")
         tasks = client.list_tasks_for_contact("Alice Chen")
         assert len(tasks) == 1
@@ -47,7 +51,6 @@ def test_list_tasks_for_contact_sends_correct_filter():
 def test_list_tasks_for_contact_returns_empty_when_none():
     with patch("notion_client._OPENER") as mock_opener:
         mock_opener.open.return_value = _make_notion_response(results=[])
-        from notion_client import NotionClient
         client = NotionClient(api_token="ntok", database_id="ndb1")
         tasks = client.list_tasks_for_contact("Unknown Person")
         assert tasks == []
@@ -61,9 +64,25 @@ def test_list_tasks_for_contact_paginates():
             _make_notion_response(results=[page1], has_more=True, next_cursor="cur1"),
             _make_notion_response(results=[page2], has_more=False),
         ]
-        from notion_client import NotionClient
         client = NotionClient(api_token="ntok", database_id="ndb1")
         tasks = client.list_tasks_for_contact("Alice Chen")
         assert len(tasks) == 2
         assert tasks[0]["title"] == "[Alice Chen] Task 1"
         assert tasks[1]["title"] == "[Alice Chen] Task 2"
+
+
+def test_list_tasks_handles_missing_optional_properties():
+    page_no_optional = {
+        "id": "page-xyz",
+        "properties": {
+            "Task name": {"title": [{"plain_text": "[Alice Chen] Minimal task"}]},
+            "Status": {"status": {"name": "Todo"}},
+        },
+    }
+    with patch("notion_client._OPENER") as mock_opener:
+        mock_opener.open.return_value = _make_notion_response(results=[page_no_optional])
+        client = NotionClient(api_token="ntok", database_id="ndb1")
+        tasks = client.list_tasks_for_contact("Alice Chen")
+        assert len(tasks) == 1
+        assert tasks[0]["due"] is None
+        assert tasks[0]["priority"] is None
