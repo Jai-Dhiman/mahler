@@ -1,7 +1,6 @@
 import json
 import pytest
 from unittest.mock import patch, MagicMock
-import d1_client as _d1_module
 from d1_client import D1Client
 
 
