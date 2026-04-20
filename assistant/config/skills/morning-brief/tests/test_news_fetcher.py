@@ -78,8 +78,20 @@ class TestFetchTopNewsDedup(unittest.TestCase):
         self.assertIn("Anthropic", items[1]["title"])
 
     def test_returns_at_most_max_items(self):
+        topics = [
+            "Federal Reserve raises interest rates amid inflation concerns",
+            "SpaceX launches Starship rocket on maiden orbital flight",
+            "Apple unveils redesigned MacBook lineup with custom silicon",
+            "Scientists discover potential treatment for Alzheimers disease",
+            "Electric vehicle sales surpass gasoline cars globally",
+            "Congress passes bipartisan infrastructure spending bill",
+            "Earthquake strikes coastal region triggering tsunami warning",
+            "Breakthrough fusion reactor achieves record energy output",
+            "Major cybersecurity breach exposes millions of passwords",
+            "Olympic committee announces host city for summer games",
+        ]
         unique_items = [
-            (f"Unique story number {i} about artificial intelligence models", f"https://feed.example.com/{i}", i * 0.1)
+            (topics[i], f"https://feed.example.com/{i}", i * 0.1)
             for i in range(10)
         ]
         feed_xml = _make_feed_xml(unique_items)
@@ -88,7 +100,7 @@ class TestFetchTopNewsDedup(unittest.TestCase):
             mock_opener.open.return_value = _make_response(feed_xml)
             items = fetch_top_news({"AI/Tech": ["https://feed.example.com/rss"]}, max_items=5)
 
-        self.assertLessEqual(len(items), 5)
+        self.assertEqual(len(items), 5)
 
 
 if __name__ == "__main__":
