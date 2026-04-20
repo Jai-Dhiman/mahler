@@ -37,6 +37,25 @@ class TestGcalListCommand(unittest.TestCase):
         "GMAIL_REFRESH_TOKEN": "test_rtok",
     })
     @patch("gcal.gcal_client.refresh_access_token", return_value="access_tok")
+    @patch("gcal.gcal_client.list_events")
+    def test_list_prints_event_id_so_meeting_prep_can_extract_it(self, mock_list, mock_refresh):
+        mock_list.return_value = [{
+            "id": "evt-abc123", "summary": "Product review",
+            "start": "2026-04-20T19:00:00Z", "end": "2026-04-20T20:00:00Z",
+            "attendees": [], "description": "",
+        }]
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            from gcal import main
+            main(["list", "--hours-ahead", "2"])
+        self.assertIn("evt-abc123", captured.getvalue())
+
+    @patch.dict(os.environ, {
+        "GMAIL_CLIENT_ID": "test_cid",
+        "GMAIL_CLIENT_SECRET": "test_csec",
+        "GMAIL_REFRESH_TOKEN": "test_rtok",
+    })
+    @patch("gcal.gcal_client.refresh_access_token", return_value="access_tok")
     @patch("gcal.gcal_client.list_events", return_value=[])
     def test_list_prints_no_events_message_when_empty(self, mock_list, mock_refresh):
         captured = io.StringIO()
@@ -99,6 +118,157 @@ class TestGcalCreateCommand(unittest.TestCase):
         mock_create.assert_called_once()
         call_kwargs = mock_create.call_args[1]
         self.assertEqual(call_kwargs["attendees"], ["alice@x.com", "bob@y.com"])
+
+
+class TestGcalUpcomingCommand(unittest.TestCase):
+
+    def _make_event(self, event_id, summary, minutes_from_now, offset="+00:00"):
+        from datetime import datetime, timezone, timedelta
+        start = datetime.now(timezone.utc) + timedelta(minutes=minutes_from_now)
+        if offset == "+00:00":
+            start_str = start.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        else:
+            # simulate PDT offset (-07:00)
+            from datetime import timezone as tz
+            pdt = tz(timedelta(hours=-7))
+            start_pdt = start.astimezone(pdt)
+            start_str = start_pdt.strftime("%Y-%m-%dT%H:%M:%S-07:00")
+        return {
+            "id": event_id, "summary": summary,
+            "start": start_str, "end": start_str,
+            "attendees": [], "description": "",
+        }
+
+    @patch.dict(os.environ, {
+        "GMAIL_CLIENT_ID": "test_cid",
+        "GMAIL_CLIENT_SECRET": "test_csec",
+        "GMAIL_REFRESH_TOKEN": "test_rtok",
+    })
+    @patch("gcal.gcal_client.refresh_access_token", return_value="access_tok")
+    @patch("gcal.gcal_client.list_events")
+    def test_upcoming_returns_event_in_window(self, mock_list, mock_refresh):
+        mock_list.return_value = [self._make_event("evt-in", "In-window meeting", 55)]
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            from gcal import main
+            main(["upcoming", "--min-minutes", "45", "--max-minutes", "75"])
+        output = captured.getvalue()
+        self.assertIn("evt-in", output)
+        self.assertIn("In-window meeting", output)
+
+    @patch.dict(os.environ, {
+        "GMAIL_CLIENT_ID": "test_cid",
+        "GMAIL_CLIENT_SECRET": "test_csec",
+        "GMAIL_REFRESH_TOKEN": "test_rtok",
+    })
+    @patch("gcal.gcal_client.refresh_access_token", return_value="access_tok")
+    @patch("gcal.gcal_client.list_events")
+    def test_upcoming_excludes_event_too_close(self, mock_list, mock_refresh):
+        mock_list.return_value = [self._make_event("evt-close", "Too soon", 20)]
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            from gcal import main
+            main(["upcoming", "--min-minutes", "45", "--max-minutes", "75"])
+        self.assertIn("No meetings in window", captured.getvalue())
+
+    @patch.dict(os.environ, {
+        "GMAIL_CLIENT_ID": "test_cid",
+        "GMAIL_CLIENT_SECRET": "test_csec",
+        "GMAIL_REFRESH_TOKEN": "test_rtok",
+    })
+    @patch("gcal.gcal_client.refresh_access_token", return_value="access_tok")
+    @patch("gcal.gcal_client.list_events")
+    def test_upcoming_handles_pdt_offset_correctly(self, mock_list, mock_refresh):
+        mock_list.return_value = [self._make_event("evt-pdt", "PDT meeting", 55, offset="-07:00")]
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            from gcal import main
+            main(["upcoming", "--min-minutes", "45", "--max-minutes", "75"])
+        output = captured.getvalue()
+        self.assertIn("evt-pdt", output)
+        self.assertIn("PDT meeting", output)
+
+    @patch.dict(os.environ, {
+        "GMAIL_CLIENT_ID": "test_cid",
+        "GMAIL_CLIENT_SECRET": "test_csec",
+        "GMAIL_REFRESH_TOKEN": "test_rtok",
+    })
+    @patch("gcal.gcal_client.refresh_access_token", return_value="access_tok")
+    @patch("gcal.gcal_client.list_events")
+    def test_upcoming_outputs_start_time_in_utc(self, mock_list, mock_refresh):
+        mock_list.return_value = [self._make_event("evt-utc", "UTC check", 60, offset="-07:00")]
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            from gcal import main
+            main(["upcoming", "--min-minutes", "45", "--max-minutes", "75"])
+        output = captured.getvalue()
+        # Start time in output must end in Z (UTC), not a PDT offset
+        import re
+        self.assertRegex(output, r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+
+
+class TestGcalUpcomingSkipKeywords(unittest.TestCase):
+
+    def _make_event(self, event_id, summary, minutes_from_now, description=""):
+        from datetime import datetime, timezone, timedelta
+        start = datetime.now(timezone.utc) + timedelta(minutes=minutes_from_now)
+        return {
+            "id": event_id, "summary": summary,
+            "start": start.strftime("%Y-%m-%dT%H:%M:%S+00:00"),
+            "end": start.strftime("%Y-%m-%dT%H:%M:%S+00:00"),
+            "attendees": [], "description": description,
+        }
+
+    @patch.dict(os.environ, {
+        "GMAIL_CLIENT_ID": "test_cid",
+        "GMAIL_CLIENT_SECRET": "test_csec",
+        "GMAIL_REFRESH_TOKEN": "test_rtok",
+    })
+    @patch("gcal.gcal_client.refresh_access_token", return_value="access_tok")
+    @patch("gcal.gcal_client.list_events")
+    def test_skip_keywords_blocks_rehearsal(self, mock_list, mock_refresh):
+        mock_list.return_value = [self._make_event("evt-r", "Orchestra Rehearsal", 55)]
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            from gcal import main
+            main(["upcoming", "--min-minutes", "45", "--max-minutes", "75",
+                  "--skip-keywords", "orchestra,rehearsal,bohemian,jinks,encampment"])
+        self.assertIn("No meetings in window", captured.getvalue())
+
+    @patch.dict(os.environ, {
+        "GMAIL_CLIENT_ID": "test_cid",
+        "GMAIL_CLIENT_SECRET": "test_csec",
+        "GMAIL_REFRESH_TOKEN": "test_rtok",
+    })
+    @patch("gcal.gcal_client.refresh_access_token", return_value="access_tok")
+    @patch("gcal.gcal_client.list_events")
+    def test_skip_keywords_allows_real_meeting(self, mock_list, mock_refresh):
+        mock_list.return_value = [self._make_event("evt-m", "Product Review", 55)]
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            from gcal import main
+            main(["upcoming", "--min-minutes", "45", "--max-minutes", "75",
+                  "--skip-keywords", "orchestra,rehearsal,bohemian,jinks,encampment"])
+        self.assertIn("evt-m", captured.getvalue())
+        self.assertIn("Product Review", captured.getvalue())
+
+    @patch.dict(os.environ, {
+        "GMAIL_CLIENT_ID": "test_cid",
+        "GMAIL_CLIENT_SECRET": "test_csec",
+        "GMAIL_REFRESH_TOKEN": "test_rtok",
+    })
+    @patch("gcal.gcal_client.refresh_access_token", return_value="access_tok")
+    @patch("gcal.gcal_client.list_events")
+    def test_skip_keywords_matches_description_too(self, mock_list, mock_refresh):
+        mock_list.return_value = [
+            self._make_event("evt-d", "Club Event", 55, description="Bohemian encampment planning")
+        ]
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            from gcal import main
+            main(["upcoming", "--min-minutes", "45", "--max-minutes", "75",
+                  "--skip-keywords", "orchestra,rehearsal,bohemian,jinks,encampment"])
+        self.assertIn("No meetings in window", captured.getvalue())
 
 
 if __name__ == "__main__":

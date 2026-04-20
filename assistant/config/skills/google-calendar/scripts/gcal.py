@@ -3,6 +3,7 @@ Google Calendar CLI for Mahler.
 
 Usage:
     python3 gcal.py list [--days N] [--hours-ahead N]
+    python3 gcal.py upcoming --min-minutes N --max-minutes N
     python3 gcal.py create --title TITLE --start ISO8601 --end ISO8601 [--attendees email1,email2] [--description TEXT]
 """
 import argparse
@@ -62,11 +63,54 @@ def cmd_list(args: argparse.Namespace) -> None:
         print("No upcoming events.")
         return
     for evt in events:
-        print(f"{evt['start']}  {evt['summary']}")
+        print(f"{evt['id']}  {evt['start']}  {evt['summary']}")
         if evt.get("attendees"):
             print(f"  Attendees: {', '.join(evt['attendees'])}")
         if evt.get("description"):
             print(f"  {evt['description'][:80]}")
+
+
+def _parse_iso8601(dt_str: str) -> datetime:
+    """Parse an ISO 8601 datetime string (with or without offset) into a UTC-aware datetime."""
+    dt_str = dt_str.strip()
+    if dt_str.endswith("Z"):
+        dt_str = dt_str[:-1] + "+00:00"
+    return datetime.fromisoformat(dt_str).astimezone(timezone.utc)
+
+
+def _is_blocked(evt: dict, skip_keywords: list[str]) -> bool:
+    """Return True if the event title or description matches any blocked keyword (case-insensitive)."""
+    haystack = (evt.get("summary", "") + " " + evt.get("description", "")).lower()
+    return any(kw in haystack for kw in skip_keywords)
+
+
+def cmd_upcoming(args: argparse.Namespace) -> None:
+    """Print events whose start time falls in [min_minutes, max_minutes] from now (UTC). Skips all-day events."""
+    client_id, client_secret, refresh_token = _get_credentials()
+    access_token = gcal_client.refresh_access_token(client_id, client_secret, refresh_token)
+    skip_keywords = [kw.strip().lower() for kw in args.skip_keywords.split(",") if kw.strip()] if args.skip_keywords else []
+    now = datetime.now(timezone.utc)
+    time_min = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    time_max = (now + timedelta(minutes=args.max_minutes + 1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    events = gcal_client.list_events(access_token, time_min, time_max)
+    found = False
+    for evt in events:
+        start_str = evt["start"]
+        if "T" not in start_str:
+            continue  # all-day event
+        start_utc = _parse_iso8601(start_str)
+        minutes_away = (start_utc - now).total_seconds() / 60
+        if args.min_minutes <= minutes_away <= args.max_minutes:
+            if skip_keywords and _is_blocked(evt, skip_keywords):
+                continue
+            found = True
+            print(f"{evt['id']}  {start_utc.strftime('%Y-%m-%dT%H:%M:%SZ')}  {evt['summary']}")
+            if evt.get("attendees"):
+                print(f"  Attendees: {', '.join(evt['attendees'])}")
+            if evt.get("description"):
+                print(f"  {evt['description'][:80]}")
+    if not found:
+        print("No meetings in window.")
 
 
 def cmd_create(args: argparse.Namespace) -> None:
@@ -92,6 +136,12 @@ def main(argv=None) -> None:
     p_list.add_argument("--days", type=int, default=7)
     p_list.add_argument("--hours-ahead", dest="hours_ahead", type=int, default=None)
 
+    p_upcoming = sub.add_parser("upcoming")
+    p_upcoming.add_argument("--min-minutes", dest="min_minutes", type=int, default=45)
+    p_upcoming.add_argument("--max-minutes", dest="max_minutes", type=int, default=75)
+    p_upcoming.add_argument("--skip-keywords", dest="skip_keywords", default=None,
+                            help="Comma-separated keywords; events matching any are skipped")
+
     p_create = sub.add_parser("create")
     p_create.add_argument("--title", required=True)
     p_create.add_argument("--start", required=True)
@@ -100,7 +150,7 @@ def main(argv=None) -> None:
     p_create.add_argument("--description", default=None)
 
     args = parser.parse_args(argv)
-    dispatch = {"list": cmd_list, "create": cmd_create}
+    dispatch = {"list": cmd_list, "upcoming": cmd_upcoming, "create": cmd_create}
     dispatch[args.command](args)
 
 

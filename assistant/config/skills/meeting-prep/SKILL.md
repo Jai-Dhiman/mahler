@@ -34,10 +34,11 @@ metadata:
 ### Step 1 — Fetch upcoming events
 
 ```bash
-python3 ~/.hermes/skills/google-calendar/scripts/gcal.py list --hours-ahead 2
+python3 ~/.hermes/skills/google-calendar/scripts/gcal.py upcoming --min-minutes 45 --max-minutes 75 \
+  --skip-keywords "orchestra,rehearsal,bohemian,jinks,encampment"
 ```
 
-Parse the output. Filter for events whose start time (ISO 8601) is between 45 and 75 minutes from the current UTC time. Ignore all-day events (start time contains no `T` separator). If no events are in the 45–75 minute window, stop — nothing to do.
+This command does all time filtering in Python and outputs only events whose start time is 45–75 minutes from now (UTC). All-day events and events matching any skip keyword (checked against title + description, case-insensitive) are excluded automatically. If output is `No meetings in window.`, stop — nothing to do.
 
 ### Step 2 — Check deduplication
 
@@ -81,16 +82,24 @@ Read the top hit with `wiki.py read --id PAGE_ID`.
 
 ### Step 4 — Synthesize and post brief
 
-Using all gathered context, compose a Discord embed with these sections:
-- **Meeting:** title, start time, attendees
-- **Recent emails:** formatted output from email_context.py (omit if none)
-- **Open tasks:** list of relevant tasks (omit if none)
-- **Wiki context:** 1–2 sentences from the wiki hit (omit if none)
-- **What to know:** 3–5 bullet point synthesis (always present)
+Compose 3–5 bullet points summarising what to know for this meeting, then call:
 
-Post to `DISCORD_TRIAGE_WEBHOOK` using the urgent-alert format (embed with title + fields). Do NOT use the email-triage webhook pattern — call the Discord webhook directly with a JSON embed body.
+```bash
+python3 ~/.hermes/skills/meeting-prep/scripts/post_brief.py \
+  --title "MEETING_TITLE" \
+  --start "ISO8601_UTC_START" \
+  --synthesis "• Bullet 1\n• Bullet 2\n• Bullet 3" \
+  [--attendees "email1, email2"] \
+  [--emails "Recent email summary text"] \
+  [--tasks "Task 1\nTask 2"] \
+  [--wiki "Wiki context sentence"]
+```
+
+Omit optional flags when that context is empty. If the script raises RuntimeError, surface the error to Discord and stop — do NOT proceed to Step 5.
 
 ### Step 5 — Log completion
+
+Only run this after Step 4 succeeds (prints "Brief sent."):
 
 ```bash
 python3 ~/.hermes/skills/meeting-prep/scripts/dedup.py log \
@@ -99,7 +108,7 @@ python3 ~/.hermes/skills/meeting-prep/scripts/dedup.py log \
   --start-time "ISO8601_START_TIME"
 ```
 
-This step must succeed. If it raises RuntimeError, surface the error — do not silently skip the log write.
+If it raises RuntimeError, surface the error — the brief was sent but the dedup record is missing.
 
 ## Failure modes
 
