@@ -164,10 +164,12 @@ Phases are organized by execution wave — what can run in parallel vs. what is 
 
 **Phase E3: Kaizen Loop — shipped.** Priority map in D1, `kaizen-context` plugin injects it on every turn, `kaizen-reflection` skill runs weekly to propose reclassifications. See `config/plugins/kaizen-context/` and `config/skills/kaizen-reflection/`.
 
-**Phase E3+: Expand Kaizen Scope.** Broaden the kaizen loop beyond email patterns to watch conversation patterns, project logs, and reflection journal entries. Also add the reflection journal: a weekly cron (Sunday evening) asks 2-3 structured questions (what went well, what drained you, what are you avoiding), stores answers in D1, feeds them into both Honcho and kaizen-reflection. Depends on: E2a (Honcho), E4b (project log data).
-- Expand `reflect.py` to query `project_log` and `reflection_log` in addition to `email_triage_log`
-- Add `reflection-journal` skill: cron + Discord command for manual entries
-- Reflection answers feed `honcho_conclude` for durable preference facts
+**Phase E3+: Expand Kaizen Scope — shipped.** `reflect.py` now runs two silent passes after email proposals: `_run_project_analysis` (queries `project_log`, extracts FACT: lines via LLM, concludes into Honcho) and `_run_reflection_analysis` (queries `reflection_log`, same pattern). New `reflection-journal` skill: Sunday 02:00 UTC cron posts three reflection questions to Discord; user replies; Mahler calls `journal.py --record` to store the raw text in D1 `reflection_log` and conclude 2-3 synthesized facts into Honcho.
+- `kaizen-reflection/scripts/honcho_client.py` — `conclude()` to Honcho under `"kaizen-reflection"` session
+- `kaizen-reflection/scripts/d1_client.py` — added `get_recent_project_log(since_days)`, `get_recent_reflections(since_weeks)`
+- `kaizen-reflection/scripts/reflect.py` — `_run_project_analysis` + `_run_reflection_analysis` silent passes (swallowed exceptions, never block email proposals)
+- `reflection-journal/` skill — `d1_client.py` (`reflection_log` CRUD), `honcho_client.py` (`"reflection-journal"` session), `journal.py` (`--prompt` / `--record`), `SKILL.md`
+- D1 table `reflection_log (id, week_of, raw_text, created_at)` — run `d1.ensure_table()` once after first deploy
 
 **Phase E4: Calendar + meeting flow — shipped.** Google Calendar skill, meeting prep brief ~1 hour before meetings, calendar-aware plugin. See `config/skills/google-calendar/` and `config/skills/meeting-prep/`.
 
