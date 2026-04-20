@@ -527,6 +527,7 @@ def main(argv: list[str] | None = None) -> None:
                 "alerted": 1 if classification == "URGENT" else 0,
                 "classification_error": 1 if is_error else 0,
                 "processed_at": now_str,
+                "conversation_id": email.get("conversation_id"),
             })
             d1_stored += 1
 
