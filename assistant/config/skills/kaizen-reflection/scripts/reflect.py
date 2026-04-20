@@ -11,7 +11,6 @@ _SCRIPTS_DIR = Path(__file__).parent
 sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from d1_client import D1Client
-import honcho_client
 
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 _DEFAULT_MODEL = "x-ai/grok-4.1-fast"
@@ -103,70 +102,6 @@ Return a JSON array (no other text). Each element must have exactly these fields
 If no reclassifications are warranted, return an empty JSON array: []\
 """
 
-_COMBINED_ANALYSIS_PROMPT = """\
-You are analyzing project and reflection data for a personal chief-of-staff assistant.
-
-## Project Activity (last 7 days)
-{project_log_text}
-
-## Reflection Entries (last 4 weeks)
-{reflections_text}
-
-Identify 2-5 meaningful patterns across both sections. Focus on:
-- Projects with many blockers and no wins (possible focus or morale issue)
-- Recurring themes in blockers across different projects
-- Recurring sources of energy drain or avoidance from reflections
-- Consistent sources of satisfaction or momentum
-
-For each meaningful pattern, write one concise fact in plain English.
-Return each fact on its own line, prefixed with "FACT: ".
-If no meaningful patterns exist, return "NO_PATTERNS".\
-"""
-
-_HONCHO_BASE_URL = "https://api.honcho.dev"
-_HONCHO_APP_NAME = "mahler"
-_HONCHO_USER_ID = "jai"
-
-
-def _run_combined_analysis(d1: D1Client, env: dict) -> None:
-    honcho_api_key = os.environ.get("HONCHO_API_KEY")
-    if not honcho_api_key:
-        sys.stderr.write(
-            "WARNING: HONCHO_API_KEY not set — skipping combined analysis\n"
-        )
-        return
-    project_rows = d1.get_recent_project_log(since_days=7)
-    reflection_rows = d1.get_recent_reflections(since_weeks=4)
-    if not project_rows and not reflection_rows:
-        return
-    project_log_text = "\n".join(
-        "[{project}] {created_at} — {entry_type}: {summary}".format(**r)
-        for r in project_rows
-    ) if project_rows else "(no project activity)"
-    reflections_text = "\n\n".join(
-        "[{week_of}]: {raw_text}".format(**r) for r in reflection_rows
-    ) if reflection_rows else "(no reflections)"
-    model = os.environ.get("OPENROUTER_MODEL", _DEFAULT_MODEL)
-    prompt = _COMBINED_ANALYSIS_PROMPT.format(
-        project_log_text=project_log_text,
-        reflections_text=reflections_text,
-    )
-    raw = _call_llm(prompt, env["OPENROUTER_API_KEY"], model, max_tokens=400)
-    facts = [
-        line[len("FACT: "):].strip()
-        for line in raw.splitlines()
-        if line.startswith("FACT: ")
-    ]
-    for fact in facts:
-        honcho_client.conclude(
-            fact,
-            honcho_api_key,
-            _HONCHO_BASE_URL,
-            _HONCHO_APP_NAME,
-            _HONCHO_USER_ID,
-        )
-
-
 def _load_env() -> dict:
     missing = [k for k in _REQUIRED_ENV if not os.environ.get(k)]
     if missing:
@@ -216,11 +151,6 @@ def _run(since_days: int, env: dict) -> None:
             print(json.dumps(proposals))
         else:
             print("No proposals this week.")
-
-    try:
-        _run_combined_analysis(d1, env)
-    except Exception as exc:
-        sys.stderr.write(f"WARNING: combined analysis failed: {exc}\n")
 
 
 def _apply(proposal_json: str, env: dict) -> None:
