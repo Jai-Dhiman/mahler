@@ -207,5 +207,120 @@ class TestReflectRunReplyRateInPrompt(unittest.TestCase):
         self.assertIn("75%", captured_prompt["value"])
 
 
+class TestReflectRunProjectAnalysis(unittest.TestCase):
+
+    def test_project_analysis_calls_honcho_conclude_for_each_fact(self):
+        rows = [
+            {
+                "project": "traderjoe",
+                "entry_type": "blocker",
+                "summary": "backtest crash on margin calc",
+                "git_ref": "abc",
+                "created_at": "2026-04-18",
+            }
+        ]
+        mock_d1 = MagicMock()
+        mock_d1.get_triage_patterns_with_reply_rate.return_value = []
+        mock_d1.get_recent_project_log.return_value = rows
+
+        with (
+            _patch_env({"HONCHO_API_KEY": "hk"}),
+            patch("reflect.D1Client", return_value=mock_d1),
+            patch(
+                "reflect._call_llm",
+                return_value=(
+                    "FACT: traderjoe has had recurring blockers with no wins\n"
+                    "FACT: assistant project shows no activity this week"
+                ),
+            ),
+            patch("reflect.honcho_client") as mock_honcho,
+            patch("sys.stdout", io.StringIO()),
+        ):
+            import reflect
+            reflect.main(["--run"])
+
+        self.assertEqual(mock_honcho.conclude.call_count, 2)
+        conclude_texts = [call[0][0] for call in mock_honcho.conclude.call_args_list]
+        self.assertTrue(any("traderjoe" in t for t in conclude_texts))
+
+    def test_project_analysis_skips_when_project_log_empty(self):
+        mock_d1 = MagicMock()
+        mock_d1.get_triage_patterns_with_reply_rate.return_value = []
+        mock_d1.get_recent_project_log.return_value = []
+
+        with (
+            _patch_env({"HONCHO_API_KEY": "hk"}),
+            patch("reflect.D1Client", return_value=mock_d1),
+            patch("reflect._call_llm") as mock_llm,
+            patch("reflect.honcho_client") as mock_honcho,
+            patch("sys.stdout", io.StringIO()),
+        ):
+            import reflect
+            reflect.main(["--run"])
+
+        mock_honcho.conclude.assert_not_called()
+
+    def test_project_analysis_failure_does_not_block_email_proposals(self):
+        patterns = [
+            {
+                "from_addr": "news@x.com",
+                "classification": "NEEDS_ACTION",
+                "occurrence_count": 5,
+                "reply_count": 0,
+            }
+        ]
+        mock_d1 = MagicMock()
+        mock_d1.get_triage_patterns_with_reply_rate.return_value = patterns
+        mock_d1.get_priority_map.return_value = "## URGENT\nDrop everything."
+        mock_d1.get_recent_project_log.side_effect = RuntimeError("D1 connection failed")
+
+        email_proposals_json = json.dumps([
+            {
+                "sender": "news@x.com",
+                "current_tier": "NEEDS_ACTION",
+                "proposed_tier": "FYI",
+                "evidence": "5 occurrences with no reply",
+            }
+        ])
+        captured = io.StringIO()
+        with (
+            _patch_env({"HONCHO_API_KEY": "hk"}),
+            patch("reflect.D1Client", return_value=mock_d1),
+            patch("reflect._call_llm", return_value=email_proposals_json),
+            patch("reflect.honcho_client"),
+            patch("sys.stdout", captured),
+        ):
+            import reflect
+            reflect.main(["--run"])
+
+        proposals = json.loads(captured.getvalue())
+        self.assertEqual(proposals[0]["sender"], "news@x.com")
+
+    def test_project_analysis_skips_when_honcho_api_key_missing(self):
+        rows = [
+            {
+                "project": "traderjoe",
+                "entry_type": "blocker",
+                "summary": "crash",
+                "git_ref": "abc",
+                "created_at": "2026-04-18",
+            }
+        ]
+        mock_d1 = MagicMock()
+        mock_d1.get_triage_patterns_with_reply_rate.return_value = []
+        mock_d1.get_recent_project_log.return_value = rows
+
+        with (
+            _patch_env(),
+            patch("reflect.D1Client", return_value=mock_d1),
+            patch("reflect.honcho_client") as mock_honcho,
+            patch("sys.stdout", io.StringIO()),
+        ):
+            import reflect
+            reflect.main(["--run"])
+
+        mock_honcho.conclude.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

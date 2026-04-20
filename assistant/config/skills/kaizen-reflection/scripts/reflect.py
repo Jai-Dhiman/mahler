@@ -11,6 +11,7 @@ _SCRIPTS_DIR = Path(__file__).parent
 sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from d1_client import D1Client
+import honcho_client
 
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 _DEFAULT_MODEL = "x-ai/grok-4.1-fast"
@@ -96,6 +97,58 @@ Return a JSON array (no other text). Each element must have exactly these fields
 If no reclassifications are warranted, return an empty JSON array: []\
 """
 
+_PROJECT_ANALYSIS_PROMPT = """\
+You are analyzing project activity logs for a personal chief-of-staff assistant.
+
+Recent project activity (last 7 days):
+{project_log_text}
+
+Identify 1-3 meaningful patterns across these entries. Focus on:
+- Projects with many blockers and no wins (possible focus or morale issue)
+- Recurring themes in blockers across different projects
+- Sustained absence of progress in an area that was recently active
+
+For each meaningful pattern, write one concise fact in plain English.
+Return each fact on its own line, prefixed with "FACT: ".
+If no meaningful patterns exist, return "NO_PATTERNS".\
+"""
+
+_HONCHO_BASE_URL = "https://api.honcho.dev"
+_HONCHO_APP_NAME = "mahler"
+_HONCHO_USER_ID = "jai"
+
+
+def _run_project_analysis(d1: D1Client, env: dict) -> None:
+    honcho_api_key = os.environ.get("HONCHO_API_KEY")
+    if not honcho_api_key:
+        sys.stderr.write(
+            "WARNING: HONCHO_API_KEY not set — skipping project analysis\n"
+        )
+        return
+    rows = d1.get_recent_project_log(since_days=7)
+    if not rows:
+        return
+    project_log_text = "\n".join(
+        "[{project}] {created_at} — {entry_type}: {summary}".format(**r)
+        for r in rows
+    )
+    model = os.environ.get("OPENROUTER_MODEL", _DEFAULT_MODEL)
+    prompt = _PROJECT_ANALYSIS_PROMPT.format(project_log_text=project_log_text)
+    raw = _call_llm(prompt, env["OPENROUTER_API_KEY"], model)
+    facts = [
+        line[len("FACT: "):].strip()
+        for line in raw.splitlines()
+        if line.startswith("FACT: ")
+    ]
+    for fact in facts:
+        honcho_client.conclude(
+            fact,
+            honcho_api_key,
+            _HONCHO_BASE_URL,
+            _HONCHO_APP_NAME,
+            _HONCHO_USER_ID,
+        )
+
 
 def _load_env() -> dict:
     missing = [k for k in _REQUIRED_ENV if not os.environ.get(k)]
@@ -113,40 +166,44 @@ def _run(since_days: int, env: dict) -> None:
     patterns = d1.get_triage_patterns_with_reply_rate(since_days=since_days, min_count=3)
     if not patterns:
         print("No proposals this week.")
-        return
-
-    priority_map = d1.get_priority_map()
-    model = os.environ.get("OPENROUTER_MODEL", _DEFAULT_MODEL)
-
-    patterns_text = "\n".join(
-        "- {addr}: {count} times as {cls}, {replies} replies ({rate}%)".format(
-            addr=p["from_addr"],
-            count=p["occurrence_count"],
-            cls=p["classification"],
-            replies=p.get("reply_count", 0),
-            rate=(
-                p.get("reply_count", 0) * 100 // p["occurrence_count"]
-                if p["occurrence_count"] > 0
-                else 0
-            ),
+    else:
+        priority_map = d1.get_priority_map()
+        model = os.environ.get("OPENROUTER_MODEL", _DEFAULT_MODEL)
+        patterns_text = "\n".join(
+            "- {addr}: {count} times as {cls}, {replies} replies ({rate}%)".format(
+                addr=p["from_addr"],
+                count=p["occurrence_count"],
+                cls=p["classification"],
+                replies=p.get("reply_count", 0),
+                rate=(
+                    p.get("reply_count", 0) * 100 // p["occurrence_count"]
+                    if p["occurrence_count"] > 0
+                    else 0
+                ),
+            )
+            for p in patterns
         )
-        for p in patterns
-    )
-    prompt = _PROPOSAL_PROMPT.format(priority_map=priority_map, patterns=patterns_text)
-    raw = _call_llm(prompt, env["OPENROUTER_API_KEY"], model)
+        prompt = _PROPOSAL_PROMPT.format(
+            priority_map=priority_map, patterns=patterns_text
+        )
+        raw = _call_llm(prompt, env["OPENROUTER_API_KEY"], model)
+        try:
+            proposals = json.loads(raw)
+            if not isinstance(proposals, list):
+                raise ValueError("LLM did not return a JSON array")
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise RuntimeError(
+                f"LLM returned unparseable proposals: {exc}\nRaw: {raw}"
+            ) from exc
+        if proposals:
+            print(json.dumps(proposals))
+        else:
+            print("No proposals this week.")
 
     try:
-        proposals = json.loads(raw)
-        if not isinstance(proposals, list):
-            raise ValueError("LLM did not return a JSON array")
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise RuntimeError(f"LLM returned unparseable proposals: {exc}\nRaw: {raw}") from exc
-
-    if not proposals:
-        print("No proposals this week.")
-        return
-
-    print(json.dumps(proposals))
+        _run_project_analysis(d1, env)
+    except Exception as exc:
+        sys.stderr.write(f"WARNING: project analysis failed: {exc}\n")
 
 
 def _apply(proposal_json: str, env: dict) -> None:
