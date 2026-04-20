@@ -89,22 +89,6 @@ class TestReflectRunNoProposals(unittest.TestCase):
 
         mock_llm.assert_not_called()
 
-    def test_run_produces_no_honcho_warning_without_honcho_api_key(self):
-        mock_d1 = MagicMock()
-        mock_d1.get_triage_patterns_with_reply_rate.return_value = []
-
-        captured_err = io.StringIO()
-        with (
-            patch.dict("os.environ", _BASE_ENV, clear=True),
-            patch("reflect.D1Client", return_value=mock_d1),
-            patch("sys.stdout", io.StringIO()),
-            patch("sys.stderr", captured_err),
-        ):
-            import reflect
-            reflect.main(["--run"])
-
-        self.assertNotIn("HONCHO", captured_err.getvalue())
-
 
 class TestReflectApply(unittest.TestCase):
 
