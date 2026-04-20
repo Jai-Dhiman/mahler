@@ -55,3 +55,54 @@ def test_add_command_context_defaults_to_empty_string():
             mock_d1.upsert_contact.assert_called_once_with(
                 "Bob Smith", "bob@example.com", "personal", ""
             )
+
+
+def test_summarize_shows_contact_card_and_open_tasks():
+    contact_row = {
+        "id": 1, "name": "Alice Chen", "email": "alice@example.com",
+        "type": "professional", "last_contact": "2026-04-15",
+        "context": "Works at Sequoia", "created_at": "2026-04-01",
+    }
+    tasks = [{"id": "p1", "title": "[Alice Chen] Send IC memo", "status": "In progress", "due": "2026-04-25", "priority": "High"}]
+    with patch.dict(os.environ, _ENV):
+        with patch("contacts.D1Client") as MockD1, patch("contacts.NotionClient") as MockNotion:
+            mock_d1 = MagicMock()
+            mock_d1.get_contact.return_value = contact_row
+            MockD1.return_value = mock_d1
+            mock_notion = MagicMock()
+            mock_notion.list_tasks_for_contact.return_value = tasks
+            MockNotion.return_value = mock_notion
+            out = io.StringIO()
+            with patch("sys.stdout", out):
+                import contacts
+                contacts.main(["summarize", "--name", "Alice Chen"])
+            result = out.getvalue()
+            assert "Alice Chen (professional)" in result
+            assert "alice@example.com" in result
+            assert "2026-04-15" in result
+            assert "Works at Sequoia" in result
+            assert "[Alice Chen] Send IC memo" in result
+            mock_notion.list_tasks_for_contact.assert_called_once_with("Alice Chen")
+
+
+def test_summarize_shows_none_when_no_tasks():
+    contact_row = {
+        "id": 1, "name": "Bob Smith", "email": "bob@example.com",
+        "type": "personal", "last_contact": None,
+        "context": "", "created_at": "2026-04-01",
+    }
+    with patch.dict(os.environ, _ENV):
+        with patch("contacts.D1Client") as MockD1, patch("contacts.NotionClient") as MockNotion:
+            mock_d1 = MagicMock()
+            mock_d1.get_contact.return_value = contact_row
+            MockD1.return_value = mock_d1
+            mock_notion = MagicMock()
+            mock_notion.list_tasks_for_contact.return_value = []
+            MockNotion.return_value = mock_notion
+            out = io.StringIO()
+            with patch("sys.stdout", out):
+                import contacts
+                contacts.main(["summarize", "--name", "Bob Smith"])
+            result = out.getvalue()
+            assert "never" in result
+            assert "none" in result

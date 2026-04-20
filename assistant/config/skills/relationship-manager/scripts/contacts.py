@@ -43,6 +43,27 @@ def _cmd_add(args: argparse.Namespace) -> None:
     print(f"Added: {args.name} ({args.type})")
 
 
+def _cmd_summarize(args: argparse.Namespace) -> None:
+    db = _d1_client()
+    notion = _notion_client()
+    c = db.get_contact(args.name)
+    last = c["last_contact"] or "never"
+    ctx = c["context"] or "—"
+    print(f"{c['name']} ({c['type']})")
+    print(f"Email: {c['email']}")
+    print(f"Last contact: {last}")
+    print(f"Context: {ctx}")
+    print()
+    tasks = notion.list_tasks_for_contact(c["name"])
+    if tasks:
+        print("Open tasks:")
+        for t in tasks:
+            due_str = f" (due: {t['due']})" if t["due"] else ""
+            print(f"  {t['title']}{due_str}")
+    else:
+        print("Open tasks: none")
+
+
 def main(argv=None) -> None:
     _supplement_env_from_hermes()
     parser = argparse.ArgumentParser(prog="contacts")
@@ -69,6 +90,7 @@ def main(argv=None) -> None:
     args = parser.parse_args(argv)
     dispatch = {
         "add": _cmd_add,
+        "summarize": _cmd_summarize,
     }
     fn = dispatch.get(args.command)
     if fn is None:
