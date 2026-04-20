@@ -63,6 +63,13 @@ class TestConclude(unittest.TestCase):
 
         self.assertIn("Honcho conclude failed", str(ctx.exception))
 
+    def test_conclude_raises_runtime_error_on_session_creation_http_error(self):
+        with patch.object(_OPENER, "open", side_effect=_http_error(401)):
+            with self.assertRaises(RuntimeError) as ctx:
+                conclude("text", "key", "https://api.honcho.dev", "mahler", "jai")
+
+        self.assertIn("Honcho session creation failed", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
