@@ -64,6 +64,24 @@ def _cmd_summarize(args: argparse.Namespace) -> None:
         print("Open tasks: none")
 
 
+def _cmd_list(args: argparse.Namespace) -> None:
+    db = _d1_client()
+    rows = db.list_contacts(type=getattr(args, "type", None))
+    if not rows:
+        print("No contacts found.")
+        return
+    for c in rows:
+        last = c["last_contact"] or "never"
+        print(f"{c['name']} ({c['type']}) — last contact: {last}")
+
+
+def _cmd_talked_to(args: argparse.Namespace) -> None:
+    db = _d1_client()
+    today = date.today().isoformat()
+    db.touch_last_contact(args.name, today)
+    print(f"Noted: talked to {args.name} on {today}")
+
+
 def main(argv=None) -> None:
     _supplement_env_from_hermes()
     parser = argparse.ArgumentParser(prog="contacts")
@@ -91,6 +109,8 @@ def main(argv=None) -> None:
     dispatch = {
         "add": _cmd_add,
         "summarize": _cmd_summarize,
+        "list": _cmd_list,
+        "talked-to": _cmd_talked_to,
     }
     fn = dispatch.get(args.command)
     if fn is None:

@@ -106,3 +106,57 @@ def test_summarize_shows_none_when_no_tasks():
             result = out.getvalue()
             assert "never" in result
             assert "none" in result
+
+
+def test_list_command_prints_all_contacts():
+    rows = [
+        {"id": 1, "name": "Alice Chen", "email": "a@x.com", "type": "professional",
+         "last_contact": "2026-04-15", "context": "", "created_at": "2026-04-01"},
+        {"id": 2, "name": "Bob Smith", "email": "b@x.com", "type": "personal",
+         "last_contact": None, "context": "", "created_at": "2026-04-01"},
+    ]
+    with patch.dict(os.environ, _ENV):
+        with patch("contacts.D1Client") as MockD1:
+            mock_d1 = MagicMock()
+            mock_d1.list_contacts.return_value = rows
+            MockD1.return_value = mock_d1
+            out = io.StringIO()
+            with patch("sys.stdout", out):
+                import contacts
+                contacts.main(["list"])
+            result = out.getvalue()
+            assert "Alice Chen (professional)" in result
+            assert "2026-04-15" in result
+            assert "Bob Smith (personal)" in result
+            assert "never" in result
+            mock_d1.list_contacts.assert_called_once_with(type=None)
+
+
+def test_list_command_filters_by_type():
+    rows = [{"id": 1, "name": "Alice Chen", "email": "a@x.com", "type": "professional",
+             "last_contact": None, "context": "", "created_at": "2026-04-01"}]
+    with patch.dict(os.environ, _ENV):
+        with patch("contacts.D1Client") as MockD1:
+            mock_d1 = MagicMock()
+            mock_d1.list_contacts.return_value = rows
+            MockD1.return_value = mock_d1
+            out = io.StringIO()
+            with patch("sys.stdout", out):
+                import contacts
+                contacts.main(["list", "--type", "professional"])
+            mock_d1.list_contacts.assert_called_once_with(type="professional")
+
+
+def test_talked_to_updates_last_contact_to_today():
+    with patch.dict(os.environ, _ENV):
+        with patch("contacts.D1Client") as MockD1:
+            mock_d1 = MagicMock()
+            MockD1.return_value = mock_d1
+            out = io.StringIO()
+            with patch("sys.stdout", out):
+                with patch("contacts.date") as mock_date:
+                    mock_date.today.return_value.isoformat.return_value = "2026-04-19"
+                    import contacts
+                    contacts.main(["talked-to", "--name", "Alice Chen"])
+            mock_d1.touch_last_contact.assert_called_once_with("Alice Chen", "2026-04-19")
+            assert "Noted: talked to Alice Chen on 2026-04-19" in out.getvalue()
