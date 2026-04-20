@@ -80,6 +80,18 @@ class D1Client:
             raise RuntimeError(f"Contact not found: {name!r}")
         return rows[0]
 
+    def list_contacts(self, type: str | None = None) -> list[dict]:
+        if type is not None:
+            return self.query(
+                "SELECT id, name, email, type, last_contact, context, created_at "
+                "FROM contacts WHERE type = ? ORDER BY name",
+                [type],
+            )
+        return self.query(
+            "SELECT id, name, email, type, last_contact, context, created_at "
+            "FROM contacts ORDER BY name"
+        )
+
     def upsert_contact(self, name: str, email: str, contact_type: str, context: str) -> None:
         self.query(
             """

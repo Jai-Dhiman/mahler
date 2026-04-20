@@ -49,3 +49,34 @@ def test_get_contact_raises_when_not_found():
         client = D1Client("acct1", "db1", "tok1")
         with pytest.raises(RuntimeError, match="Contact not found"):
             client.get_contact("Nobody")
+
+
+def test_list_contacts_returns_all():
+    rows = [
+        {"id": 1, "name": "Alice Chen", "email": "a@x.com", "type": "professional",
+         "last_contact": None, "context": "", "created_at": "2026-04-19"},
+        {"id": 2, "name": "Bob Smith", "email": "b@x.com", "type": "personal",
+         "last_contact": None, "context": "", "created_at": "2026-04-19"},
+    ]
+    with patch("d1_client._OPENER") as mock_opener:
+        mock_opener.open.return_value = _make_d1_response(rows=rows)
+        client = D1Client("acct1", "db1", "tok1")
+        result = client.list_contacts()
+        assert len(result) == 2
+        req = mock_opener.open.call_args[0][0]
+        body = json.loads(req.data)
+        assert "WHERE type" not in body["sql"]
+
+
+def test_list_contacts_filters_by_type():
+    rows = [{"id": 1, "name": "Alice Chen", "email": "a@x.com", "type": "professional",
+             "last_contact": None, "context": "", "created_at": "2026-04-19"}]
+    with patch("d1_client._OPENER") as mock_opener:
+        mock_opener.open.return_value = _make_d1_response(rows=rows)
+        client = D1Client("acct1", "db1", "tok1")
+        result = client.list_contacts(type="professional")
+        assert len(result) == 1
+        req = mock_opener.open.call_args[0][0]
+        body = json.loads(req.data)
+        assert "WHERE type = ?" in body["sql"]
+        assert body["params"] == ["professional"]
