@@ -67,7 +67,10 @@ def _fetch_feed(url: str) -> list:
         title = (title_el.text or "").strip()
         url_val = (link_el.text or "").strip()
         pubdate_str = (pubdate_el.text or "").strip() if pubdate_el is not None else ""
-        pubdate = _parse_pubdate(pubdate_str) or datetime.min.replace(tzinfo=timezone.utc)
+        pubdate = _parse_pubdate(pubdate_str)
+        if pubdate is None:
+            print(f"news_fetcher: skipping '{title}' — missing or unparseable pubDate", file=sys.stderr)
+            continue
         if pubdate < cutoff:
             continue
         if not title or not url_val:
@@ -89,6 +92,8 @@ def fetch_top_news(sources: dict, max_items: int = 5) -> list:
                 item["category"] = category
             all_items.extend(items)
 
+    # Cross-category merges are intentional: same story from different category
+    # feeds merges into one item, keeping the first-seen category label.
     canonical = []
     for item in all_items:
         words = _significant_words(item["title"])

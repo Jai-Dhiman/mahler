@@ -246,6 +246,7 @@ def main() -> None:
             sources = _load_news_sources()
             news_items = fetch_top_news(sources)
         except Exception as exc:
+            # broad catch intentional: news is non-critical; email section must always post
             print(f"brief: news fetch failed, omitting section: {exc}", file=sys.stderr)
 
     payload = build_embed(rows, args.period, args.since_hours, news_items=news_items)

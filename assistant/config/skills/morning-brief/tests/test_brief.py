@@ -1,3 +1,4 @@
+import contextlib
 import json
 import sys
 import unittest
@@ -316,7 +317,6 @@ class TestLoadEnv(unittest.TestCase):
 class TestMainNewsWiring(unittest.TestCase):
     def _run_dry_run(self, env, patches):
         """Run main() with --dry-run and return the parsed JSON payload."""
-        import json
         from io import StringIO
 
         old_argv = sys.argv
@@ -324,15 +324,13 @@ class TestMainNewsWiring(unittest.TestCase):
         sys.argv = ["brief.py", "--period", "morning", "--dry-run"]
         sys.stdout = StringIO()
         try:
-            ctx = unittest.mock.patch.dict("os.environ", env, clear=True)
-            ctx.__enter__()
-            active = [p.__enter__() for p in patches]
-            from brief import main
-            main()
-            output = sys.stdout.getvalue()
-            for p in reversed(patches):
-                p.__exit__(None, None, None)
-            ctx.__exit__(None, None, None)
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(unittest.mock.patch.dict("os.environ", env, clear=True))
+                for p in patches:
+                    stack.enter_context(p)
+                from brief import main
+                main()
+                output = sys.stdout.getvalue()
         finally:
             sys.argv = old_argv
             sys.stdout = old_stdout
