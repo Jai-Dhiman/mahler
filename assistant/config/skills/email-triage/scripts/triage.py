@@ -24,6 +24,10 @@ from pathlib import Path
 _SCRIPTS_DIR = Path(__file__).parent
 sys.path.insert(0, str(_SCRIPTS_DIR))
 
+_SHARED_DIR = str(Path.home() / ".hermes" / "shared")
+if _SHARED_DIR not in sys.path:
+    sys.path.insert(0, _SHARED_DIR)
+
 
 def _supplement_env_from_hermes() -> None:
     """Load missing env vars from ~/.hermes/.env.
@@ -59,10 +63,6 @@ import honcho_client
 
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 _DEFAULT_MODEL = "x-ai/grok-4.1-fast"
-
-_HONCHO_BASE_URL = "https://api.honcho.dev"
-_HONCHO_APP_NAME = "mahler"
-_HONCHO_USER_ID = "jai"
 
 # Cloudflare KV namespace provisioned for Mahler (stores rotating Outlook token)
 _CF_KV_NAMESPACE_ID = "4e63db1305a1424ead3565522a47b5f4"  # MAHLER_KV
@@ -340,13 +340,7 @@ def _run_attribution_pass(env: dict, d1: D1Client, dry_run: bool) -> None:
                 f"(originally classified {row['classification']})"
             )
             try:
-                honcho_client.conclude(
-                    fact,
-                    api_key=honcho_api_key,
-                    base_url=_HONCHO_BASE_URL,
-                    app_name=_HONCHO_APP_NAME,
-                    user_id=_HONCHO_USER_ID,
-                )
+                honcho_client.conclude(fact, session_id="email-triage-attribution")
                 d1.mark_replied(row["message_id"], sent_at)
                 attributed_count += 1
             except Exception as row_exc:

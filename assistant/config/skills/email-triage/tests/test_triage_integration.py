@@ -10,9 +10,11 @@ or:
 import sys
 import unittest
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
 sys.path.insert(0, "scripts")
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "shared"))
 
 from email_types import EmailMessage
 from triage import classify_batch, main, send_urgent_alert, _run_attribution_pass
