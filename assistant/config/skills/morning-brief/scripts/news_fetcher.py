@@ -77,7 +77,11 @@ def fetch_top_news(sources: dict, max_items: int = 5) -> list:
     all_items = []
     for category, feed_urls in sources.items():
         for url in feed_urls:
-            items = _fetch_feed(url)
+            try:
+                items = _fetch_feed(url)
+            except Exception as exc:
+                print(f"news_fetcher: failed to fetch {url}: {exc}", file=sys.stderr)
+                continue
             for item in items:
                 item["category"] = category
             all_items.extend(items)

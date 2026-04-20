@@ -77,6 +77,32 @@ class TestFetchTopNewsDedup(unittest.TestCase):
         self.assertEqual(items[1]["source_count"], 1)
         self.assertIn("Anthropic", items[1]["title"])
 
+    def test_failed_feed_does_not_block_healthy_feeds(self):
+        import urllib.error
+
+        healthy_feed = _make_feed_xml([
+            ("Anthropic raises funding for AI safety research initiatives", "https://feedc.example.com/anthropic", 1),
+        ])
+
+        def mock_open(req, timeout=None):
+            if "broken" in req.full_url:
+                raise urllib.error.URLError("connection refused")
+            return _make_response(healthy_feed)
+
+        sources = {
+            "AI/Tech": [
+                "https://broken.example.com/rss",
+                "https://feedc.example.com/rss",
+            ]
+        }
+
+        with unittest.mock.patch("news_fetcher._OPENER") as mock_opener:
+            mock_opener.open.side_effect = mock_open
+            items = fetch_top_news(sources)
+
+        self.assertEqual(len(items), 1)
+        self.assertIn("Anthropic", items[0]["title"])
+
     def test_returns_at_most_max_items(self):
         topics = [
             "Federal Reserve raises interest rates amid inflation concerns",
