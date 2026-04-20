@@ -80,3 +80,15 @@ def test_list_contacts_filters_by_type():
         body = json.loads(req.data)
         assert "WHERE type = ?" in body["sql"]
         assert body["params"] == ["professional"]
+
+
+def test_touch_last_contact_sends_update_sql():
+    with patch("d1_client._OPENER") as mock_opener:
+        mock_opener.open.return_value = _make_d1_response()
+        client = D1Client("acct1", "db1", "tok1")
+        client.touch_last_contact("Alice Chen", "2026-04-19")
+        req = mock_opener.open.call_args[0][0]
+        body = json.loads(req.data)
+        assert "UPDATE contacts SET last_contact = ?" in body["sql"]
+        assert "lower(name) = lower(?)" in body["sql"]
+        assert body["params"] == ["2026-04-19", "Alice Chen"]

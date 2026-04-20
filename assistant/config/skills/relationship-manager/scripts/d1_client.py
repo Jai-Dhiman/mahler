@@ -92,6 +92,12 @@ class D1Client:
             "FROM contacts ORDER BY name"
         )
 
+    def touch_last_contact(self, name: str, date: str) -> None:
+        self.query(
+            "UPDATE contacts SET last_contact = ? WHERE lower(name) = lower(?)",
+            [date, name],
+        )
+
     def upsert_contact(self, name: str, email: str, contact_type: str, context: str) -> None:
         self.query(
             """
