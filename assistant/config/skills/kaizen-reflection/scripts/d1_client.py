@@ -129,3 +129,17 @@ class D1Client:
 )""",
             [],
         )
+
+    def get_recent_project_log(self, since_days: int = 7) -> list[dict]:
+        """Return project_log rows from the last since_days days, newest first."""
+        if not isinstance(since_days, int) or since_days <= 0:
+            raise ValueError(
+                f"since_days must be a positive integer, got {since_days!r}"
+            )
+        return self.query(
+            "SELECT project, entry_type, summary, git_ref, created_at "
+            "FROM project_log "
+            "WHERE created_at >= datetime('now', ? || ' days') "
+            "ORDER BY created_at DESC",
+            [f"-{since_days}"],
+        )

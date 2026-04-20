@@ -101,5 +101,39 @@ class TestGetTriagePatternsWithReplyRate(unittest.TestCase):
         self.assertEqual(result, [])
 
 
+class TestGetRecentProjectLog(unittest.TestCase):
+
+    def test_returns_project_log_rows_within_window(self):
+        rows = [
+            {
+                "project": "traderjoe",
+                "entry_type": "blocker",
+                "summary": "backtest crash on margin calc",
+                "git_ref": "abc123",
+                "created_at": "2026-04-18T10:00:00",
+            }
+        ]
+        with patch.object(_OPENER, "open", return_value=_make_response(_success_payload(rows))):
+            client = _make_client()
+            result = client.get_recent_project_log(since_days=7)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["project"], "traderjoe")
+        self.assertEqual(result[0]["entry_type"], "blocker")
+        self.assertEqual(result[0]["summary"], "backtest crash on margin calc")
+
+    def test_returns_empty_list_when_no_project_log_entries(self):
+        with patch.object(_OPENER, "open", return_value=_make_response(_success_payload([]))):
+            client = _make_client()
+            result = client.get_recent_project_log(since_days=7)
+
+        self.assertEqual(result, [])
+
+    def test_raises_on_invalid_since_days(self):
+        client = _make_client()
+        with self.assertRaises(ValueError):
+            client.get_recent_project_log(since_days=0)
+
+
 if __name__ == "__main__":
     unittest.main()
