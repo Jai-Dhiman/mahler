@@ -67,3 +67,23 @@ describe("verifySignature", () => {
     expect(result).toBe(false);
   });
 });
+
+import { env } from "cloudflare:test";
+import { checkAndSetDedup } from "./index";
+
+describe("checkAndSetDedup", () => {
+  it("returns false on first call and true on second call for the same recording_id", async () => {
+    const recordingId = 88881;
+    const first = await checkAndSetDedup(env.KV, recordingId);
+    expect(first).toBe(false);
+    const second = await checkAndSetDedup(env.KV, recordingId);
+    expect(second).toBe(true);
+  });
+
+  it("treats different recording_ids as independent", async () => {
+    const dup1 = await checkAndSetDedup(env.KV, 88882);
+    const dup2 = await checkAndSetDedup(env.KV, 88883);
+    expect(dup1).toBe(false);
+    expect(dup2).toBe(false);
+  });
+});

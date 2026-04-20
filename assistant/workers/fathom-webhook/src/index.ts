@@ -53,8 +53,12 @@ export async function verifySignature(
   return false;
 }
 
-export async function checkAndSetDedup(_kv: KVNamespace, _recordingId: number): Promise<boolean> {
-  throw new Error("Not implemented");
+export async function checkAndSetDedup(kv: KVNamespace, recordingId: number): Promise<boolean> {
+  const key = `fathom:${recordingId}`;
+  const existing = await kv.get(key);
+  if (existing !== null) return true;
+  await kv.put(key, "1", { expirationTtl: 86400 });
+  return false;
 }
 
 export async function extractSummary(
