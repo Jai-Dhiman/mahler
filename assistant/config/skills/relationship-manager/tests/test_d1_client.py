@@ -110,3 +110,15 @@ def test_update_contact_rejects_unknown_field():
     client = D1Client("acct1", "db1", "tok1")
     with pytest.raises(ValueError, match="Cannot update field"):
         client.update_contact("Alice Chen", "password", "hack")
+
+
+def test_delete_contact_sends_delete_sql():
+    with patch("d1_client._OPENER") as mock_opener:
+        mock_opener.open.return_value = _make_d1_response()
+        client = D1Client("acct1", "db1", "tok1")
+        client.delete_contact("Alice Chen")
+        req = mock_opener.open.call_args[0][0]
+        body = json.loads(req.data)
+        assert "DELETE FROM contacts" in body["sql"]
+        assert "lower(name) = lower(?)" in body["sql"]
+        assert body["params"] == ["Alice Chen"]

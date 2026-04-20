@@ -106,6 +106,12 @@ class D1Client:
             [value, name],
         )
 
+    def delete_contact(self, name: str) -> None:
+        self.query(
+            "DELETE FROM contacts WHERE lower(name) = lower(?)",
+            [name],
+        )
+
     def upsert_contact(self, name: str, email: str, contact_type: str, context: str) -> None:
         self.query(
             """
