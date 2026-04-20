@@ -113,6 +113,22 @@ Return each fact on its own line, prefixed with "FACT: ".
 If no meaningful patterns exist, return "NO_PATTERNS".\
 """
 
+_REFLECTION_ANALYSIS_PROMPT = """\
+You are analyzing weekly reflection journal entries for a personal chief-of-staff assistant.
+
+Recent reflections (last 4 weeks):
+{reflections_text}
+
+Identify recurring themes that appear in at least 2 reflections. Focus on:
+- Recurring sources of energy drain
+- Persistent avoidance patterns
+- Consistent sources of satisfaction or momentum
+
+For each recurring theme, write one concise fact in plain English.
+Return each fact on its own line, prefixed with "FACT: ".
+If no recurring themes exist across multiple reflections, return "NO_PATTERNS".\
+"""
+
 _HONCHO_BASE_URL = "https://api.honcho.dev"
 _HONCHO_APP_NAME = "mahler"
 _HONCHO_USER_ID = "jai"
@@ -134,6 +150,37 @@ def _run_project_analysis(d1: D1Client, env: dict) -> None:
     )
     model = os.environ.get("OPENROUTER_MODEL", _DEFAULT_MODEL)
     prompt = _PROJECT_ANALYSIS_PROMPT.format(project_log_text=project_log_text)
+    raw = _call_llm(prompt, env["OPENROUTER_API_KEY"], model)
+    facts = [
+        line[len("FACT: "):].strip()
+        for line in raw.splitlines()
+        if line.startswith("FACT: ")
+    ]
+    for fact in facts:
+        honcho_client.conclude(
+            fact,
+            honcho_api_key,
+            _HONCHO_BASE_URL,
+            _HONCHO_APP_NAME,
+            _HONCHO_USER_ID,
+        )
+
+
+def _run_reflection_analysis(d1: D1Client, env: dict) -> None:
+    honcho_api_key = os.environ.get("HONCHO_API_KEY")
+    if not honcho_api_key:
+        sys.stderr.write(
+            "WARNING: HONCHO_API_KEY not set — skipping reflection analysis\n"
+        )
+        return
+    rows = d1.get_recent_reflections(since_weeks=4)
+    if not rows:
+        return
+    reflections_text = "\n\n".join(
+        "[{week_of}]: {raw_text}".format(**r) for r in rows
+    )
+    model = os.environ.get("OPENROUTER_MODEL", _DEFAULT_MODEL)
+    prompt = _REFLECTION_ANALYSIS_PROMPT.format(reflections_text=reflections_text)
     raw = _call_llm(prompt, env["OPENROUTER_API_KEY"], model)
     facts = [
         line[len("FACT: "):].strip()
@@ -204,6 +251,11 @@ def _run(since_days: int, env: dict) -> None:
         _run_project_analysis(d1, env)
     except Exception as exc:
         sys.stderr.write(f"WARNING: project analysis failed: {exc}\n")
+
+    try:
+        _run_reflection_analysis(d1, env)
+    except Exception as exc:
+        sys.stderr.write(f"WARNING: reflection analysis failed: {exc}\n")
 
 
 def _apply(proposal_json: str, env: dict) -> None:

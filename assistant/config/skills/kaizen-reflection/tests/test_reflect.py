@@ -222,6 +222,7 @@ class TestReflectRunProjectAnalysis(unittest.TestCase):
         mock_d1 = MagicMock()
         mock_d1.get_triage_patterns_with_reply_rate.return_value = []
         mock_d1.get_recent_project_log.return_value = rows
+        mock_d1.get_recent_reflections.return_value = []
 
         with (
             _patch_env({"HONCHO_API_KEY": "hk"}),
@@ -319,6 +320,87 @@ class TestReflectRunProjectAnalysis(unittest.TestCase):
             import reflect
             reflect.main(["--run"])
 
+        mock_honcho.conclude.assert_not_called()
+
+
+class TestReflectRunReflectionAnalysis(unittest.TestCase):
+
+    def test_reflection_analysis_calls_honcho_conclude_for_recurring_theme(self):
+        reflection_rows = [
+            {
+                "week_of": "2026-W15",
+                "raw_text": "Meetings drained me",
+                "created_at": "2026-04-13",
+            },
+            {
+                "week_of": "2026-W16",
+                "raw_text": "Meetings still exhausting",
+                "created_at": "2026-04-20",
+            },
+        ]
+        mock_d1 = MagicMock()
+        mock_d1.get_triage_patterns_with_reply_rate.return_value = []
+        mock_d1.get_recent_project_log.return_value = []
+        mock_d1.get_recent_reflections.return_value = reflection_rows
+
+        with (
+            _patch_env({"HONCHO_API_KEY": "hk"}),
+            patch("reflect.D1Client", return_value=mock_d1),
+            patch(
+                "reflect._call_llm",
+                return_value="FACT: Jai finds meetings consistently draining",
+            ),
+            patch("reflect.honcho_client") as mock_honcho,
+            patch("sys.stdout", io.StringIO()),
+        ):
+            import reflect
+            reflect.main(["--run"])
+
+        mock_honcho.conclude.assert_called_once()
+        self.assertIn(
+            "meetings",
+            mock_honcho.conclude.call_args[0][0].lower(),
+        )
+
+    def test_reflection_analysis_skips_silently_when_reflection_log_missing(self):
+        mock_d1 = MagicMock()
+        mock_d1.get_triage_patterns_with_reply_rate.return_value = []
+        mock_d1.get_recent_project_log.return_value = []
+        mock_d1.get_recent_reflections.side_effect = RuntimeError(
+            "no such table: reflection_log"
+        )
+
+        captured = io.StringIO()
+        with (
+            _patch_env({"HONCHO_API_KEY": "hk"}),
+            patch("reflect.D1Client", return_value=mock_d1),
+            patch("reflect.honcho_client") as mock_honcho,
+            patch("sys.stdout", captured),
+        ):
+            import reflect
+            reflect.main(["--run"])
+
+        self.assertIn("No proposals this week", captured.getvalue())
+        mock_d1.get_recent_reflections.assert_called_once()
+        mock_honcho.conclude.assert_not_called()
+
+    def test_reflection_analysis_skips_when_no_reflections_returned(self):
+        mock_d1 = MagicMock()
+        mock_d1.get_triage_patterns_with_reply_rate.return_value = []
+        mock_d1.get_recent_project_log.return_value = []
+        mock_d1.get_recent_reflections.return_value = []
+
+        with (
+            _patch_env({"HONCHO_API_KEY": "hk"}),
+            patch("reflect.D1Client", return_value=mock_d1),
+            patch("reflect._call_llm") as mock_llm,
+            patch("reflect.honcho_client") as mock_honcho,
+            patch("sys.stdout", io.StringIO()),
+        ):
+            import reflect
+            reflect.main(["--run"])
+
+        mock_d1.get_recent_reflections.assert_called_once()
         mock_honcho.conclude.assert_not_called()
 
 
