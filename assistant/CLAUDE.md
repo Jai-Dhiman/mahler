@@ -179,11 +179,12 @@ Phases are organized by execution wave — what can run in parallel vs. what is 
 - `config/plugins/project-context/plugin.py`: `pre_llm_call` plugin injects recent wins/blockers
 - SessionStop hook registered in `~/.claude/settings.json`; requires `~/.mahler.env` with CF + OpenRouter creds
 
-**Phase E5: Relationship CRM.** D1-backed contact tracking for professional and personal relationships. Tracks last contact date, open commitments, important context per person. Proactive follow-up detection sweeps sent Gmail threads for no-reply after N days (depends on E2). Honcho provides relationship memory layer on top. No formal pipeline UI — Discord commands for CRUD + summary.
-- D1 table: `contacts (name, type, last_contact, context, open_commitments)`
-- `relationship-manager` skill: add/update/list contacts, weekly follow-up sweep
-- Follow-up detection: queries `email_triage_log` for sent threads with no reply (depends on E2)
-- Depends on: E2a (Honcho for relationship memory), soft dependency on E2 for follow-up detection
+**Phase E5: Relationship CRM — shipped.** D1-backed contact tracking with Discord CRUD commands and Google Calendar auto-sync for last_contact dates. Open Notion tasks surfaced per contact via `[Name]` prefix convention.
+- D1 table: `contacts (name, email, type, last_contact, context, created_at)`
+- `relationship-manager` skill: add/summarize/list/talked-to/update/delete/sync-calendar commands
+- Google Calendar auto-sync: daily cron at 08:00 UTC fetches attendee emails, updates `last_contact` for matching contacts
+- Open Notion tasks surfaced per contact via `[Name]` prefix convention
+- Depends on: shared `mahler-db` D1, existing Google Calendar OAuth credentials
 
 **Phase E7: Meeting Follow-Through.** After a meeting, extract action items from notes and push them to Notion tasks + update the relevant contact in CRM. Closes the loop that meeting-prep opens. Depends on E5 (CRM for contact update).
 - `meeting-followthrough` skill: Discord command to process notes → structured action items
@@ -219,7 +220,7 @@ Dependencies determine three parallel waves:
 
 **Wave 2 — After Wave 1 is live (run in parallel):**
 - E2: Gmail OAuth2 fetch + classify (E2a gives it Honcho to learn from immediately)
-- E5: Relationship CRM (needs E2a for Honcho layer; follow-up detection added later when E2 ships)
+- E5: Relationship CRM — shipped
 - E10: Life Tracking (independent; benefits from E2a)
 
 **Wave 3 — After E2 ships:**
