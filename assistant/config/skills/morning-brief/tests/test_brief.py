@@ -184,6 +184,12 @@ class TestBuildEmbed(unittest.TestCase):
         self.assertIn("My Subject", value)
         self.assertIn("My summary", value)
 
+    def test_no_news_field_when_news_items_is_none(self):
+        payload = build_embed([], "morning", 12, news_items=None)
+        fields = payload["embeds"][0].get("fields", [])
+        news_fields = [f for f in fields if f["name"] == "What's Worth Reading"]
+        self.assertEqual(len(news_fields), 0)
+
 
 class TestPostBrief(unittest.TestCase):
     def test_raises_on_non_https_url(self):

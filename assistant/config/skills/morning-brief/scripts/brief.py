@@ -123,7 +123,7 @@ def _truncate_field(lines: list[str], max_chars: int = 1024) -> str:
     return "".join(result).rstrip("\n")
 
 
-def build_embed(rows: list[dict], period: str, since_hours: int) -> dict:
+def build_embed(rows: list[dict], period: str, since_hours: int, news_items: list[dict] | None = None) -> dict:
     if period == "morning":
         color = 3447003
         title_prefix = "Morning Brief"
