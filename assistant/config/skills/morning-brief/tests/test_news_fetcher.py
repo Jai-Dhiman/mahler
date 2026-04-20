@@ -129,5 +129,20 @@ class TestFetchTopNewsDedup(unittest.TestCase):
         self.assertEqual(len(items), 5)
 
 
+    def test_items_older_than_24h_are_excluded(self):
+        feed_xml = _make_feed_xml([
+            ("Old article about machine learning neural networks", "https://feed.example.com/old", 25),
+            ("Recent article about large language model systems", "https://feed.example.com/recent", 1),
+        ])
+
+        with unittest.mock.patch("news_fetcher._OPENER") as mock_opener:
+            mock_opener.open.return_value = _make_response(feed_xml)
+            items = fetch_top_news({"AI/Tech": ["https://feed.example.com/rss"]})
+
+        titles = [item["title"] for item in items]
+        self.assertFalse(any("Old article" in t for t in titles))
+        self.assertTrue(any("Recent article" in t for t in titles))
+
+
 if __name__ == "__main__":
     unittest.main()

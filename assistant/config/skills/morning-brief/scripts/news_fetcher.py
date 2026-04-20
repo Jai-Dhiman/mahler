@@ -4,7 +4,7 @@ import ssl
 import sys
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 
 def _build_opener() -> urllib.request.OpenerDirector:
@@ -56,6 +56,7 @@ def _fetch_feed(url: str) -> list:
     with _OPENER.open(req, timeout=10) as resp:
         content = resp.read()
     root = ET.fromstring(content)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
     items = []
     for item in root.iter("item"):
         title_el = item.find("title")
@@ -67,6 +68,8 @@ def _fetch_feed(url: str) -> list:
         url_val = (link_el.text or "").strip()
         pubdate_str = (pubdate_el.text or "").strip() if pubdate_el is not None else ""
         pubdate = _parse_pubdate(pubdate_str) or datetime.min.replace(tzinfo=timezone.utc)
+        if pubdate < cutoff:
+            continue
         if not title or not url_val:
             continue
         items.append({"title": title, "url": url_val, "pubdate": pubdate})
