@@ -197,7 +197,7 @@ Phases are organized by execution wave — what can run in parallel vs. what is 
 
 **Phase E10: Life Tracking.** Low-friction personal tracking via Discord — health/fitness logs, reading tracker (compounds with notion-wiki), personal goals and habit patterns. Weekly reflection cron surfaces trends. Also adds curated news signal to morning brief: a configurable watchlist of domains (markets, AI, trading research) with a brief "things worth 10 minutes" section.
 - `life-log` skill: Discord commands for health, reading, goal entries → D1 `life_log` table
-- `morning-brief+` extension: adds curated news section (configurable source list)
+- `morning-brief+` extension: **shipped** — `news_fetcher.py` fetches RSS feeds from 5 categories (AI/ML, markets, trading research, macro, startups), deduplicates via Jaccard similarity, filters to last 24h, and renders a "What's Worth Reading" field in the Discord embed with markdown links and multi-source suffix. Sources configured in `news_sources.json`.
 - Weekly life-tracking review cron → feeds Honcho + reflection journal
 - No dependencies; fully independent
 
