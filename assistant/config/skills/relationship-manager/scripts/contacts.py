@@ -5,6 +5,7 @@ from datetime import date
 
 from d1_client import D1Client
 from notion_client import NotionClient
+import gcal_client
 
 
 def _supplement_env_from_hermes() -> None:
@@ -94,6 +95,40 @@ def _cmd_delete(args: argparse.Namespace) -> None:
     print(f"Deleted: {args.name}")
 
 
+def _cmd_sync_calendar(args: argparse.Namespace) -> None:
+    from datetime import datetime, timezone, timedelta
+    db = _d1_client()
+    access_token = gcal_client.refresh_access_token(
+        client_id=os.environ["GMAIL_CLIENT_ID"],
+        client_secret=os.environ["GMAIL_CLIENT_SECRET"],
+        refresh_token=os.environ["GMAIL_REFRESH_TOKEN"],
+    )
+    now = datetime.now(timezone.utc)
+    time_min = (now - timedelta(days=args.days)).isoformat().replace("+00:00", "Z")
+    time_max = now.isoformat().replace("+00:00", "Z")
+    events = gcal_client.list_events(access_token, time_min, time_max, max_results=250)
+    all_contacts = db.list_contacts()
+    email_to_contact = {c["email"].lower(): c for c in all_contacts}
+    contact_max_date: dict[str, str] = {}
+    for event in events:
+        event_date = event["start"][:10]
+        for attendee_email in event.get("attendees", []):
+            contact = email_to_contact.get(attendee_email.lower())
+            if contact:
+                name = contact["name"]
+                if name not in contact_max_date or event_date > contact_max_date[name]:
+                    contact_max_date[name] = event_date
+    for name, max_date in contact_max_date.items():
+        db.touch_last_contact(name, max_date)
+    count = len(contact_max_date)
+    noun = "contact" if count == 1 else "contacts"
+    if contact_max_date:
+        names = ", ".join(contact_max_date.keys())
+        print(f"Synced calendar: updated last_contact for {count} {noun} ({names})")
+    else:
+        print(f"Synced calendar: 0 contacts matched")
+
+
 def main(argv=None) -> None:
     _supplement_env_from_hermes()
     parser = argparse.ArgumentParser(prog="contacts")
@@ -125,6 +160,7 @@ def main(argv=None) -> None:
         "talked-to": _cmd_talked_to,
         "update": _cmd_update,
         "delete": _cmd_delete,
+        "sync-calendar": _cmd_sync_calendar,
     }
     fn = dispatch.get(args.command)
     if fn is None:

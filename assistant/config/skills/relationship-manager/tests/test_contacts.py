@@ -186,3 +186,63 @@ def test_delete_command_removes_contact():
                 contacts.main(["delete", "--name", "Alice Chen"])
             mock_d1.delete_contact.assert_called_once_with("Alice Chen")
             assert "Deleted: Alice Chen" in out.getvalue()
+
+
+def test_sync_calendar_updates_matching_contacts():
+    events = [
+        {
+            "summary": "Sequoia Partner Meeting",
+            "start": "2026-04-18T15:00:00Z",
+            "end": "2026-04-18T16:00:00Z",
+            "attendees": ["alice@example.com", "other@external.com"],
+        }
+    ]
+    contact_rows = [
+        {"id": 1, "name": "Alice Chen", "email": "alice@example.com",
+         "type": "professional", "last_contact": None, "context": "", "created_at": "2026-04-01"},
+        {"id": 2, "name": "Bob Smith", "email": "bob@example.com",
+         "type": "personal", "last_contact": None, "context": "", "created_at": "2026-04-01"},
+    ]
+    with patch.dict(os.environ, _ENV):
+        with patch("contacts.D1Client") as MockD1, patch("contacts.gcal_client") as mock_gcal:
+            mock_d1 = MagicMock()
+            mock_d1.list_contacts.return_value = contact_rows
+            MockD1.return_value = mock_d1
+            mock_gcal.refresh_access_token.return_value = "access_tok"
+            mock_gcal.list_events.return_value = events
+            out = io.StringIO()
+            with patch("sys.stdout", out):
+                import contacts
+                contacts.main(["sync-calendar", "--days", "1"])
+            mock_d1.touch_last_contact.assert_called_once_with("Alice Chen", "2026-04-18")
+            result = out.getvalue()
+            assert "Alice Chen" in result
+            assert "1 contact" in result
+
+
+def test_sync_calendar_prints_no_matches_when_none():
+    events = [
+        {
+            "summary": "Internal sync",
+            "start": "2026-04-18T10:00:00Z",
+            "end": "2026-04-18T11:00:00Z",
+            "attendees": ["stranger@nowhere.com"],
+        }
+    ]
+    contact_rows = [
+        {"id": 1, "name": "Alice Chen", "email": "alice@example.com",
+         "type": "professional", "last_contact": None, "context": "", "created_at": "2026-04-01"},
+    ]
+    with patch.dict(os.environ, _ENV):
+        with patch("contacts.D1Client") as MockD1, patch("contacts.gcal_client") as mock_gcal:
+            mock_d1 = MagicMock()
+            mock_d1.list_contacts.return_value = contact_rows
+            MockD1.return_value = mock_d1
+            mock_gcal.refresh_access_token.return_value = "access_tok"
+            mock_gcal.list_events.return_value = events
+            out = io.StringIO()
+            with patch("sys.stdout", out):
+                import contacts
+                contacts.main(["sync-calendar", "--days", "1"])
+            mock_d1.touch_last_contact.assert_not_called()
+            assert "0 contacts" in out.getvalue()
