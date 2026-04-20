@@ -162,6 +162,14 @@ if 'relationship-manager' not in existing_skills:
     ))
     added.append('relationship-manager (08:00 UTC / midnight Pacific)')
 
+if 'reflection-journal' not in existing_skills:
+    jobs.append(make_job(
+        ['reflection-journal'],
+        "Run the weekly reflection journal: post the three reflection questions to Discord and wait for the user\'s reply. Once the user replies, record the response with --record.",
+        '0 2 * * 0',
+    ))
+    added.append('reflection-journal (Sundays 02:00 UTC)')
+
 with open(jobs_file, 'w') as f:
     json.dump({'jobs': jobs, 'updated_at': datetime.now(timezone.utc).isoformat()}, f, indent=2)
 
