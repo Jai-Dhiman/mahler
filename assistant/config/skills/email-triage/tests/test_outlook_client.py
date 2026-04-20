@@ -175,5 +175,67 @@ class TestFetchUnreadEmails(unittest.TestCase):
         self.assertEqual(results[0]["message_id"], "outlook:graph-abc-123")
 
 
+class TestFetchUnreadEmailsConversationId(unittest.TestCase):
+    @patch("outlook_client._OPENER")
+    def test_captures_conversation_id_from_graph_response(self, mock_opener):
+        msg = {
+            "id": "graph-id-1",
+            "internetMessageId": "<abc@mail.example.com>",
+            "subject": "Hello",
+            "from": {"emailAddress": {"name": "Alice", "address": "alice@example.com"}},
+            "receivedDateTime": "2026-04-19T09:00:00Z",
+            "body": {"contentType": "text", "content": "Hi"},
+            "internetMessageHeaders": [],
+            "conversationId": "conv-abc-123",
+        }
+        token_resp = _make_response({"access_token": "tok"})
+        inbox_resp = _make_response({"value": [msg]})
+        junk_resp = _make_response({"value": []})
+        mark_resp = _make_response({}, status=200)
+        mock_opener.open.side_effect = [token_resp, inbox_resp, junk_resp, mark_resp]
+
+        emails, _ = fetch_unread_emails("cid", "csec", "rtok")
+
+        self.assertEqual(emails[0]["conversation_id"], "conv-abc-123")
+
+
+class TestFetchSentReplies(unittest.TestCase):
+    @patch("outlook_client._OPENER")
+    def test_returns_conversation_id_to_sent_datetime_map(self, mock_opener):
+        resp_body = {
+            "value": [
+                {"conversationId": "conv-abc", "sentDateTime": "2026-04-18T10:00:00Z"},
+            ]
+        }
+        mock_opener.open.return_value = _make_response(resp_body)
+
+        from outlook_client import fetch_sent_replies
+        result = fetch_sent_replies(["conv-abc", "conv-xyz"], "fake-token", since_days=3)
+
+        self.assertEqual(result, {"conv-abc": "2026-04-18T10:00:00Z"})
+
+    @patch("outlook_client._OPENER")
+    def test_returns_empty_dict_when_no_replies_found(self, mock_opener):
+        mock_opener.open.return_value = _make_response({"value": []})
+
+        from outlook_client import fetch_sent_replies
+        result = fetch_sent_replies(["conv-abc"], "fake-token", since_days=3)
+
+        self.assertEqual(result, {})
+
+    def test_returns_empty_dict_for_empty_conversation_ids(self):
+        from outlook_client import fetch_sent_replies
+        result = fetch_sent_replies([], "fake-token", since_days=3)
+        self.assertEqual(result, {})
+
+    @patch("outlook_client._OPENER")
+    def test_raises_runtime_error_on_graph_api_failure(self, mock_opener):
+        mock_opener.open.side_effect = _make_http_error(403, b'{"error":"Forbidden"}')
+
+        from outlook_client import fetch_sent_replies
+        with self.assertRaises(RuntimeError):
+            fetch_sent_replies(["conv-abc"], "fake-token", since_days=3)
+
+
 if __name__ == "__main__":
     unittest.main()
