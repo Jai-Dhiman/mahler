@@ -91,7 +91,7 @@ export function buildDiscordMessage(
     .filter(a => a.email !== null)
     .map(a => (a.name !== null ? `${a.name} <${a.email}>` : a.email!))
     .join(", ");
-  return [
+  const full = [
     `<@${botUserId}> [FATHOM_MEETING]`,
     `Meeting: ${title}`,
     `Attendees: ${attendeeStr || "none"}`,
@@ -99,6 +99,9 @@ export function buildDiscordMessage(
     "Summary:",
     summary,
   ].join("\n");
+  if (full.length <= 2000) return full;
+  const SUFFIX = "\n…(truncated)";
+  return full.slice(0, 2000 - SUFFIX.length) + SUFFIX;
 }
 
 export default {
@@ -115,7 +118,12 @@ export default {
     );
     if (!valid) return new Response("Unauthorized", { status: 401 });
 
-    const meeting: Meeting = JSON.parse(rawBody);
+    let meeting: Meeting;
+    try {
+      meeting = JSON.parse(rawBody) as Meeting;
+    } catch {
+      return new Response("Bad Request", { status: 400 });
+    }
     const isDup = await checkAndSetDedup(env.KV, meeting.recording_id);
     if (isDup) return new Response("OK", { status: 200 });
 

@@ -169,6 +169,13 @@ describe("buildDiscordMessage", () => {
     expect(msg).toContain("unknown@corp.com");
     expect(msg).not.toContain("null");
   });
+
+  it("truncates to 2000 chars when message exceeds Discord limit", () => {
+    const longSummary = "x".repeat(2000);
+    const msg = buildDiscordMessage("Title", [], longSummary, "bot123");
+    expect(msg.length).toBeLessThanOrEqual(2000);
+    expect(msg).toContain("…(truncated)");
+  });
 });
 
 import { SELF, env } from "cloudflare:test";
