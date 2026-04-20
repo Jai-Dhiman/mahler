@@ -82,11 +82,13 @@ You are analyzing email triage patterns for a personal chief-of-staff assistant.
 Current priority map:
 {priority_map}
 
-Detected patterns (senders appearing frequently at the same classification tier):
+Detected patterns (senders with frequency and reply rate over the past week):
 {patterns}
 
 For each pattern, propose a reclassification only if the current tier appears wrong.
 A sender appearing many times as NEEDS_ACTION with no escalation signal likely belongs at FYI.
+A sender with >50% reply rate is confirmed important — do not downgrade.
+A sender with 0 replies over 5 or more occurrences is a strong candidate to downgrade.
 
 Return a JSON array (no other text). Each element must have exactly these fields:
 {{"sender": "<email address>", "current_tier": "<tier>", "proposed_tier": "<tier>", "evidence": "<one sentence>"}}
@@ -108,7 +110,7 @@ def _run(since_days: int, env: dict) -> None:
         database_id=env["CF_D1_DATABASE_ID"],
         api_token=env["CF_API_TOKEN"],
     )
-    patterns = d1.get_triage_patterns(since_days=since_days, min_count=3)
+    patterns = d1.get_triage_patterns_with_reply_rate(since_days=since_days, min_count=3)
     if not patterns:
         print("No proposals this week.")
         return
@@ -117,7 +119,17 @@ def _run(since_days: int, env: dict) -> None:
     model = os.environ.get("OPENROUTER_MODEL", _DEFAULT_MODEL)
 
     patterns_text = "\n".join(
-        f"- {p['from_addr']}: {p['occurrence_count']} times as {p['classification']}"
+        "- {addr}: {count} times as {cls}, {replies} replies ({rate}%)".format(
+            addr=p["from_addr"],
+            count=p["occurrence_count"],
+            cls=p["classification"],
+            replies=p.get("reply_count", 0),
+            rate=(
+                p.get("reply_count", 0) * 100 // p["occurrence_count"]
+                if p["occurrence_count"] > 0
+                else 0
+            ),
+        )
         for p in patterns
     )
     prompt = _PROPOSAL_PROMPT.format(priority_map=priority_map, patterns=patterns_text)
