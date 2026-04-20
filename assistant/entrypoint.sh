@@ -170,6 +170,22 @@ if 'reflection-journal' not in existing_skills:
     ))
     added.append('reflection-journal (Sundays 02:00 UTC)')
 
+if 'project-synthesis' not in existing_skills:
+    jobs.append(make_job(
+        ['project-synthesis'],
+        'Run the weekly project synthesis: read the past 7 days of project_log wins and blockers from D1, synthesize one cross-project paragraph covering attention, trajectory, and friction, and write it to Honcho memory.',
+        '0 18 * * 0',
+    ))
+    added.append('project-synthesis (Sundays 18:00 UTC)')
+
+if 'memory-kaizen' not in existing_skills:
+    jobs.append(make_job(
+        ['memory-kaizen'],
+        'Run the weekly memory kaizen: read the last 30 days of Honcho conclusions, identify 2-4 high-signal patterns that appear across multiple entries, and write each as a new conclusion.',
+        '0 19 * * 0',
+    ))
+    added.append('memory-kaizen (Sundays 19:00 UTC)')
+
 with open(jobs_file, 'w') as f:
     json.dump({'jobs': jobs, 'updated_at': datetime.now(timezone.utc).isoformat()}, f, indent=2)
 
