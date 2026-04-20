@@ -313,5 +313,74 @@ class TestLoadEnv(unittest.TestCase):
             self.assertEqual(result["DISCORD_TRIAGE_WEBHOOK"], "https://discord.com/api/webhooks/test")
 
 
+class TestMainNewsWiring(unittest.TestCase):
+    def _run_dry_run(self, env, patches):
+        """Run main() with --dry-run and return the parsed JSON payload."""
+        import json
+        from io import StringIO
+
+        old_argv = sys.argv
+        old_stdout = sys.stdout
+        sys.argv = ["brief.py", "--period", "morning", "--dry-run"]
+        sys.stdout = StringIO()
+        try:
+            ctx = unittest.mock.patch.dict("os.environ", env, clear=True)
+            ctx.__enter__()
+            active = [p.__enter__() for p in patches]
+            from brief import main
+            main()
+            output = sys.stdout.getvalue()
+            for p in reversed(patches):
+                p.__exit__(None, None, None)
+            ctx.__exit__(None, None, None)
+        finally:
+            sys.argv = old_argv
+            sys.stdout = old_stdout
+        return json.loads(output)
+
+    def test_dry_run_output_includes_news_field(self):
+        fixture_items = [
+            {
+                "title": "AI breakthrough in language model research",
+                "url": "https://example.com/ai",
+                "category": "AI/Tech",
+                "source_count": 1,
+            }
+        ]
+        env = {
+            "CF_ACCOUNT_ID": "acc123",
+            "CF_D1_DATABASE_ID": "db-abc",
+            "CF_API_TOKEN": "tok_abc",
+        }
+        patches = [
+            unittest.mock.patch("brief._load_news_sources", return_value={"AI/Tech": []}),
+            unittest.mock.patch("brief.fetch_top_news", return_value=fixture_items),
+            unittest.mock.patch("d1_client.D1Client.query", return_value=[]),
+        ]
+        payload = self._run_dry_run(env, patches)
+        fields = payload["embeds"][0]["fields"]
+        news_fields = [f for f in fields if f["name"] == "What's Worth Reading"]
+        self.assertEqual(len(news_fields), 1)
+        self.assertIn("AI breakthrough", news_fields[0]["value"])
+
+    def test_news_fetch_failure_does_not_prevent_email_section(self):
+        env = {
+            "CF_ACCOUNT_ID": "acc123",
+            "CF_D1_DATABASE_ID": "db-abc",
+            "CF_API_TOKEN": "tok_abc",
+        }
+        patches = [
+            unittest.mock.patch("brief._load_news_sources", side_effect=RuntimeError("news_sources.json not found")),
+            unittest.mock.patch("d1_client.D1Client.query", return_value=[]),
+        ]
+        payload = self._run_dry_run(env, patches)
+        # Email embed must still be present even though news fetch failed
+        self.assertIn("embeds", payload)
+        self.assertIn("Morning Brief", payload["embeds"][0]["title"])
+        fields = payload["embeds"][0]["fields"]
+        news_fields = [f for f in fields if f["name"] == "What's Worth Reading"]
+        self.assertEqual(len(news_fields), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

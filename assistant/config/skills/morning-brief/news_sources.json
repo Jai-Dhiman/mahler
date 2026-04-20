@@ -1,0 +1,23 @@
+{
+  "AI/Tech": [
+    "https://feeds.arstechnica.com/arstechnica/technology-lab",
+    "https://techcrunch.com/feed/",
+    "https://www.theverge.com/rss/index.xml"
+  ],
+  "ML Research": [
+    "https://arxiv.org/rss/cs.LG",
+    "https://arxiv.org/rss/cs.AI"
+  ],
+  "Macro/Markets": [
+    "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
+    "https://feeds.marketwatch.com/marketwatch/topstories/"
+  ],
+  "Startups/VC": [
+    "https://techcrunch.com/category/startups/feed/",
+    "https://venturebeat.com/feed/"
+  ],
+  "Geopolitics": [
+    "https://feeds.bbci.co.uk/news/world/rss.xml",
+    "https://www.theguardian.com/world/rss"
+  ]
+}

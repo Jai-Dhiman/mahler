@@ -12,6 +12,7 @@ _SCRIPTS_DIR = Path(__file__).parent
 _EMAIL_TRIAGE_SCRIPTS = _SCRIPTS_DIR.parent.parent / "email-triage" / "scripts"
 sys.path.insert(0, str(_EMAIL_TRIAGE_SCRIPTS))
 from d1_client import D1Client
+from news_fetcher import fetch_top_news
 
 
 def _supplement_env_from_hermes() -> None:
@@ -49,6 +50,14 @@ def _build_https_opener() -> urllib.request.OpenerDirector:
 
 
 _OPENER = _build_https_opener()
+
+
+def _load_news_sources() -> dict:
+    path = Path(__file__).parent.parent / "news_sources.json"
+    if not path.exists():
+        raise RuntimeError(f"news_sources.json not found at {path}")
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 def load_env(dry_run: bool) -> dict:
@@ -230,7 +239,16 @@ def main() -> None:
     d1 = D1Client(env["CF_ACCOUNT_ID"], env["CF_D1_DATABASE_ID"], env["CF_API_TOKEN"])
     cutoff = compute_cutoff(args.since_hours)
     rows = query_rows(d1, cutoff)
-    payload = build_embed(rows, args.period, args.since_hours)
+
+    news_items = []
+    if args.period == "morning":
+        try:
+            sources = _load_news_sources()
+            news_items = fetch_top_news(sources)
+        except Exception as exc:
+            print(f"brief: news fetch failed, omitting section: {exc}", file=sys.stderr)
+
+    payload = build_embed(rows, args.period, args.since_hours, news_items=news_items)
 
     if args.dry_run:
         print(json.dumps(payload, indent=2))
