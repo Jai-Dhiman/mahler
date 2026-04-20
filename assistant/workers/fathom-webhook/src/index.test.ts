@@ -170,3 +170,108 @@ describe("buildDiscordMessage", () => {
     expect(msg).not.toContain("null");
   });
 });
+
+import { SELF, env } from "cloudflare:test";
+
+async function signedRequest(body: string, recordingId: number): Promise<Request> {
+  const id = `msg_integration_${recordingId}`;
+  const ts = String(Math.floor(Date.now() / 1000));
+  const rawSecret = atob(TEST_SECRET.replace(/^whsec_/, ""));
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(rawSecret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signed = `${id}.${ts}.${body}`;
+  const sigBytes = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(signed));
+  const sig = "v1," + btoa(String.fromCharCode(...new Uint8Array(sigBytes)));
+  return new Request("https://fathom-webhook.workers.dev/", {
+    method: "POST",
+    headers: {
+      "webhook-id": id,
+      "webhook-timestamp": ts,
+      "webhook-signature": sig,
+      "content-type": "application/json",
+    },
+    body,
+  });
+}
+
+const FIXTURE_MEETING = {
+  title: "1:1 with Alice Chen",
+  recording_id: 77701,
+  default_summary: { markdown_formatted: "## Meeting Notes\n- Discussed Q3 roadmap" },
+  calendar_invitees: [
+    { name: "Alice Chen", email: "alice@example.com", is_external: true },
+  ],
+};
+
+describe("fetch handler", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns 401 for an invalid signature", async () => {
+    const req = new Request("https://fathom-webhook.workers.dev/", {
+      method: "POST",
+      headers: {
+        "webhook-id": "msg_bad",
+        "webhook-timestamp": String(Math.floor(Date.now() / 1000)),
+        "webhook-signature": "v1,invalidsignaturevalue",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(FIXTURE_MEETING),
+    });
+    const resp = await SELF.fetch(req);
+    expect(resp.status).toBe(401);
+  });
+
+  it("returns 200 silently for a duplicate recording_id without calling Discord", async () => {
+    const body = JSON.stringify({ ...FIXTURE_MEETING, recording_id: 77702 });
+    const req1 = await signedRequest(body, 77702);
+    const req2 = await signedRequest(body, 77702);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
+
+    const resp1 = await SELF.fetch(req1);
+    expect(resp1.status).toBe(200);
+    const callsAfterFirst = (fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    const resp2 = await SELF.fetch(req2);
+    expect(resp2.status).toBe(200);
+    const callsAfterSecond = (fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    expect(callsAfterSecond).toBe(callsAfterFirst);
+  });
+
+  it("returns 200 and posts to Discord for a valid new webhook", async () => {
+    const discordBodies: string[] = [];
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (typeof url === "string" && url.includes("discord-test.invalid")) {
+        discordBodies.push(typeof init?.body === "string" ? init.body : await new Response(init?.body).text());
+        return Promise.resolve({ ok: true });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ markdown_formatted: "fallback" }) });
+    }));
+
+    const body = JSON.stringify({ ...FIXTURE_MEETING, recording_id: 77703 });
+    const req = await signedRequest(body, 77703);
+    const resp = await SELF.fetch(req);
+
+    expect(resp.status).toBe(200);
+    expect(discordBodies.length).toBe(1);
+    const posted = JSON.parse(discordBodies[0]) as { content: string };
+    expect(posted.content).toContain("[FATHOM_MEETING]");
+    expect(posted.content).toContain("1:1 with Alice Chen");
+    expect(posted.content).toContain("Alice Chen <alice@example.com>");
+  });
+
+  it("returns 500 when Discord webhook POST fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 503 }));
+    const body = JSON.stringify({ ...FIXTURE_MEETING, recording_id: 77704 });
+    const req = await signedRequest(body, 77704);
+    const resp = await SELF.fetch(req);
+    expect(resp.status).toBe(500);
+  });
+});

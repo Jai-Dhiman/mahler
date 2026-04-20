@@ -102,7 +102,40 @@ export function buildDiscordMessage(
 }
 
 export default {
-  async fetch(_req: Request, _env: Env): Promise<Response> {
-    return new Response("Not implemented", { status: 501 });
+  async fetch(req: Request, env: Env): Promise<Response> {
+    if (req.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
+
+    const rawBody = await req.text();
+    const webhookId = req.headers.get("webhook-id") ?? "";
+    const webhookTimestamp = req.headers.get("webhook-timestamp") ?? "";
+    const webhookSignature = req.headers.get("webhook-signature") ?? "";
+
+    const valid = await verifySignature(
+      webhookId, webhookTimestamp, rawBody, webhookSignature, env.FATHOM_WEBHOOK_SECRET
+    );
+    if (!valid) return new Response("Unauthorized", { status: 401 });
+
+    const meeting: Meeting = JSON.parse(rawBody);
+    const isDup = await checkAndSetDedup(env.KV, meeting.recording_id);
+    if (isDup) return new Response("OK", { status: 200 });
+
+    const summary = await extractSummary(meeting, env.FATHOM_API_KEY);
+    const message = buildDiscordMessage(
+      meeting.title,
+      meeting.calendar_invitees ?? [],
+      summary,
+      env.DISCORD_BOT_USER_ID
+    );
+
+    const discordResp = await fetch(env.DISCORD_TRIAGE_WEBHOOK, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: message }),
+    });
+    if (!discordResp.ok) {
+      return new Response(`Discord webhook failed with ${discordResp.status}`, { status: 500 });
+    }
+
+    return new Response("OK", { status: 200 });
   },
 };
