@@ -70,11 +70,13 @@ def list_conclusions(since_days: int = 30) -> list:
         all_items = list(conclusions.list())
     except Exception as exc:
         raise RuntimeError(f"Honcho list_conclusions failed: {exc}") from exc
-    return [
-        c for c in all_items
-        if getattr(c, "created_at", None) is None
-        or _parse_dt(c.created_at) >= cutoff
-    ]
+    result = []
+    for c in all_items:
+        if not hasattr(c, "created_at") or c.created_at is None:
+            raise RuntimeError(f"Honcho conclusion missing created_at — unexpected SDK response: {c!r}")
+        if _parse_dt(c.created_at) >= cutoff:
+            result.append(c)
+    return result
 
 
 def query_conclusions(query: str, top_k: int = 10) -> list:

@@ -76,6 +76,20 @@ class TestListConclusions(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0].content, "recent fact")
 
+    def test_list_conclusions_raises_when_conclusion_missing_created_at(self):
+        item = MagicMock()
+        item.created_at = None
+        _, mock_conclusions = _mock_sdk()
+        mock_conclusions.list.return_value = [item]
+        with (
+            patch("honcho_client._load_config", return_value=_CFG),
+            patch("honcho_client._build_conclusions_client", return_value=mock_conclusions),
+        ):
+            import honcho_client
+            with self.assertRaises(RuntimeError) as ctx:
+                honcho_client.list_conclusions()
+        self.assertIn("missing created_at", str(ctx.exception))
+
     def test_list_conclusions_raises_runtime_error_on_sdk_exception(self):
         _, mock_conclusions = _mock_sdk()
         mock_conclusions.list.side_effect = Exception("API down")
