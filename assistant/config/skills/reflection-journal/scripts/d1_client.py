@@ -88,3 +88,17 @@ class D1Client:
             "INSERT INTO reflection_log (week_of, raw_text) VALUES (?, ?)",
             [week_of, raw_text],
         )
+
+    def get_recent_reflections(self, since_weeks: int = 4) -> list[dict]:
+        """Return reflection_log rows from the last since_weeks weeks, newest first."""
+        if not isinstance(since_weeks, int) or since_weeks <= 0:
+            raise ValueError(
+                f"since_weeks must be a positive integer, got {since_weeks!r}"
+            )
+        since_days = since_weeks * 7
+        return self.query(
+            "SELECT week_of, raw_text, created_at FROM reflection_log "
+            "WHERE created_at >= datetime('now', ? || ' days') "
+            "ORDER BY created_at DESC",
+            [f"-{since_days}"],
+        )

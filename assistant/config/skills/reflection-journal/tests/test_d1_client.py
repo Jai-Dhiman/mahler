@@ -70,5 +70,36 @@ class TestInsertReflection(unittest.TestCase):
         self.assertIn("D1 query failed", str(ctx.exception))
 
 
+class TestGetRecentReflections(unittest.TestCase):
+
+    def test_returns_reflection_rows_within_window(self):
+        rows = [
+            {
+                "week_of": "2026-W16",
+                "raw_text": "Good week overall. Meetings were draining.",
+                "created_at": "2026-04-20T02:00:00",
+            }
+        ]
+        with patch.object(_OPENER, "open", return_value=_make_response(_success_payload(rows))):
+            client = _make_client()
+            result = client.get_recent_reflections(since_weeks=4)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["week_of"], "2026-W16")
+        self.assertEqual(result[0]["raw_text"], "Good week overall. Meetings were draining.")
+
+    def test_returns_empty_list_when_no_reflections(self):
+        with patch.object(_OPENER, "open", return_value=_make_response(_success_payload([]))):
+            client = _make_client()
+            result = client.get_recent_reflections(since_weeks=4)
+
+        self.assertEqual(result, [])
+
+    def test_raises_on_invalid_since_weeks(self):
+        client = _make_client()
+        with self.assertRaises(ValueError):
+            client.get_recent_reflections(since_weeks=0)
+
+
 if __name__ == "__main__":
     unittest.main()
