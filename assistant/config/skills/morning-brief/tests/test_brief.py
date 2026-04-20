@@ -190,6 +190,24 @@ class TestBuildEmbed(unittest.TestCase):
         news_fields = [f for f in fields if f["name"] == "What's Worth Reading"]
         self.assertEqual(len(news_fields), 0)
 
+    def test_news_items_appends_worth_reading_field(self):
+        news_items = [
+            {
+                "title": "OpenAI releases GPT-5 model",
+                "url": "https://example.com/gpt5",
+                "category": "AI/Tech",
+                "source_count": 1,
+            }
+        ]
+        payload = build_embed([], "morning", 12, news_items=news_items)
+        fields = payload["embeds"][0]["fields"]
+        news_fields = [f for f in fields if f["name"] == "What's Worth Reading"]
+        self.assertEqual(len(news_fields), 1)
+        self.assertIn(
+            "[OpenAI releases GPT-5 model](https://example.com/gpt5)",
+            news_fields[0]["value"],
+        )
+
 
 class TestPostBrief(unittest.TestCase):
     def test_raises_on_non_https_url(self):

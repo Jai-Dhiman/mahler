@@ -179,6 +179,16 @@ def build_embed(rows: list[dict], period: str, since_hours: int, news_items: lis
         "inline": False,
     })
 
+    if news_items:
+        lines = []
+        for item in news_items:
+            lines.append(f"[{item['title']}]({item['url']})")
+        fields.append({
+            "name": "What's Worth Reading",
+            "value": _truncate_field(lines),
+            "inline": False,
+        })
+
     embed["fields"] = fields
     return {"embeds": [embed]}
 
