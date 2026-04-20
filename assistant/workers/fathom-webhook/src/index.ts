@@ -82,12 +82,23 @@ export async function extractSummary(
 }
 
 export function buildDiscordMessage(
-  _title: string,
-  _attendees: Invitee[],
-  _summary: string,
-  _botUserId: string
+  title: string,
+  attendees: Invitee[],
+  summary: string,
+  botUserId: string
 ): string {
-  throw new Error("Not implemented");
+  const attendeeStr = attendees
+    .filter(a => a.email !== null)
+    .map(a => (a.name !== null ? `${a.name} <${a.email}>` : a.email!))
+    .join(", ");
+  return [
+    `<@${botUserId}> [FATHOM_MEETING]`,
+    `Meeting: ${title}`,
+    `Attendees: ${attendeeStr || "none"}`,
+    "",
+    "Summary:",
+    summary,
+  ].join("\n");
 }
 
 export default {

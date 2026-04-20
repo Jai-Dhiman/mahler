@@ -127,3 +127,46 @@ describe("checkAndSetDedup", () => {
     expect(dup2).toBe(false);
   });
 });
+
+import { buildDiscordMessage } from "./index";
+
+describe("buildDiscordMessage", () => {
+  it("contains @mention, [FATHOM_MEETING] tag, title, attendee, and summary", () => {
+    const msg = buildDiscordMessage(
+      "1:1 with Alice Chen",
+      [{ name: "Alice Chen", email: "alice@example.com", is_external: true }],
+      "## Summary\n- Discussed roadmap",
+      "123456789012345678"
+    );
+    expect(msg).toContain("<@123456789012345678>");
+    expect(msg).toContain("[FATHOM_MEETING]");
+    expect(msg).toContain("1:1 with Alice Chen");
+    expect(msg).toContain("Alice Chen <alice@example.com>");
+    expect(msg).toContain("## Summary\n- Discussed roadmap");
+  });
+
+  it("omits attendees with no email", () => {
+    const msg = buildDiscordMessage(
+      "Team Sync",
+      [
+        { name: "Alice Chen", email: "alice@example.com", is_external: true },
+        { name: null, email: null, is_external: false },
+      ],
+      "Short summary.",
+      "999"
+    );
+    expect(msg).toContain("Alice Chen <alice@example.com>");
+    expect(msg).not.toContain("null");
+  });
+
+  it("renders attendee email only when name is null", () => {
+    const msg = buildDiscordMessage(
+      "Intro Call",
+      [{ name: null, email: "unknown@corp.com", is_external: true }],
+      "Notes here.",
+      "111"
+    );
+    expect(msg).toContain("unknown@corp.com");
+    expect(msg).not.toContain("null");
+  });
+});
