@@ -186,7 +186,7 @@ class TestReflectRunReplyRateInPrompt(unittest.TestCase):
         ]
         captured_prompt = {}
 
-        def capture_llm(prompt, api_key, model):
+        def capture_llm(prompt, api_key, model, **kwargs):
             captured_prompt["value"] = prompt
             return "[]"
 

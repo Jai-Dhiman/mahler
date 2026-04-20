@@ -205,6 +205,29 @@ class TestBuildEmbed(unittest.TestCase):
         news_fields = [f for f in fields if f["name"] == "What's Worth Reading"]
         self.assertEqual(len(news_fields), 0)
 
+    def test_news_error_shows_fetch_failed_field(self):
+        payload = build_embed([], "morning", 12, news_items=[], news_error="Connection timeout")
+        fields = payload["embeds"][0]["fields"]
+        news_fields = [f for f in fields if f["name"] == "What's Worth Reading"]
+        self.assertEqual(len(news_fields), 1)
+        self.assertIn("Fetch failed", news_fields[0]["value"])
+        self.assertIn("Connection timeout", news_fields[0]["value"])
+
+    def test_news_error_truncated_to_200_chars(self):
+        long_error = "x" * 300
+        payload = build_embed([], "morning", 12, news_items=[], news_error=long_error)
+        fields = payload["embeds"][0]["fields"]
+        news_fields = [f for f in fields if f["name"] == "What's Worth Reading"]
+        self.assertLessEqual(len(news_fields[0]["value"]), 220)
+
+    def test_news_error_ignored_when_news_items_present(self):
+        items = [{"title": "Story", "url": "https://example.com", "category": "AI", "source_count": 1}]
+        payload = build_embed([], "morning", 12, news_items=items, news_error="some error")
+        fields = payload["embeds"][0]["fields"]
+        news_fields = [f for f in fields if f["name"] == "What's Worth Reading"]
+        self.assertEqual(len(news_fields), 1)
+        self.assertNotIn("Fetch failed", news_fields[0]["value"])
+
     def test_news_items_appends_worth_reading_field(self):
         news_items = [
             {
@@ -377,7 +400,9 @@ class TestMainNewsWiring(unittest.TestCase):
         self.assertIn("Morning Brief", payload["embeds"][0]["title"])
         fields = payload["embeds"][0]["fields"]
         news_fields = [f for f in fields if f["name"] == "What's Worth Reading"]
-        self.assertEqual(len(news_fields), 0)
+        # News section appears with error message so failure is visible in Discord
+        self.assertEqual(len(news_fields), 1)
+        self.assertIn("Fetch failed", news_fields[0]["value"])
 
 
 if __name__ == "__main__":

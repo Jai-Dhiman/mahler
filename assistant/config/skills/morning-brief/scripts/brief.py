@@ -132,7 +132,7 @@ def _truncate_field(lines: list[str], max_chars: int = 1024) -> str:
     return "".join(result).rstrip("\n")
 
 
-def build_embed(rows: list[dict], period: str, since_hours: int, news_items: list[dict] | None = None) -> dict:
+def build_embed(rows: list[dict], period: str, since_hours: int, news_items: list[dict] | None = None, news_error: str | None = None) -> dict:
     if period == "morning":
         color = 3447003
         title_prefix = "Morning Brief"
@@ -200,6 +200,12 @@ def build_embed(rows: list[dict], period: str, since_hours: int, news_items: lis
             "value": _truncate_field(lines),
             "inline": False,
         })
+    elif news_error:
+        fields.append({
+            "name": "What's Worth Reading",
+            "value": f"Fetch failed: {news_error[:200]}",
+            "inline": False,
+        })
 
     embed["fields"] = fields
     return {"embeds": [embed]}
@@ -240,16 +246,17 @@ def main() -> None:
     cutoff = compute_cutoff(args.since_hours)
     rows = query_rows(d1, cutoff)
 
-    news_items = []
+    news_items: list[dict] = []
+    news_error: str | None = None
     if args.period == "morning":
         try:
             sources = _load_news_sources()
             news_items = fetch_top_news(sources)
         except Exception as exc:
-            # broad catch intentional: news is non-critical; email section must always post
-            print(f"brief: news fetch failed, omitting section: {exc}", file=sys.stderr)
+            news_error = str(exc)
+            print(f"brief: news fetch failed: {exc}", file=sys.stderr)
 
-    payload = build_embed(rows, args.period, args.since_hours, news_items=news_items)
+    payload = build_embed(rows, args.period, args.since_hours, news_items=news_items, news_error=news_error)
 
     if args.dry_run:
         print(json.dumps(payload, indent=2))

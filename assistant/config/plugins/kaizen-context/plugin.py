@@ -44,8 +44,6 @@ def priority_map_context(
     **kwargs,
 ) -> dict | None:
     """Called before each LLM turn. Injects email priority map or returns None."""
-    if not is_first_turn:
-        return None
     try:
         content = _query_priority_map()
         if not content:
