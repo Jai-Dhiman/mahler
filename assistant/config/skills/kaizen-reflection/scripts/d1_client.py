@@ -75,6 +75,30 @@ class D1Client:
             [f"-{since_days}", min_count],
         )
 
+    def get_triage_patterns_with_reply_rate(
+        self, since_days: int = 7, min_count: int = 3
+    ) -> list[dict]:
+        """Return triage patterns with occurrence and reply counts.
+
+        Each row: from_addr, classification, occurrence_count, reply_count.
+        reply_count uses COUNT(replied_at) which counts non-NULL values only.
+        """
+        if not isinstance(since_days, int) or since_days <= 0:
+            raise ValueError(
+                f"since_days must be a positive integer, got {since_days!r}"
+            )
+        return self.query(
+            """SELECT from_addr, classification,
+                      COUNT(*) AS occurrence_count,
+                      COUNT(replied_at) AS reply_count
+               FROM email_triage_log
+               WHERE processed_at >= datetime('now', ? || ' days')
+               GROUP BY from_addr, classification
+               HAVING COUNT(*) >= ?
+               ORDER BY occurrence_count DESC""",
+            [f"-{since_days}", min_count],
+        )
+
     def get_priority_map(self) -> str:
         """Read the current priority map content from D1. Raises RuntimeError if no row exists."""
         rows = self.query(
