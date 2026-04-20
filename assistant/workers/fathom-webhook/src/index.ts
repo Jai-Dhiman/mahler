@@ -36,13 +36,21 @@ export async function verifySignature(
     new TextEncoder().encode(rawSecret),
     { name: "HMAC", hash: "SHA-256" },
     false,
-    ["sign"]
+    ["verify"]
   );
   const signed = `${webhookId}.${webhookTimestamp}.${rawBody}`;
-  const sigBytes = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(signed));
-  const expected = btoa(String.fromCharCode(...new Uint8Array(sigBytes)));
-
-  return signatureHeader.split(" ").some(sig => sig.replace(/^v1,/, "") === expected);
+  for (const sigStr of signatureHeader.split(" ")) {
+    const b64 = sigStr.replace(/^v1,/, "");
+    if (!b64) continue;
+    try {
+      const incomingBytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      const valid = await crypto.subtle.verify("HMAC", key, incomingBytes, new TextEncoder().encode(signed));
+      if (valid) return true;
+    } catch {
+      continue;
+    }
+  }
+  return false;
 }
 
 export async function checkAndSetDedup(_kv: KVNamespace, _recordingId: number): Promise<boolean> {

@@ -58,4 +58,12 @@ describe("verifySignature", () => {
     const result = await verifySignature(id, staleTs, body, sig, TEST_SECRET);
     expect(result).toBe(false);
   });
+
+  it("returns false when signature header has no v1, prefix", async () => {
+    const id = "msg_test123";
+    const ts = String(Math.floor(Date.now() / 1000));
+    const body = '{"title":"Test Meeting","recording_id":1}';
+    const result = await verifySignature(id, ts, body, "invalidsig", TEST_SECRET);
+    expect(result).toBe(false);
+  });
 });
