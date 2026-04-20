@@ -1,6 +1,8 @@
 import json
 import pytest
 from unittest.mock import patch, MagicMock
+import d1_client as _d1_module
+from d1_client import D1Client
 
 
 def _make_d1_response(rows=None, status=200):
@@ -17,7 +19,6 @@ def _make_d1_response(rows=None, status=200):
 def test_upsert_contact_sends_correct_sql():
     with patch("d1_client._OPENER") as mock_opener:
         mock_opener.open.return_value = _make_d1_response()
-        from d1_client import D1Client
         client = D1Client("acct1", "db1", "tok1")
         client.upsert_contact("Alice Chen", "alice@example.com", "professional", "Works at Sequoia")
         req = mock_opener.open.call_args[0][0]

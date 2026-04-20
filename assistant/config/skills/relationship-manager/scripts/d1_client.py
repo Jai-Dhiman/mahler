@@ -2,7 +2,6 @@ import json
 import re
 import ssl
 import urllib.request
-from typing import Optional
 
 _ID_RE = re.compile(r'^[a-zA-Z0-9_-]+$')
 _URL_TEMPLATE = "https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database/{database_id}/query"
@@ -34,7 +33,7 @@ class D1Client:
         self.api_token = api_token
         self._url = _URL_TEMPLATE.format(account_id=account_id, database_id=database_id)
 
-    def query(self, sql: str, params: Optional[list] = None) -> list[dict]:
+    def query(self, sql: str, params: list | None = None) -> list[dict]:
         body = json.dumps({"sql": sql, "params": params or []}).encode("utf-8")
         req = urllib.request.Request(
             self._url,
@@ -71,7 +70,7 @@ class D1Client:
             )
         """)
 
-    def upsert_contact(self, name: str, email: str, type: str, context: str) -> None:
+    def upsert_contact(self, name: str, email: str, contact_type: str, context: str) -> None:
         self.query(
             """
             INSERT INTO contacts (name, email, type, context, created_at)
@@ -81,5 +80,5 @@ class D1Client:
                 type = excluded.type,
                 context = excluded.context
             """,
-            [name, email, type, context],
+            [name, email, contact_type, context],
         )
