@@ -182,7 +182,10 @@ def build_embed(rows: list[dict], period: str, since_hours: int, news_items: lis
     if news_items:
         lines = []
         for item in news_items:
-            lines.append(f"[{item['title']}]({item['url']})")
+            line = f"[{item['title']}]({item['url']})"
+            if item.get("source_count", 1) > 1:
+                line += f" · {item['source_count']} sources"
+            lines.append(line)
         fields.append({
             "name": "What's Worth Reading",
             "value": _truncate_field(lines),

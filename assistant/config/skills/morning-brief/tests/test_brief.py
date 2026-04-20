@@ -184,6 +184,20 @@ class TestBuildEmbed(unittest.TestCase):
         self.assertIn("My Subject", value)
         self.assertIn("My summary", value)
 
+    def test_multi_source_item_shows_source_count_suffix(self):
+        news_items = [
+            {
+                "title": "Big market crash affects global economies",
+                "url": "https://example.com/crash",
+                "category": "Macro/Markets",
+                "source_count": 3,
+            }
+        ]
+        payload = build_embed([], "morning", 12, news_items=news_items)
+        fields = payload["embeds"][0]["fields"]
+        news_fields = [f for f in fields if f["name"] == "What's Worth Reading"]
+        self.assertIn("· 3 sources", news_fields[0]["value"])
+
     def test_no_news_field_when_news_items_is_none(self):
         payload = build_embed([], "morning", 12, news_items=None)
         fields = payload["embeds"][0].get("fields", [])
