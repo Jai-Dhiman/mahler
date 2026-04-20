@@ -1,5 +1,6 @@
 import json
 import ssl
+import urllib.error
 import urllib.request
 from typing import Optional
 
@@ -51,9 +52,14 @@ class NotionClient:
                 "Content-Type": "application/json",
             },
         )
-        with _OPENER.open(req) as resp:
-            status = resp.status
-            raw = resp.read()
+        try:
+            with _OPENER.open(req) as resp:
+                status = resp.status
+                raw = resp.read()
+        except urllib.error.URLError as exc:
+            raise RuntimeError(
+                f"Notion API error (connection failed): {exc.reason}"
+            ) from exc
         if status not in (200, 201):
             raise RuntimeError(f"Notion API error {status}: {raw.decode('utf-8', errors='replace')}")
         return json.loads(raw)
