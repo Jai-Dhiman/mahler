@@ -197,7 +197,7 @@ class TestBuildEmbed(unittest.TestCase):
         payload = build_embed([], "morning", 12, news_items=news_items)
         fields = payload["embeds"][0]["fields"]
         news_fields = [f for f in fields if f["name"] == "What's Worth Reading"]
-        self.assertIn("**Big market crash affects global economies**", news_fields[0]["value"])
+        self.assertIn("• Big market crash affects global economies", news_fields[0]["value"])
         self.assertIn("[3 sources](https://example.com/crash)", news_fields[0]["value"])
 
     def test_no_news_field_when_news_items_is_none(self):
@@ -242,7 +242,7 @@ class TestBuildEmbed(unittest.TestCase):
         fields = payload["embeds"][0]["fields"]
         news_fields = [f for f in fields if f["name"] == "What's Worth Reading"]
         self.assertEqual(len(news_fields), 1)
-        self.assertIn("**OpenAI releases GPT-5 model**", news_fields[0]["value"])
+        self.assertIn("• OpenAI releases GPT-5 model", news_fields[0]["value"])
         self.assertIn("[read](https://example.com/gpt5)", news_fields[0]["value"])
 
 
