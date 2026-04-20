@@ -335,15 +335,18 @@ def _run_attribution_pass(env: dict, d1: D1Client, dry_run: bool) -> None:
                 f"Jai replied to {row['from_addr']} re: \"{row['subject']}\" on {sent_at} "
                 f"(originally classified {row['classification']})"
             )
-            honcho_client.conclude(
-                fact,
-                api_key=honcho_api_key,
-                base_url=_HONCHO_BASE_URL,
-                app_name=_HONCHO_APP_NAME,
-                user_id=_HONCHO_USER_ID,
-            )
-            d1.mark_replied(row["message_id"], sent_at)
-            attributed_count += 1
+            try:
+                honcho_client.conclude(
+                    fact,
+                    api_key=honcho_api_key,
+                    base_url=_HONCHO_BASE_URL,
+                    app_name=_HONCHO_APP_NAME,
+                    user_id=_HONCHO_USER_ID,
+                )
+                d1.mark_replied(row["message_id"], sent_at)
+                attributed_count += 1
+            except Exception as row_exc:
+                print(f"WARNING: Attribution failed for {conv_id}: {row_exc}", file=sys.stderr)
 
         if attributed_count:
             print(f"  Attribution: {attributed_count} replies attributed")

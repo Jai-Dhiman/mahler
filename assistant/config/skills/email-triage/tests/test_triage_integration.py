@@ -492,13 +492,26 @@ class TestAttributionPass(unittest.TestCase):
         self.assertEqual(call_order, ["honcho", "d1"])
 
     def test_does_not_call_mark_replied_if_honcho_raises(self):
+        second_row = {
+            "message_id": "msg-2",
+            "conversation_id": "conv-xyz",
+            "from_addr": "bob@example.com",
+            "subject": "Q4 plan",
+            "classification": "NEEDS_ACTION",
+        }
         mock_d1 = MagicMock()
-        mock_d1.get_unattributed_recent.return_value = [_UNATTRIBUTED_ROW]
+        mock_d1.get_unattributed_recent.return_value = [_UNATTRIBUTED_ROW, second_row]
 
         with (
             patch.dict("os.environ", {"HONCHO_API_KEY": "test-key"}),
             patch("triage.outlook_client.refresh_access_token", return_value=("acc-tok", "")),
-            patch("triage.outlook_client.fetch_sent_replies", return_value={"conv-abc": "2026-04-19T10:00:00Z"}),
+            patch(
+                "triage.outlook_client.fetch_sent_replies",
+                return_value={
+                    "conv-abc": "2026-04-19T10:00:00Z",
+                    "conv-xyz": "2026-04-19T11:00:00Z",
+                },
+            ),
             patch("triage.honcho_client.conclude", side_effect=RuntimeError("Honcho down")),
             patch("triage._kv_get", return_value=None),
         ):
