@@ -153,7 +153,7 @@ Phases are organized by execution wave — what can run in parallel vs. what is 
 - URGENT / NEEDS_ACTION / FYI / NOISE classification against `priority_map` in D1
 - Store results in `email_triage_log`
 
-**Phase E2a: Honcho Memory Backend — shipped.** Honcho wired as the persistent memory provider. Config at `config/honcho.json` (`workspace: mahler`, `recallMode: hybrid`, `dialecticCadence: 3`). `HONCHO_API_KEY` bridged via `entrypoint.sh`. `SOUL.md` rules instruct Mahler to call `honcho_conclude` for durable facts and `honcho_search` for context-enriched answers. All subsequent phases deposit signal into Honcho automatically.
+**Phase E2a: Honcho Memory Backend — shipped.** Honcho wired as the persistent memory provider. Config at `config/honcho.json` (`workspace: mahler`, `recallMode: hybrid`, `dialecticCadence: 6`). `HONCHO_API_KEY` bridged via `entrypoint.sh`. `SOUL.md` rules instruct Mahler to call `honcho_conclude` for durable facts and `honcho_search` for context-enriched answers. All subsequent phases deposit signal into Honcho automatically.
 
 **Phase E2 Reply-Attribution — shipped.** Outlook Sent Items polling deposits reply facts into Honcho and marks `replied_at` in `email_triage_log`. After each triage run, `_run_attribution_pass` fetches recent sent messages via Graph API, matches by `conversationId`, calls `honcho_client.conclude` (atomicity: Honcho must succeed before D1 write), then calls `d1.mark_replied`. Kaizen-reflection now uses `get_triage_patterns_with_reply_rate` — reply count and rate are included in proposal prompts so patterns with >50% reply rate are never downgraded.
 - `email-triage/scripts/honcho_client.py`: new module — `conclude(text, api_key, base_url, app_name, user_id)`
@@ -175,7 +175,7 @@ Phases are organized by execution wave — what can run in parallel vs. what is 
 
 **Phase E4.1: Conversation history — shipped.** `conversation-history` plugin injects last 45 minutes of Discord channel history on the first turn of each new session.
 
-**Phase E4b: Project Awareness — shipped.** Claude Code `SessionStop` hook (`assistant/hooks/project_log.py`) keyword-scans session transcripts, calls OpenRouter to synthesize a blocker summary, and writes win/blocker entries to D1 `project_log`. The `/ship` skill logs shipped wins automatically. The `project-context` Hermes plugin (`config/plugins/project-context/`) injects the last 7 days of project activity as context on every LLM turn.
+**Phase E4b: Project Awareness — shipped.** Claude Code `SessionStop` hook (`assistant/hooks/project_log.py`) keyword-scans session transcripts, calls OpenRouter to synthesize a blocker summary, and writes win/blocker entries to D1 `project_log`. The `/ship` skill logs shipped wins automatically. The `project-context` Hermes plugin (`config/plugins/project-context/`) injects the last 3 days of project activity as context on the **first turn only** of each session (not every turn).
 - D1 table: `project_log (project, entry_type, summary, git_ref, created_at)`
 - `assistant/hooks/project_log.py`: CLI — `win` mode (called by /ship), `blocker` mode (SessionStop hook)
 - `config/plugins/project-context/plugin.py`: `pre_llm_call` plugin injects recent wins/blockers
