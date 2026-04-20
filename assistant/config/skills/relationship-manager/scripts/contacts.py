@@ -82,6 +82,18 @@ def _cmd_talked_to(args: argparse.Namespace) -> None:
     print(f"Noted: talked to {args.name} on {today}")
 
 
+def _cmd_update(args: argparse.Namespace) -> None:
+    db = _d1_client()
+    db.update_contact(args.name, args.field, args.value)
+    print(f"Updated: {args.name}")
+
+
+def _cmd_delete(args: argparse.Namespace) -> None:
+    db = _d1_client()
+    db.delete_contact(args.name)
+    print(f"Deleted: {args.name}")
+
+
 def main(argv=None) -> None:
     _supplement_env_from_hermes()
     parser = argparse.ArgumentParser(prog="contacts")
@@ -111,6 +123,8 @@ def main(argv=None) -> None:
         "summarize": _cmd_summarize,
         "list": _cmd_list,
         "talked-to": _cmd_talked_to,
+        "update": _cmd_update,
+        "delete": _cmd_delete,
     }
     fn = dispatch.get(args.command)
     if fn is None:

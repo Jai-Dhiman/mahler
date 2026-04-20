@@ -160,3 +160,29 @@ def test_talked_to_updates_last_contact_to_today():
                     contacts.main(["talked-to", "--name", "Alice Chen"])
             mock_d1.touch_last_contact.assert_called_once_with("Alice Chen", "2026-04-19")
             assert "Noted: talked to Alice Chen on 2026-04-19" in out.getvalue()
+
+
+def test_update_command_patches_field():
+    with patch.dict(os.environ, _ENV):
+        with patch("contacts.D1Client") as MockD1:
+            mock_d1 = MagicMock()
+            MockD1.return_value = mock_d1
+            out = io.StringIO()
+            with patch("sys.stdout", out):
+                import contacts
+                contacts.main(["update", "--name", "Alice Chen", "--field", "context", "--value", "Partner at Sequoia now"])
+            mock_d1.update_contact.assert_called_once_with("Alice Chen", "context", "Partner at Sequoia now")
+            assert "Updated: Alice Chen" in out.getvalue()
+
+
+def test_delete_command_removes_contact():
+    with patch.dict(os.environ, _ENV):
+        with patch("contacts.D1Client") as MockD1:
+            mock_d1 = MagicMock()
+            MockD1.return_value = mock_d1
+            out = io.StringIO()
+            with patch("sys.stdout", out):
+                import contacts
+                contacts.main(["delete", "--name", "Alice Chen"])
+            mock_d1.delete_contact.assert_called_once_with("Alice Chen")
+            assert "Deleted: Alice Chen" in out.getvalue()
