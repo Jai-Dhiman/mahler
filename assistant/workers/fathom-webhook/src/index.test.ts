@@ -68,6 +68,46 @@ describe("verifySignature", () => {
   });
 });
 
+import { vi, afterEach } from "vitest";
+import { extractSummary } from "./index";
+
+describe("extractSummary", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns default_summary.markdown_formatted from payload when present", async () => {
+    const meeting = {
+      recording_id: 1,
+      default_summary: { markdown_formatted: "## Discussion\n- Topic A\n- Topic B" },
+    };
+    const result = await extractSummary(meeting, "any-key");
+    expect(result).toBe("## Discussion\n- Topic A\n- Topic B");
+  });
+
+  it("calls Fathom API when default_summary is null and returns markdown_formatted", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ markdown_formatted: "## Fetched\n- Item 1" }),
+    }));
+    const meeting = { recording_id: 42, default_summary: null };
+    const result = await extractSummary(meeting, "test-api-key");
+    expect(result).toBe("## Fetched\n- Item 1");
+    expect(fetch).toHaveBeenCalledWith(
+      "https://api.fathom.video/recordings/42/summary",
+      { headers: { "X-Api-Key": "test-api-key" } }
+    );
+  });
+
+  it("throws when Fathom API returns non-OK status", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 503 }));
+    const meeting = { recording_id: 7, default_summary: undefined };
+    await expect(extractSummary(meeting, "key")).rejects.toThrow(
+      "Fathom API error 503 fetching summary for recording 7"
+    );
+  });
+});
+
 import { env } from "cloudflare:test";
 import { checkAndSetDedup } from "./index";
 

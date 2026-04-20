@@ -62,10 +62,23 @@ export async function checkAndSetDedup(kv: KVNamespace, recordingId: number): Pr
 }
 
 export async function extractSummary(
-  _meeting: Pick<Meeting, "recording_id" | "default_summary">,
-  _fathomApiKey: string
+  meeting: Pick<Meeting, "recording_id" | "default_summary">,
+  fathomApiKey: string
 ): Promise<string> {
-  throw new Error("Not implemented");
+  if (meeting.default_summary?.markdown_formatted) {
+    return meeting.default_summary.markdown_formatted;
+  }
+  const resp = await fetch(
+    `https://api.fathom.video/recordings/${meeting.recording_id}/summary`,
+    { headers: { "X-Api-Key": fathomApiKey } }
+  );
+  if (!resp.ok) {
+    throw new Error(
+      `Fathom API error ${resp.status} fetching summary for recording ${meeting.recording_id}`
+    );
+  }
+  const data = await resp.json() as { markdown_formatted: string };
+  return data.markdown_formatted;
 }
 
 export function buildDiscordMessage(
