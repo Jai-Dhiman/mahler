@@ -68,8 +68,7 @@ def conclude(
         },
     )
     try:
-        with _OPENER.open(req) as resp:
-            if resp.status not in (200, 201):
-                raise RuntimeError(f"Honcho conclude failed: HTTP {resp.status}")
+        with _OPENER.open(req):
+            pass
     except urllib.error.HTTPError as exc:
         raise RuntimeError(f"Honcho conclude failed: HTTP {exc.code}") from exc
