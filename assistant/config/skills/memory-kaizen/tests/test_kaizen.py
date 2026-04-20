@@ -91,6 +91,20 @@ class TestKaizenRun(unittest.TestCase):
 
         self.assertIn("Honcho list_conclusions failed", str(ctx.exception))
 
+    def test_run_raises_when_llm_fails_and_does_not_conclude(self):
+        with (
+            patch.dict("os.environ", _BASE_ENV, clear=True),
+            patch("kaizen.honcho_client") as mock_honcho,
+            patch("kaizen._call_llm", side_effect=RuntimeError("OpenRouter error: HTTP 429")),
+        ):
+            mock_honcho.list_conclusions.return_value = _SEVEN_CONCLUSIONS
+            import kaizen
+            with self.assertRaises(RuntimeError) as ctx:
+                kaizen.main(["--run"])
+
+        self.assertIn("OpenRouter error", str(ctx.exception))
+        mock_honcho.conclude.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

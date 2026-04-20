@@ -107,7 +107,7 @@ def _call_llm(prompt: str, api_key: str, model: str = _DEFAULT_MODEL, max_tokens
 
 def _format_log(rows: list) -> str:
     return "\n".join(
-        "[{project}] {created_at} — {entry_type}: {summary}".format(**r)
+        f"[{r['project']}] {r['created_at']} — {r['entry_type']}: {r['summary']}"
         for r in rows
     )
 
