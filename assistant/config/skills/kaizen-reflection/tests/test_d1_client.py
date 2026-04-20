@@ -135,5 +135,41 @@ class TestGetRecentProjectLog(unittest.TestCase):
             client.get_recent_project_log(since_days=0)
 
 
+class TestGetRecentReflectionsKaizen(unittest.TestCase):
+
+    def test_returns_reflection_rows_within_window(self):
+        rows = [
+            {
+                "week_of": "2026-W15",
+                "raw_text": "Meetings drained me this week",
+                "created_at": "2026-04-13T02:00:00",
+            },
+            {
+                "week_of": "2026-W16",
+                "raw_text": "Meetings still exhausting",
+                "created_at": "2026-04-20T02:00:00",
+            },
+        ]
+        with patch.object(_OPENER, "open", return_value=_make_response(_success_payload(rows))):
+            client = _make_client()
+            result = client.get_recent_reflections(since_weeks=4)
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["week_of"], "2026-W15")
+        self.assertEqual(result[1]["week_of"], "2026-W16")
+
+    def test_returns_empty_list_when_no_reflections(self):
+        with patch.object(_OPENER, "open", return_value=_make_response(_success_payload([]))):
+            client = _make_client()
+            result = client.get_recent_reflections(since_weeks=4)
+
+        self.assertEqual(result, [])
+
+    def test_raises_on_invalid_since_weeks(self):
+        client = _make_client()
+        with self.assertRaises(ValueError):
+            client.get_recent_reflections(since_weeks=-1)
+
+
 if __name__ == "__main__":
     unittest.main()
