@@ -92,3 +92,21 @@ def test_touch_last_contact_sends_update_sql():
         assert "UPDATE contacts SET last_contact = ?" in body["sql"]
         assert "lower(name) = lower(?)" in body["sql"]
         assert body["params"] == ["2026-04-19", "Alice Chen"]
+
+
+def test_update_contact_sends_correct_field_sql():
+    with patch("d1_client._OPENER") as mock_opener:
+        mock_opener.open.return_value = _make_d1_response()
+        client = D1Client("acct1", "db1", "tok1")
+        client.update_contact("Alice Chen", "context", "Partner at Sequoia now")
+        req = mock_opener.open.call_args[0][0]
+        body = json.loads(req.data)
+        assert "UPDATE contacts SET context = ?" in body["sql"]
+        assert "lower(name) = lower(?)" in body["sql"]
+        assert body["params"] == ["Partner at Sequoia now", "Alice Chen"]
+
+
+def test_update_contact_rejects_unknown_field():
+    client = D1Client("acct1", "db1", "tok1")
+    with pytest.raises(ValueError, match="Cannot update field"):
+        client.update_contact("Alice Chen", "password", "hack")

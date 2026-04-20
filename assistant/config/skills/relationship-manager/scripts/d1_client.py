@@ -98,6 +98,14 @@ class D1Client:
             [date, name],
         )
 
+    def update_contact(self, name: str, field: str, value: str) -> None:
+        if field not in _ALLOWED_UPDATE_FIELDS:
+            raise ValueError(f"Cannot update field {field!r}. Allowed: {sorted(_ALLOWED_UPDATE_FIELDS)}")
+        self.query(
+            f"UPDATE contacts SET {field} = ? WHERE lower(name) = lower(?)",
+            [value, name],
+        )
+
     def upsert_contact(self, name: str, email: str, contact_type: str, context: str) -> None:
         self.query(
             """
