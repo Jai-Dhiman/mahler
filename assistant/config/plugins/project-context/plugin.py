@@ -33,11 +33,11 @@ def _query_project_log() -> list[dict]:
     if not account_id or not database_id or not api_token:
         return []
     client = D1Client(account_id, database_id, api_token)
-    return client.get_recent_project_log(days=7)
+    return client.get_recent_project_log(days=3)
 
 
 def _format_entries(rows: list[dict]) -> str:
-    lines = ["Recent project activity (last 7 days):\n"]
+    lines = ["Recent project activity (last 3 days):\n"]
     for row in rows:
         project = row.get("project", "unknown")
         entry_type = row.get("entry_type", "").upper()

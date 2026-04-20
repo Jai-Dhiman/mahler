@@ -51,6 +51,8 @@ def upcoming_meeting_context(
     **kwargs,
 ) -> dict | None:
     """Called before each LLM turn. Injects upcoming meeting context or returns None."""
+    if not is_first_turn:
+        return None
     try:
         meeting = _query_upcoming_meeting()
         if not meeting:

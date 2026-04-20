@@ -155,6 +155,13 @@ Phases are organized by execution wave — what can run in parallel vs. what is 
 
 **Phase E2a: Honcho Memory Backend — shipped.** Honcho wired as the persistent memory provider. Config at `config/honcho.json` (`workspace: mahler`, `recallMode: hybrid`, `dialecticCadence: 3`). `HONCHO_API_KEY` bridged via `entrypoint.sh`. `SOUL.md` rules instruct Mahler to call `honcho_conclude` for durable facts and `honcho_search` for context-enriched answers. All subsequent phases deposit signal into Honcho automatically.
 
+**Phase E2 Reply-Attribution — shipped.** Outlook Sent Items polling deposits reply facts into Honcho and marks `replied_at` in `email_triage_log`. After each triage run, `_run_attribution_pass` fetches recent sent messages via Graph API, matches by `conversationId`, calls `honcho_client.conclude` (atomicity: Honcho must succeed before D1 write), then calls `d1.mark_replied`. Kaizen-reflection now uses `get_triage_patterns_with_reply_rate` — reply count and rate are included in proposal prompts so patterns with >50% reply rate are never downgraded.
+- `email-triage/scripts/honcho_client.py`: new module — `conclude(text, api_key, base_url, app_name, user_id)`
+- `email-triage/scripts/outlook_client.py`: `fetch_sent_replies(conversation_ids, access_token, since_days)` + `conversationId` plumbed through `_fetch_from_folder`
+- `email-triage/scripts/d1_client.py`: `get_unattributed_recent`, `mark_replied`, `_add_column_if_missing`; `email_triage_log` gains `conversation_id` and `replied_at` columns
+- `kaizen-reflection/scripts/d1_client.py`: `get_triage_patterns_with_reply_rate`
+- `kaizen-reflection/scripts/reflect.py`: reply-rate signal in proposal prompt
+
 **Phase E3: Kaizen Loop — shipped.** Priority map in D1, `kaizen-context` plugin injects it on every turn, `kaizen-reflection` skill runs weekly to propose reclassifications. See `config/plugins/kaizen-context/` and `config/skills/kaizen-reflection/`.
 
 **Phase E3+: Expand Kaizen Scope.** Broaden the kaizen loop beyond email patterns to watch conversation patterns, project logs, and reflection journal entries. Also add the reflection journal: a weekly cron (Sunday evening) asks 2-3 structured questions (what went well, what drained you, what are you avoiding), stores answers in D1, feeds them into both Honcho and kaizen-reflection. Depends on: E2a (Honcho), E4b (project log data).
