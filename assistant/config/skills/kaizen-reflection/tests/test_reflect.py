@@ -176,7 +176,6 @@ class TestReflectApply(unittest.TestCase):
 class TestReflectRunReplyRateInPrompt(unittest.TestCase):
 
     def test_proposal_prompt_includes_reply_count_and_rate(self):
-        import io
         patterns = [
             {
                 "from_addr": "boss@work.com",
@@ -204,7 +203,7 @@ class TestReflectRunReplyRateInPrompt(unittest.TestCase):
             import reflect
             reflect.main(["--run"])
 
-        self.assertIn("3", captured_prompt["value"])
+        self.assertIn("3 replies", captured_prompt["value"])
         self.assertIn("75%", captured_prompt["value"])
 
 
