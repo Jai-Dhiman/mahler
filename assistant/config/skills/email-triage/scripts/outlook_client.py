@@ -1,6 +1,7 @@
 import json
 import re
 import ssl
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -118,7 +119,7 @@ def _fetch_from_folder(
     cutoff = (datetime.now(tz=timezone.utc) - timedelta(days=since_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     params = urllib.parse.urlencode({
         "$filter": f"isRead eq false and receivedDateTime ge {cutoff}",
-        "$select": "id,subject,from,receivedDateTime,body,internetMessageId,internetMessageHeaders",
+        "$select": "id,subject,from,receivedDateTime,body,internetMessageId,internetMessageHeaders,conversationId",
         "$top": str(max_results),
     })
     url = f"{_GRAPH_BASE}/{folder_path}/messages?{params}"
@@ -161,6 +162,7 @@ def _fetch_from_folder(
                 "body_preview": body_preview,
                 "is_junk_rescue": is_junk,
                 "headers": headers,
+                "conversation_id": msg.get("conversationId", ""),
             }
             results.append(result)
             _mark_read(msg["id"], access_token)
@@ -191,3 +193,48 @@ def fetch_unread_emails(
     results.extend(_fetch_from_folder("mailFolders/inbox", access_token, is_junk=False, max_results=max_results, since_days=since_days))
     results.extend(_fetch_from_folder("mailFolders/junkemail", access_token, is_junk=True, max_results=max_results, since_days=since_days))
     return results, new_refresh_token
+
+
+def fetch_sent_replies(
+    conversation_ids: list[str],
+    access_token: str,
+    since_days: int = 3,
+) -> dict[str, str]:
+    """Query Outlook Sent Items for replies to the given conversation threads.
+
+    Returns {conversation_id: sent_datetime_iso} for each matched reply.
+    Returns {} immediately if conversation_ids is empty.
+    Raises RuntimeError on Graph API failure.
+    """
+    if not conversation_ids:
+        return {}
+
+    cutoff = (
+        datetime.now(tz=timezone.utc) - timedelta(days=since_days)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    conv_filter = " or ".join(
+        f"conversationId eq '{cid.replace(chr(39), chr(39)*2)}'" for cid in conversation_ids[:50]
+    )
+    filter_expr = f"({conv_filter}) and sentDateTime ge '{cutoff}'"
+    params = urllib.parse.urlencode({
+        "$filter": filter_expr,
+        "$select": "conversationId,sentDateTime",
+        "$top": "50",
+    })
+    url = f"{_GRAPH_BASE}/mailFolders/sentItems/messages?{params}"
+
+    data = _graph_get(url, access_token)
+    result: dict[str, str] = {}
+    for msg in data.get("value", []):
+        conv_id = msg.get("conversationId", "")
+        sent_raw = msg.get("sentDateTime", "")
+        if not conv_id or not sent_raw:
+            continue
+        try:
+            dt = datetime.fromisoformat(sent_raw.replace("Z", "+00:00"))
+            result[conv_id] = dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except Exception as exc:
+            print(f"WARNING: Could not parse sentDateTime {sent_raw!r}: {exc}", file=sys.stderr)
+            result[conv_id] = sent_raw
+    return result

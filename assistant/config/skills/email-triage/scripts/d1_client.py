@@ -89,8 +89,8 @@ class D1Client:
         sql = (
             "INSERT OR IGNORE INTO email_triage_log "
             "(message_id, source, from_addr, subject, received_at, classification, "
-            "summary, alerted, classification_error, processed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "summary, alerted, classification_error, processed_at, conversation_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         params = [
             result["message_id"],
@@ -103,8 +103,30 @@ class D1Client:
             int(result.get("alerted", 0)),
             int(result.get("classification_error", 0)),
             result["processed_at"],
+            result.get("conversation_id"),
         ]
         self.query(sql, params)
+
+    def get_unattributed_recent(self, since_days: int = 3) -> list[dict]:
+        """Return URGENT/NEEDS_ACTION Outlook rows with a conversation_id and no replied_at."""
+        return self.query(
+            """SELECT message_id, conversation_id, from_addr, subject, classification
+               FROM email_triage_log
+               WHERE source = 'outlook'
+                 AND classification IN ('URGENT', 'NEEDS_ACTION')
+                 AND conversation_id IS NOT NULL
+                 AND conversation_id != ''
+                 AND replied_at IS NULL
+                 AND processed_at >= datetime('now', ? || ' days')""",
+            [f"-{since_days}"],
+        )
+
+    def mark_replied(self, message_id: str, replied_at: str) -> None:
+        """Set replied_at for the given email_triage_log row."""
+        self.query(
+            "UPDATE email_triage_log SET replied_at = ? WHERE message_id = ?",
+            [replied_at, message_id],
+        )
 
     def get_kv(self, key: str) -> Optional[str]:
         """Read a value from mahler_kv. Returns None if the key doesn't exist."""
@@ -159,6 +181,19 @@ class D1Client:
             [project, entry_type, summary, git_ref],
         )
 
+    def _add_column_if_missing(self, table: str, column: str, col_type: str) -> None:
+        """Add a column to a table if not already present.
+
+        Silently ignores the SQLite duplicate-column error. Raises on any other error.
+        All arguments must be string literals from call sites — never user-controlled input.
+        """
+        try:
+            self.query(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}", [])
+        except RuntimeError as exc:
+            msg = str(exc).lower()
+            if "duplicate column" not in msg and "already has a column" not in msg:
+                raise
+
     def ensure_tables(self) -> None:
         """Create tables if they don't exist. Safe to call on every run."""
         self.query(
@@ -211,3 +246,5 @@ class D1Client:
 )""",
             [],
         )
+        self._add_column_if_missing("email_triage_log", "conversation_id", "TEXT")
+        self._add_column_if_missing("email_triage_log", "replied_at", "TEXT")

@@ -26,7 +26,7 @@ class TestReflectRunWithProposals(unittest.TestCase):
 
     def test_outputs_json_proposals_for_detected_patterns(self):
         patterns = [
-            {"from_addr": "news@acme.com", "classification": "NEEDS_ACTION", "occurrence_count": 5}
+            {"from_addr": "news@acme.com", "classification": "NEEDS_ACTION", "occurrence_count": 5, "reply_count": 0}
         ]
         llm_response = json.dumps([
             {
@@ -37,7 +37,7 @@ class TestReflectRunWithProposals(unittest.TestCase):
             }
         ])
         mock_d1 = MagicMock()
-        mock_d1.get_triage_patterns.return_value = patterns
+        mock_d1.get_triage_patterns_with_reply_rate.return_value = patterns
         mock_d1.get_priority_map.return_value = "## URGENT\nDrop everything."
 
         captured = io.StringIO()
@@ -61,7 +61,7 @@ class TestReflectRunNoProposals(unittest.TestCase):
 
     def test_prints_no_proposals_message_when_no_patterns(self):
         mock_d1 = MagicMock()
-        mock_d1.get_triage_patterns.return_value = []
+        mock_d1.get_triage_patterns_with_reply_rate.return_value = []
 
         captured = io.StringIO()
         with (
@@ -76,7 +76,7 @@ class TestReflectRunNoProposals(unittest.TestCase):
 
     def test_does_not_call_llm_when_no_patterns(self):
         mock_d1 = MagicMock()
-        mock_d1.get_triage_patterns.return_value = []
+        mock_d1.get_triage_patterns_with_reply_rate.return_value = []
 
         with (
             _patch_env(),
@@ -171,6 +171,40 @@ class TestReflectApply(unittest.TestCase):
 
         self.assertIn("implausible priority map", str(ctx.exception))
         mock_d1.set_priority_map.assert_not_called()
+
+
+class TestReflectRunReplyRateInPrompt(unittest.TestCase):
+
+    def test_proposal_prompt_includes_reply_count_and_rate(self):
+        patterns = [
+            {
+                "from_addr": "boss@work.com",
+                "classification": "FYI",
+                "occurrence_count": 4,
+                "reply_count": 3,
+            }
+        ]
+        captured_prompt = {}
+
+        def capture_llm(prompt, api_key, model):
+            captured_prompt["value"] = prompt
+            return "[]"
+
+        mock_d1 = MagicMock()
+        mock_d1.get_triage_patterns_with_reply_rate.return_value = patterns
+        mock_d1.get_priority_map.return_value = "## URGENT\nDrop everything."
+
+        with (
+            _patch_env(),
+            patch("reflect.D1Client", return_value=mock_d1),
+            patch("reflect._call_llm", side_effect=capture_llm),
+            patch("sys.stdout", io.StringIO()),
+        ):
+            import reflect
+            reflect.main(["--run"])
+
+        self.assertIn("3 replies", captured_prompt["value"])
+        self.assertIn("75%", captured_prompt["value"])
 
 
 if __name__ == "__main__":

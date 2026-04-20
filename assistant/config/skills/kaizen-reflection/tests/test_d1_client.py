@@ -73,5 +73,33 @@ class TestGetPriorityMapKaizen(unittest.TestCase):
         self.assertIn("priority_map table is empty", str(ctx.exception))
 
 
+class TestGetTriagePatternsWithReplyRate(unittest.TestCase):
+
+    def test_returns_occurrence_and_reply_counts(self):
+        rows = [
+            {
+                "from_addr": "boss@work.com",
+                "classification": "URGENT",
+                "occurrence_count": 4,
+                "reply_count": 3,
+            }
+        ]
+        with patch.object(_OPENER, "open", return_value=_make_response(_success_payload(rows))):
+            client = _make_client()
+            result = client.get_triage_patterns_with_reply_rate(since_days=7, min_count=3)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["from_addr"], "boss@work.com")
+        self.assertEqual(result[0]["occurrence_count"], 4)
+        self.assertEqual(result[0]["reply_count"], 3)
+
+    def test_returns_empty_list_when_no_patterns_meet_threshold(self):
+        with patch.object(_OPENER, "open", return_value=_make_response(_success_payload([]))):
+            client = _make_client()
+            result = client.get_triage_patterns_with_reply_rate(since_days=7, min_count=3)
+
+        self.assertEqual(result, [])
+
+
 if __name__ == "__main__":
     unittest.main()

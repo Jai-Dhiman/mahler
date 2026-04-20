@@ -1,4 +1,4 @@
-from typing import TypedDict, Literal
+from typing import NotRequired, TypedDict, Literal
 
 
 class EmailMessage(TypedDict):
@@ -10,3 +10,4 @@ class EmailMessage(TypedDict):
     body_preview: str      # first 500 chars plain text, stripped of HTML
     is_junk_rescue: bool   # True if fetched from Junk/Spam folder
     headers: dict          # raw headers dict, lowercase keys, for pre-filter use
+    conversation_id: NotRequired[str]
