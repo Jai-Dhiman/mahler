@@ -55,9 +55,14 @@ from email_types import EmailMessage
 from prefilter import is_noise
 import gmail_client
 import outlook_client
+import honcho_client
 
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 _DEFAULT_MODEL = "x-ai/grok-4.1-fast"
+
+_HONCHO_BASE_URL = "https://api.honcho.dev"
+_HONCHO_APP_NAME = "mahler"
+_HONCHO_USER_ID = "jai"
 
 # Cloudflare KV namespace provisioned for Mahler (stores rotating Outlook token)
 _CF_KV_NAMESPACE_ID = "4e63db1305a1424ead3565522a47b5f4"  # MAHLER_KV
@@ -263,6 +268,88 @@ def send_urgent_alert(email: EmailMessage, summary: str) -> None:
         ],
         check=True,
     )
+
+
+# ---------------------------------------------------------------------------
+# Attribution pass
+# ---------------------------------------------------------------------------
+
+def _run_attribution_pass(env: dict, d1: D1Client, dry_run: bool) -> None:
+    """Check Outlook Sent Items for replies to recent unattributed triage rows.
+
+    Deposits Honcho relational facts and marks D1 rows replied.
+    Best-effort: any failure is logged to stderr without aborting the triage run.
+    Honcho conclude must succeed before d1.mark_replied -- ensures retryability.
+    """
+    try:
+        honcho_api_key = os.environ.get("HONCHO_API_KEY")
+        if not honcho_api_key:
+            print(
+                "WARNING: HONCHO_API_KEY not set -- skipping attribution pass",
+                file=sys.stderr,
+            )
+            return
+
+        unattributed = d1.get_unattributed_recent(since_days=3)
+        if not unattributed:
+            return
+
+        conversation_ids = [
+            r["conversation_id"] for r in unattributed if r.get("conversation_id")
+        ]
+        if not conversation_ids:
+            return
+
+        latest_refresh_token = (
+            _kv_get(env["CF_ACCOUNT_ID"], env["CF_API_TOKEN"], _OUTLOOK_TOKEN_KV_KEY)
+            or env.get("OUTLOOK_REFRESH_TOKEN", "")
+        )
+        if not latest_refresh_token:
+            print(
+                "WARNING: No Outlook refresh token for attribution pass",
+                file=sys.stderr,
+            )
+            return
+
+        access_token, _ = outlook_client.refresh_access_token(
+            client_id=env["OUTLOOK_CLIENT_ID"],
+            client_secret=env["OUTLOOK_CLIENT_SECRET"],
+            refresh_token=latest_refresh_token,
+        )
+
+        replies = outlook_client.fetch_sent_replies(
+            conversation_ids, access_token, since_days=3
+        )
+
+        conv_to_row = {r["conversation_id"]: r for r in unattributed}
+        attributed_count = 0
+
+        for conv_id, sent_at in replies.items():
+            row = conv_to_row.get(conv_id)
+            if not row:
+                continue
+            if dry_run:
+                print(f"  [dry-run] Attribution: {row['from_addr']} | {row['subject']}")
+                continue
+            fact = (
+                f"Jai replied to {row['from_addr']} re: \"{row['subject']}\" on {sent_at} "
+                f"(originally classified {row['classification']})"
+            )
+            honcho_client.conclude(
+                fact,
+                api_key=honcho_api_key,
+                base_url=_HONCHO_BASE_URL,
+                app_name=_HONCHO_APP_NAME,
+                user_id=_HONCHO_USER_ID,
+            )
+            d1.mark_replied(row["message_id"], sent_at)
+            attributed_count += 1
+
+        if attributed_count:
+            print(f"  Attribution: {attributed_count} replies attributed")
+
+    except Exception as exc:
+        print(f"WARNING: Attribution pass failed: {exc}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -485,6 +572,8 @@ def main(argv: list[str] | None = None) -> None:
         print(f"\nNOTE: Gmail fetch failed ({gmail_error}), only Outlook results processed.")
     if outlook_error and not outlook_emails:
         print(f"\nNOTE: Outlook fetch failed ({outlook_error}), only Gmail results processed.")
+
+    _run_attribution_pass(env, d1, args.dry_run)
 
 
 if __name__ == "__main__":

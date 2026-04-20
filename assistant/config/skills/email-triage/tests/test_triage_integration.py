@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, call, patch
 sys.path.insert(0, "scripts")
 
 from email_types import EmailMessage
-from triage import classify_batch, main, send_urgent_alert
+from triage import classify_batch, main, send_urgent_alert, _run_attribution_pass
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +454,71 @@ class TestPriorityMapFromD1(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 main(["--dry-run"])
         self.assertIn("priority_map table is empty", str(ctx.exception))
+
+
+_UNATTRIBUTED_ROW = {
+    "message_id": "msg-1",
+    "conversation_id": "conv-abc",
+    "from_addr": "alice@example.com",
+    "subject": "Budget review",
+    "classification": "URGENT",
+}
+
+
+class TestAttributionPass(unittest.TestCase):
+
+    def test_calls_honcho_before_mark_replied(self):
+        mock_d1 = MagicMock()
+        mock_d1.get_unattributed_recent.return_value = [_UNATTRIBUTED_ROW]
+        call_order = []
+
+        def fake_conclude(*a, **kw):
+            call_order.append("honcho")
+
+        def fake_mark_replied(*a, **kw):
+            call_order.append("d1")
+
+        mock_d1.mark_replied.side_effect = fake_mark_replied
+
+        with (
+            patch.dict("os.environ", {"HONCHO_API_KEY": "test-key"}),
+            patch("triage.outlook_client.refresh_access_token", return_value=("acc-tok", "")),
+            patch("triage.outlook_client.fetch_sent_replies", return_value={"conv-abc": "2026-04-19T10:00:00Z"}),
+            patch("triage.honcho_client.conclude", side_effect=fake_conclude),
+            patch("triage._kv_get", return_value=None),
+        ):
+            _run_attribution_pass(_BASE_ENV, mock_d1, dry_run=False)
+
+        self.assertEqual(call_order, ["honcho", "d1"])
+
+    def test_does_not_call_mark_replied_if_honcho_raises(self):
+        mock_d1 = MagicMock()
+        mock_d1.get_unattributed_recent.return_value = [_UNATTRIBUTED_ROW]
+
+        with (
+            patch.dict("os.environ", {"HONCHO_API_KEY": "test-key"}),
+            patch("triage.outlook_client.refresh_access_token", return_value=("acc-tok", "")),
+            patch("triage.outlook_client.fetch_sent_replies", return_value={"conv-abc": "2026-04-19T10:00:00Z"}),
+            patch("triage.honcho_client.conclude", side_effect=RuntimeError("Honcho down")),
+            patch("triage._kv_get", return_value=None),
+        ):
+            _run_attribution_pass(_BASE_ENV, mock_d1, dry_run=False)
+
+        mock_d1.mark_replied.assert_not_called()
+
+    def test_exits_cleanly_when_outlook_refresh_raises(self):
+        mock_d1 = MagicMock()
+        mock_d1.get_unattributed_recent.return_value = [_UNATTRIBUTED_ROW]
+
+        with (
+            patch.dict("os.environ", {"HONCHO_API_KEY": "test-key"}),
+            patch("triage.outlook_client.refresh_access_token", side_effect=RuntimeError("Outlook down")),
+            patch("triage._kv_get", return_value=None),
+        ):
+            # Must not raise
+            _run_attribution_pass(_BASE_ENV, mock_d1, dry_run=False)
+
+        mock_d1.mark_replied.assert_not_called()
 
 
 if __name__ == "__main__":
