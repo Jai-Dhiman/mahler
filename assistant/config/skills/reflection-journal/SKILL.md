@@ -15,17 +15,9 @@ metadata:
 - Cron-triggered at 02:00 UTC every Sunday (6pm Pacific Saturday evening)
 - When the user says "start reflection", "weekly check-in", or "reflection time"
 
-## Prerequisites
+## One-time setup
 
-| Variable | Purpose |
-|---|---|
-| `CF_ACCOUNT_ID` | Cloudflare account ID for D1 API calls |
-| `CF_D1_DATABASE_ID` | D1 database ID |
-| `CF_API_TOKEN` | Cloudflare API token with D1 read/write permission |
-| `OPENROUTER_API_KEY` | API key for LLM synthesis |
-| `HONCHO_API_KEY` | Honcho API key for durable memory storage |
-
-The `reflection_log` table must be created before first use. Run once after deploy:
+Create the `reflection_log` table once after first deploy:
 
 ```bash
 python3 -c "

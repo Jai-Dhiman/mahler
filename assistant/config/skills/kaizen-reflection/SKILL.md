@@ -15,16 +15,9 @@ metadata:
 - Invoked automatically by Hermes cron every Sunday at 18:00 UTC
 - When the user asks any of: "run kaizen reflection", "check triage patterns", "update priority map", "what should we reclassify"
 
-## Prerequisites
+## One-time setup
 
-| Variable | Purpose |
-|---|---|
-| `CF_ACCOUNT_ID` | Cloudflare account ID for D1 API calls |
-| `CF_D1_DATABASE_ID` | D1 database ID |
-| `CF_API_TOKEN` | Cloudflare API token with D1 read/write permission |
-| `OPENROUTER_API_KEY` | API key for LLM proposal generation |
-
-The `priority_map` table must be seeded before first use. Run this once after the first deploy:
+Seed the `priority_map` table once after the first deploy:
 
 ```bash
 python3 ~/.hermes/skills/kaizen-reflection/scripts/migrate.py \

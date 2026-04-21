@@ -16,23 +16,6 @@ metadata:
 - When the user asks any of: "check my email", "any urgent emails?", "what's in my inbox?", "triage my email", "do I have anything important?"
 - When the user wants a summary of unread email across Gmail and Outlook
 
-## Prerequisites
-
-The following environment variables must be set as Fly.io secrets before this skill will function. The triage script raises a `RuntimeError` for any missing variable — do not silently skip or default to a degraded mode.
-
-| Variable | Purpose |
-|---|---|
-| `GMAIL_CLIENT_ID` | OAuth2 client ID for Gmail API access |
-| `GMAIL_CLIENT_SECRET` | OAuth2 client secret for Gmail API access |
-| `GMAIL_REFRESH_TOKEN` | OAuth2 refresh token for Gmail API access |
-| `OUTLOOK_EMAIL` | Outlook/Microsoft 365 email address |
-| `OUTLOOK_APP_PASSWORD` | App password for IMAP access (host: `outlook.office365.com`) |
-| `CF_ACCOUNT_ID` | Cloudflare account ID for D1 API calls |
-| `CF_D1_DATABASE_ID` | D1 database ID (`fa2dbfa8-ee1c-4c7d-ba4c-6e304ee5bc21`) |
-| `CF_API_TOKEN` | Cloudflare API token with D1 write permission |
-| `DISCORD_TRIAGE_WEBHOOK` | Webhook URL for URGENT alert embeds |
-| `OPENROUTER_API_KEY` | API key for the LLM classifier (already set for main model) |
-
 ## Procedure
 
 ### Invocation mode

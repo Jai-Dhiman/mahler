@@ -15,13 +15,6 @@ metadata:
 - Cron-triggered every Sunday at 19:00 UTC (one hour after project-synthesis)
 - When the user asks "run memory kaizen" or "distill my Honcho memories"
 
-## Prerequisites
-
-| Variable | Purpose |
-|---|---|
-| `OPENROUTER_API_KEY` | API key for LLM pattern synthesis |
-| `HONCHO_API_KEY` | Honcho API key for read + write |
-
 ## Procedure
 
 ```bash

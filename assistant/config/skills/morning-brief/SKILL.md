@@ -16,18 +16,12 @@ metadata:
 - When the user asks any of: "morning brief", "email summary", "what did I miss", "evening brief", "what came in today"
 - When the user wants a structured overview of recent triage results without listing every URGENT alert (those are already sent in real-time)
 
-## Prerequisites
-
-The following environment variables must be set as Fly.io secrets before this skill will function. The script raises a `RuntimeError` for any missing variable.
-
-| Variable | Purpose |
-|---|---|
-| `CF_ACCOUNT_ID` | Cloudflare account ID for D1 API calls |
-| `CF_D1_DATABASE_ID` | D1 database ID |
-| `CF_API_TOKEN` | Cloudflare API token with D1 read permission |
-| `DISCORD_TRIAGE_WEBHOOK` | Webhook URL for brief embeds (same as urgent-alert) |
-
 ## Procedure
+
+### Invocation mode
+
+- **Cron invocation** (the scheduled 8am/8pm runs): run the script directly in the foreground using the terminal tool. Do not check environment variables beforehand — the script loads them from `~/.hermes/.env` itself and will raise a `RuntimeError` if anything is missing.
+- **Interactive invocation** (user asks "morning brief" or "what did I miss"): run the script in the foreground; it completes in seconds.
 
 Post the morning brief (last 12 hours):
 

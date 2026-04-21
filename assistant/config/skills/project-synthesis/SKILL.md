@@ -15,16 +15,6 @@ metadata:
 - Cron-triggered every Sunday at 18:00 UTC
 - When the user asks "synthesize my coding week" or "update project memory"
 
-## Prerequisites
-
-| Variable | Purpose |
-|---|---|
-| `CF_ACCOUNT_ID` | Cloudflare account ID for D1 API calls |
-| `CF_D1_DATABASE_ID` | D1 database ID |
-| `CF_API_TOKEN` | Cloudflare API token with D1 read permission |
-| `OPENROUTER_API_KEY` | API key for LLM synthesis |
-| `HONCHO_API_KEY` | Honcho API key for memory write |
-
 ## Procedure
 
 ```bash

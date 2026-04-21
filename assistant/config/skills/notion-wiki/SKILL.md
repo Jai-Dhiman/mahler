@@ -19,15 +19,6 @@ metadata:
 
 Do NOT use this skill to *write* to the wiki. Ingestion is laptop-only; this skill is read-only. If the user asks to add something to the wiki, tell them to ingest it from a local Claude Code session on their laptop.
 
-## Prerequisites
-
-| Variable | Purpose |
-|---|---|
-| `NOTION_WIKI_READ_TOKEN` | Notion internal integration token (read-only) |
-| `NOTION_WIKI_SOURCES_DB_ID` | Wiki Sources database ID |
-| `NOTION_WIKI_CONCEPTS_DB_ID` | Wiki Concepts database ID |
-
-All three must be set as Fly.io secrets. The script raises `RuntimeError` if any is missing.
 
 ## Operations
 

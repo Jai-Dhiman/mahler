@@ -16,16 +16,6 @@ metadata:
 - When the user asks to schedule, book, or create a meeting or event
 - When the meeting-prep skill needs to fetch upcoming events
 
-## Prerequisites
-
-| Variable | Purpose |
-|---|---|
-| `GMAIL_CLIENT_ID` | OAuth2 client ID (same as Gmail integration) |
-| `GMAIL_CLIENT_SECRET` | OAuth2 client secret |
-| `GMAIL_REFRESH_TOKEN` | OAuth2 refresh token (must include `calendar.events` scope) |
-
-All three must be set as Fly.io secrets. The script raises `RuntimeError` if any is missing.
-
 ## Date handling
 
 All dates passed to the CLI must be in ISO 8601 format: `YYYY-MM-DDTHH:MM:SSZ`. Before invoking any command, convert relative dates from the user's message to absolute ISO 8601 using today's date and the user's timezone (Pacific). Example: "Friday at 3pm" → `2026-04-17T22:00:00Z` (UTC).

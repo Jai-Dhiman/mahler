@@ -18,15 +18,6 @@ metadata:
 - When the user says a task is done, finished, or complete
 - When the user asks to remove or delete a task
 
-## Prerequisites
-
-| Variable | Purpose |
-|---|---|
-| `NOTION_API_TOKEN` | Notion internal integration token |
-| `NOTION_DATABASE_ID` | ID of the Notion tasks database |
-
-Both must be set as Fly.io secrets. The script raises `RuntimeError` if either is missing.
-
 ## Date handling
 
 All dates must be in ISO 8601 format: `YYYY-MM-DD`. Before invoking any command, convert relative dates from the user's message to absolute dates using today's date. Example: "Friday" → the date of the upcoming Friday, "next week" → the Monday of next week.

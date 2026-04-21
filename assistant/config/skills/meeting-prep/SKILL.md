@@ -15,20 +15,6 @@ metadata:
 - Invoked automatically by Hermes cron every 15 minutes
 - When the user asks "prepare me for my next meeting" or "what do I need to know before my call?"
 
-## Prerequisites
-
-| Variable | Purpose |
-|---|---|
-| `GMAIL_CLIENT_ID` | OAuth2 client ID |
-| `GMAIL_CLIENT_SECRET` | OAuth2 client secret |
-| `GMAIL_REFRESH_TOKEN` | OAuth2 refresh token with calendar.events scope |
-| `CF_ACCOUNT_ID` | Cloudflare account ID |
-| `CF_D1_DATABASE_ID` | D1 database ID |
-| `CF_API_TOKEN` | Cloudflare API token with D1 read/write |
-| `DISCORD_TRIAGE_WEBHOOK` | Discord webhook for brief delivery |
-| `NOTION_API_TOKEN` | Notion token for task lookup |
-| `NOTION_DATABASE_ID` | Notion tasks database ID |
-
 ## Procedure
 
 ### Step 1 — Fetch upcoming events

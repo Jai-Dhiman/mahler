@@ -15,15 +15,6 @@ metadata:
 - Cron-triggered at 01:00 UTC (6pm Pacific) daily
 - When the user asks for an evening summary, daily close, or "what's on for tomorrow"
 
-## Prerequisites
-
-| Variable | Purpose |
-|---|---|
-| `NOTION_API_TOKEN` | Notion internal integration token |
-| `NOTION_DATABASE_ID` | ID of the Notion tasks database |
-
-Both must be set as Fly.io secrets. The script raises `RuntimeError` if either is missing.
-
 ## Procedure
 
 Run the task sweep:
