@@ -72,6 +72,32 @@ def _fetch_open_tasks(runner) -> list[str]:
     return titles
 
 
+class TaskCreateError(Exception):
+    def __init__(self, msg: str, created: list[str]) -> None:
+        super().__init__(msg)
+        self.created = created
+
+
+def _create_tasks(action_items: list[dict], runner) -> list[str]:
+    created: list[str] = []
+    for item in action_items:
+        argv = [
+            "python3",
+            str(Path.home() / ".hermes" / "skills" / "notion-tasks" / "scripts" / "tasks.py"),
+            "create",
+            "--title", item["title"],
+            "--priority", item["priority"],
+        ]
+        result = runner(argv, capture_output=True, text=True, timeout=60)
+        if result.returncode != 0:
+            raise TaskCreateError(
+                f"tasks.py create failed for '{item['title']}': {result.stderr.strip()}",
+                created,
+            )
+        created.append(item["title"])
+    return created
+
+
 def process_meeting(row, *, runner, llm_caller, discord_poster, d1_client) -> str:
     title = row["title"]
     attendees = _parse_attendees(row["attendees"])
@@ -83,8 +109,14 @@ def process_meeting(row, *, runner, llm_caller, discord_poster, d1_client) -> st
         open_tasks=_fetch_open_tasks(runner),
         llm_caller=llm_caller,
     )
-    if action_items:
-        action_lines = "\n".join(f"  · {i['title']}" for i in action_items)
+    try:
+        created_titles = _create_tasks(action_items, runner)
+        task_error: str | None = None
+    except TaskCreateError as exc:
+        created_titles = exc.created
+        task_error = str(exc)
+    if created_titles:
+        action_lines = "\n".join(f"  · {t}" for t in created_titles)
     else:
         action_lines = "  None"
     crm_line = "CRM updated: No CRM matches"

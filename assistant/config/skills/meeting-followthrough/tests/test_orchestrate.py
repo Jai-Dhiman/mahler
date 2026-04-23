@@ -191,5 +191,37 @@ class TestOpenTasksFlow(unittest.TestCase):
         self.assertIn("Review Q2 deck", captured["p"])
 
 
+class TestTasksCreate(unittest.TestCase):
+    def test_each_action_item_becomes_tasks_create_call(self):
+        import orchestrate
+        row = {
+            "recording_id": 70,
+            "title": "1:1",
+            "attendees": "[]",
+            "summary": "1:1 summary",
+        }
+        calls: list[list[str]] = []
+        def runner(argv, **_):
+            calls.append(argv)
+            return MagicMock(returncode=0, stdout="", stderr="")
+        llm = MagicMock(return_value=(
+            "TASK: [Alice] Send Q2 memo | PRIORITY: High\n"
+            "TASK: Follow up on Series A | PRIORITY: Medium"
+        ))
+        orchestrate.process_meeting(
+            row,
+            runner=runner,
+            llm_caller=llm,
+            discord_poster=MagicMock(),
+            d1_client=MagicMock(),
+        )
+        create_calls = [c for c in calls if "create" in c]
+        self.assertEqual(len(create_calls), 2)
+        titles = {c[c.index("--title") + 1] for c in create_calls}
+        self.assertEqual(titles, {"[Alice] Send Q2 memo", "Follow up on Series A"})
+        priorities = {c[c.index("--priority") + 1] for c in create_calls}
+        self.assertEqual(priorities, {"High", "Medium"})
+
+
 if __name__ == "__main__":
     unittest.main()
