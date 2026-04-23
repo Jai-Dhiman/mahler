@@ -288,6 +288,140 @@ impl D1Client {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct MetricsWeeklyRow {
+    pub generated_at: String,
+    pub window_start: String,
+    pub window_end: String,
+    pub trade_count: i64,
+    pub sharpe: Option<f64>,
+    pub sortino: Option<f64>,
+    pub profit_factor: Option<f64>,
+    pub win_rate: Option<f64>,
+    pub pnl_skew: Option<f64>,
+    pub max_drawdown_pct: Option<f64>,
+    pub mean_slippage_vs_mid: Option<f64>,
+    pub max_slippage_vs_mid: Option<f64>,
+    pub slippage_vs_orats_ratio: Option<f64>,
+    pub fill_size_violation_count: i64,
+    pub fill_size_violation_pct: Option<f64>,
+    pub regime_buckets_json: String,
+    pub greek_ranges_json: String,
+    pub sample_size_tag: String,
+}
+
+impl D1Client {
+    pub async fn insert_equity_snapshot(
+        &self,
+        snap: &crate::measurement::equity::EquitySnapshot,
+    ) -> Result<()> {
+        use worker::wasm_bindgen::JsValue;
+        let trade_ref = snap.trade_id_ref.as_deref()
+            .map(|s| s.into()).unwrap_or(JsValue::NULL);
+        self.db.prepare(
+            "INSERT INTO equity_history
+             (timestamp, event_type, equity, cash, open_position_mtm,
+              realized_pnl_day, unrealized_pnl_day, open_position_count, trade_id_ref)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(date(timestamp)) WHERE event_type = 'eod'
+               DO UPDATE SET equity = excluded.equity, cash = excluded.cash,
+                 open_position_mtm = excluded.open_position_mtm,
+                 realized_pnl_day = excluded.realized_pnl_day,
+                 unrealized_pnl_day = excluded.unrealized_pnl_day,
+                 open_position_count = excluded.open_position_count"
+        ).bind(&[
+            snap.timestamp.as_str().into(),
+            snap.event_type.into(),
+            snap.equity.into(), snap.cash.into(),
+            snap.open_position_mtm.into(),
+            snap.realized_pnl_day.into(), snap.unrealized_pnl_day.into(),
+            (snap.open_position_count as f64).into(),
+            trade_ref,
+        ])?.run().await?;
+        Ok(())
+    }
+
+    pub async fn insert_portfolio_greeks_eod(
+        &self, date: &str,
+        pg: &crate::measurement::portfolio_greeks::PortfolioGreeks,
+    ) -> Result<()> {
+        let delta_json = serde_json::to_string(&pg.delta_by_underlying)
+            .map_err(|e| worker::Error::RustError(e.to_string()))?;
+        self.db.prepare(
+            "INSERT OR REPLACE INTO portfolio_greeks_eod
+             (date, beta_weighted_delta, total_gamma, total_vega, total_theta,
+              delta_by_underlying, max_gamma_single_position, max_vega_single_position,
+              open_position_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ).bind(&[
+            date.into(),
+            pg.beta_weighted_delta.into(),
+            pg.total_gamma.into(), pg.total_vega.into(), pg.total_theta.into(),
+            delta_json.as_str().into(),
+            pg.max_gamma_single_position.into(),
+            pg.max_vega_single_position.into(),
+            (pg.open_position_count as f64).into(),
+        ])?.run().await?;
+        Ok(())
+    }
+
+    pub async fn insert_market_context_daily(
+        &self, date: &str,
+        spot_vix: Option<f64>, source: &str, source_date: Option<&str>,
+        vixy_close: Option<f64>,
+        spy_20d_rv: Option<f64>, spy_20d_ret: Option<f64>, spy_dd: Option<f64>,
+    ) -> Result<()> {
+        use worker::wasm_bindgen::JsValue;
+        let vix = spot_vix.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let src_date = source_date.map(|s| s.into()).unwrap_or(JsValue::NULL);
+        let vy = vixy_close.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let rv = spy_20d_rv.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let rt = spy_20d_ret.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let dd = spy_dd.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        self.db.prepare(
+            "INSERT OR REPLACE INTO market_context_daily
+             (date, spot_vix, spot_vix_source, spot_vix_source_date, vixy_close,
+              spy_20d_realized_vol, spy_20d_return, spy_drawdown_from_52w_high)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        ).bind(&[
+            date.into(), vix, source.into(), src_date, vy, rv, rt, dd,
+        ])?.run().await?;
+        Ok(())
+    }
+
+    pub async fn insert_metrics_weekly(&self, row: MetricsWeeklyRow) -> Result<()> {
+        use worker::wasm_bindgen::JsValue;
+        let sh = row.sharpe.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let so = row.sortino.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let pf = row.profit_factor.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let wr = row.win_rate.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let sk = row.pnl_skew.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let md = row.max_drawdown_pct.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let ms = row.mean_slippage_vs_mid.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let mx = row.max_slippage_vs_mid.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let rt = row.slippage_vs_orats_ratio.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let fvp = row.fill_size_violation_pct.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        self.db.prepare(
+            "INSERT INTO metrics_weekly (generated_at, window_start, window_end, trade_count,
+             sharpe, sortino, profit_factor, win_rate, pnl_skew, max_drawdown_pct,
+             mean_slippage_vs_mid, max_slippage_vs_mid, slippage_vs_orats_ratio,
+             fill_size_violation_count, fill_size_violation_pct,
+             regime_buckets, greek_ranges, sample_size_tag)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ).bind(&[
+            row.generated_at.as_str().into(),
+            row.window_start.as_str().into(),
+            row.window_end.as_str().into(),
+            (row.trade_count as f64).into(),
+            sh, so, pf, wr, sk, md, ms, mx, rt,
+            (row.fill_size_violation_count as f64).into(), fvp,
+            row.regime_buckets_json.as_str().into(),
+            row.greek_ranges_json.as_str().into(),
+            row.sample_size_tag.as_str().into(),
+        ])?.run().await?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,6 +491,24 @@ mod tests {
             let nbbo: crate::measurement::nbbo::NbboSnapshot = unreachable!();
             let reason: crate::types::ExitReason = unreachable!();
             db.close_trade("id", 0.20, &reason, 55.0, Some(&nbbo)).await.ok();
+        };
+    }
+
+    #[test]
+    fn measurement_inserters_exist_with_expected_signatures() {
+        use crate::measurement::equity::EquitySnapshot;
+        use crate::measurement::portfolio_greeks::PortfolioGreeks;
+        let _unused = async {
+            let db: D1Client = unreachable!();
+            let snap: EquitySnapshot = unreachable!();
+            let pg: PortfolioGreeks = unreachable!();
+            db.insert_equity_snapshot(&snap).await.ok();
+            db.insert_portfolio_greeks_eod("2026-04-22", &pg).await.ok();
+            db.insert_market_context_daily(
+                "2026-04-22", Some(17.5), "fred", Some("2026-04-21"),
+                Some(14.2), Some(0.12), Some(0.02), Some(0.03),
+            ).await.ok();
+            db.insert_metrics_weekly(MetricsWeeklyRow::default()).await.ok();
         };
     }
 }
