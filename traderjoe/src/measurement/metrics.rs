@@ -129,6 +129,129 @@ pub fn classify_regime(spot_vix: f64) -> &'static str {
     else { "high_vol" }
 }
 
+use crate::db::d1::MarketContextRow;
+use crate::types::Trade;
+use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
+pub struct MetricsInput {
+    pub window_start: String,
+    pub window_end: String,
+    pub trades: Vec<Trade>,
+    pub equity_eod: Vec<(String, f64)>,
+    pub greeks_eod: Vec<(String, f64, f64, f64, f64)>,
+    pub market_context: Vec<MarketContextRow>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MetricBundle {
+    pub window_start: String,
+    pub window_end: String,
+    pub trade_count: usize,
+    pub sharpe: f64,
+    pub sortino: f64,
+    pub profit_factor: f64,
+    pub win_rate: f64,
+    pub pnl_skew: f64,
+    pub max_drawdown_pct: f64,
+    pub mean_slippage_vs_mid: f64,
+    pub max_slippage_vs_mid: f64,
+    pub slippage_vs_orats_ratio: f64,
+    pub fill_size_violation_count: usize,
+    pub fill_size_violation_pct: f64,
+    pub regime_buckets: HashMap<String, (i64, f64)>,
+    pub greek_ranges: HashMap<String, (f64, f64, f64)>,
+    pub sample_size_tag: SampleSizeTag,
+}
+
+pub fn compute_metrics(input: MetricsInput) -> MetricBundle {
+    let n = input.trades.len();
+    let tag = sample_size_tag(n);
+
+    let pnls: Vec<f64> = input.trades.iter().filter_map(|t| t.net_pnl).collect();
+    let wins = pnls.iter().filter(|p| **p > 0.0).count();
+    let win_rate = if pnls.is_empty() { 0.0 } else { wins as f64 / pnls.len() as f64 };
+
+    let equity_values: Vec<f64> = input.equity_eod.iter().map(|(_, e)| *e).collect();
+    let daily_returns: Vec<f64> = equity_values.windows(2)
+        .filter(|w| w[0] > 0.0)
+        .map(|w| (w[1] - w[0]) / w[0])
+        .collect();
+
+    let sharpe = compute_sharpe(&daily_returns);
+    let sortino = compute_sortino(&daily_returns);
+    let profit_factor = compute_profit_factor(&pnls);
+    let pnl_skew = compute_pnl_skew(&pnls);
+    let max_drawdown_pct = compute_max_drawdown_pct(&equity_values);
+
+    let slippage_inputs: Vec<SlippageInput> = input.trades.iter().filter_map(|t| {
+        let mid = t.entry_net_mid?;
+        let fill = t.fill_price?;
+        let sw = (t.entry_short_ask? - t.entry_short_bid?).abs();
+        let lw = (t.entry_long_ask? - t.entry_long_bid?).abs();
+        Some(SlippageInput { entry_mid: mid, entry_fill: fill, leg_width: (sw + lw) / 2.0 })
+    }).collect();
+    let slip = compute_slippage_stats(&slippage_inputs);
+
+    let violations = input.trades.iter().filter(|t| {
+        match (t.nbbo_displayed_size_short, t.nbbo_displayed_size_long) {
+            (Some(s), Some(l)) => paper_fill_violation(t.contracts, s, l),
+            _ => false,
+        }
+    }).count();
+    let violation_pct = if n == 0 { 0.0 } else { violations as f64 / n as f64 };
+
+    let ctx_by_date: HashMap<String, Option<f64>> = input.market_context.iter()
+        .map(|m| (m.date.clone(), m.spot_vix))
+        .collect();
+    let mut regime_buckets: HashMap<String, (i64, f64)> = HashMap::new();
+    for t in &input.trades {
+        let date = t.created_at.get(..10).unwrap_or(&t.created_at).to_string();
+        let vix = ctx_by_date.get(&date).and_then(|v| *v).unwrap_or(20.0);
+        let bucket = classify_regime(vix).to_string();
+        let entry = regime_buckets.entry(bucket).or_insert((0, 0.0));
+        entry.0 += 1;
+        entry.1 += t.net_pnl.unwrap_or(0.0);
+    }
+
+    let mut greek_ranges: HashMap<String, (f64, f64, f64)> = HashMap::new();
+    if !input.greeks_eod.is_empty() {
+        let k = input.greeks_eod.len() as f64;
+        let bwd: Vec<f64> = input.greeks_eod.iter().map(|g| g.1).collect();
+        let gam: Vec<f64> = input.greeks_eod.iter().map(|g| g.2).collect();
+        let veg: Vec<f64> = input.greeks_eod.iter().map(|g| g.3).collect();
+        let the: Vec<f64> = input.greeks_eod.iter().map(|g| g.4).collect();
+        greek_ranges.insert("beta_weighted_delta".to_string(), (
+            bwd.iter().cloned().fold(f64::INFINITY, f64::min),
+            bwd.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+            bwd.iter().sum::<f64>() / k));
+        greek_ranges.insert("total_gamma".to_string(), (
+            gam.iter().cloned().fold(f64::INFINITY, f64::min),
+            gam.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+            gam.iter().sum::<f64>() / k));
+        greek_ranges.insert("total_vega".to_string(), (
+            veg.iter().cloned().fold(f64::INFINITY, f64::min),
+            veg.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+            veg.iter().sum::<f64>() / k));
+        greek_ranges.insert("total_theta".to_string(), (
+            the.iter().cloned().fold(f64::INFINITY, f64::min),
+            the.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+            the.iter().sum::<f64>() / k));
+    }
+
+    MetricBundle {
+        window_start: input.window_start, window_end: input.window_end,
+        trade_count: n, sharpe, sortino, profit_factor, win_rate, pnl_skew,
+        max_drawdown_pct,
+        mean_slippage_vs_mid: slip.mean_abs,
+        max_slippage_vs_mid: slip.max_abs,
+        slippage_vs_orats_ratio: slip.ratio_vs_orats,
+        fill_size_violation_count: violations,
+        fill_size_violation_pct: violation_pct,
+        regime_buckets, greek_ranges, sample_size_tag: tag,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,5 +345,49 @@ mod tests {
         assert_eq!(classify_regime(12.0), "low_vol");
         assert_eq!(classify_regime(20.0), "med_vol");
         assert_eq!(classify_regime(30.0), "high_vol");
+    }
+
+    use crate::types::{Trade, TradeStatus, SpreadType};
+    use crate::db::d1::MarketContextRow;
+
+    fn closed_trade(id: &str, net_pnl: f64, created: &str) -> Trade {
+        Trade {
+            id: id.to_string(), created_at: created.to_string(),
+            underlying: "SPY".to_string(), spread_type: SpreadType::BullPut,
+            short_strike: 460.0, long_strike: 455.0, expiration: "2026-05-15".to_string(),
+            contracts: 1, entry_credit: 0.50, max_loss: 450.0,
+            broker_order_id: Some("o".to_string()), status: TradeStatus::Closed,
+            fill_price: Some(0.48), fill_time: Some(created.to_string()),
+            exit_price: Some(0.20), exit_time: Some(created.to_string()),
+            exit_reason: None, net_pnl: Some(net_pnl),
+            iv_rank: None, short_delta: None, short_theta: None,
+            entry_short_bid: Some(0.74), entry_short_ask: Some(0.76),
+            entry_long_bid: Some(0.24), entry_long_ask: Some(0.26),
+            entry_net_mid: Some(0.50),
+            exit_short_bid: None, exit_short_ask: None,
+            exit_long_bid: None, exit_long_ask: None, exit_net_mid: None,
+            entry_short_gamma: None, entry_short_vega: None,
+            entry_long_delta: None, entry_long_gamma: None, entry_long_vega: None,
+            nbbo_displayed_size_short: Some(50), nbbo_displayed_size_long: Some(75),
+            nbbo_snapshot_time: None,
+        }
+    }
+
+    #[test]
+    fn compute_metrics_small_sample_tagged_insufficient() {
+        let trades = vec![closed_trade("t1", 50.0, "2026-04-01T00:00:00Z")];
+        let equity: Vec<(String, f64)> = vec![
+            ("2026-04-01".to_string(), 100_000.0),
+            ("2026-04-02".to_string(), 100_050.0),
+        ];
+        let greeks: Vec<(String, f64, f64, f64, f64)> = vec![];
+        let ctx: Vec<MarketContextRow> = vec![];
+        let bundle = compute_metrics(MetricsInput {
+            window_start: "2026-04-01".to_string(),
+            window_end: "2026-04-02".to_string(),
+            trades, equity_eod: equity, greeks_eod: greeks, market_context: ctx,
+        });
+        assert_eq!(bundle.sample_size_tag, SampleSizeTag::Insufficient);
+        assert_eq!(bundle.trade_count, 1);
     }
 }
