@@ -1,6 +1,7 @@
 """Meeting follow-through orchestrator. Invoked by cron every 15 min."""
 from __future__ import annotations
 import os
+import sys
 from pathlib import Path
 
 
@@ -10,6 +11,7 @@ _DEFAULT_MODEL = "openai/gpt-5-nano"
 def _load_hermes_env() -> None:
     hermes_env = Path.home() / ".hermes" / ".env"
     if not hermes_env.exists():
+        print(f"WARNING: hermes env file not found: {hermes_env}", file=sys.stderr)
         return
     with open(hermes_env, "r", encoding="utf-8") as f:
         for line in f:
