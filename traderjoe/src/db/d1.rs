@@ -96,28 +96,48 @@ impl D1Client {
         iv_rank: Option<f64>,
         short_delta: Option<f64>,
         short_theta: Option<f64>,
+        nbbo: Option<&crate::measurement::nbbo::NbboSnapshot>,
+        entry_short_gamma: Option<f64>,
+        entry_short_vega: Option<f64>,
+        entry_long_delta: Option<f64>,
+        entry_long_gamma: Option<f64>,
+        entry_long_vega: Option<f64>,
     ) -> Result<()> {
+        use worker::wasm_bindgen::JsValue;
+        let nb_short_bid = nbbo.map(|n| n.short_bid.into()).unwrap_or(JsValue::NULL);
+        let nb_short_ask = nbbo.map(|n| n.short_ask.into()).unwrap_or(JsValue::NULL);
+        let nb_long_bid = nbbo.map(|n| n.long_bid.into()).unwrap_or(JsValue::NULL);
+        let nb_long_ask = nbbo.map(|n| n.long_ask.into()).unwrap_or(JsValue::NULL);
+        let nb_net_mid = nbbo.map(|n| n.net_mid.into()).unwrap_or(JsValue::NULL);
+        let nb_sz_short = nbbo.and_then(|n| n.short_bid_size).map(|s| (s as f64).into()).unwrap_or(JsValue::NULL);
+        let nb_sz_long = nbbo.and_then(|n| n.long_ask_size).map(|s| (s as f64).into()).unwrap_or(JsValue::NULL);
+        let nb_time = nbbo.map(|n| n.snapshot_time.as_str().into()).unwrap_or(JsValue::NULL);
+
         self.db
             .prepare(
                 "INSERT INTO trades (id, underlying, spread_type, short_strike, long_strike,
                 expiration, contracts, entry_credit, max_loss, broker_order_id,
-                iv_rank, short_delta, short_theta)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                iv_rank, short_delta, short_theta,
+                entry_short_bid, entry_short_ask, entry_long_bid, entry_long_ask, entry_net_mid,
+                entry_short_gamma, entry_short_vega, entry_long_delta, entry_long_gamma, entry_long_vega,
+                nbbo_displayed_size_short, nbbo_displayed_size_long, nbbo_snapshot_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&[
-                id.into(),
-                underlying.into(),
-                spread_type.as_str().into(),
-                short_strike.into(),
-                long_strike.into(),
-                expiration.into(),
-                (contracts as f64).into(),
-                entry_credit.into(),
-                max_loss.into(),
-                broker_order_id.map(|s| s.into()).unwrap_or(worker::wasm_bindgen::JsValue::NULL),
-                iv_rank.map(|v| v.into()).unwrap_or(worker::wasm_bindgen::JsValue::NULL),
-                short_delta.map(|v| v.into()).unwrap_or(worker::wasm_bindgen::JsValue::NULL),
-                short_theta.map(|v| v.into()).unwrap_or(worker::wasm_bindgen::JsValue::NULL),
+                id.into(), underlying.into(), spread_type.as_str().into(),
+                short_strike.into(), long_strike.into(), expiration.into(),
+                (contracts as f64).into(), entry_credit.into(), max_loss.into(),
+                broker_order_id.map(|s| s.into()).unwrap_or(JsValue::NULL),
+                iv_rank.map(|v| v.into()).unwrap_or(JsValue::NULL),
+                short_delta.map(|v| v.into()).unwrap_or(JsValue::NULL),
+                short_theta.map(|v| v.into()).unwrap_or(JsValue::NULL),
+                nb_short_bid, nb_short_ask, nb_long_bid, nb_long_ask, nb_net_mid,
+                entry_short_gamma.map(|v| v.into()).unwrap_or(JsValue::NULL),
+                entry_short_vega.map(|v| v.into()).unwrap_or(JsValue::NULL),
+                entry_long_delta.map(|v| v.into()).unwrap_or(JsValue::NULL),
+                entry_long_gamma.map(|v| v.into()).unwrap_or(JsValue::NULL),
+                entry_long_vega.map(|v| v.into()).unwrap_or(JsValue::NULL),
+                nb_sz_short, nb_sz_long, nb_time,
             ])?
             .run()
             .await?;
@@ -303,5 +323,21 @@ mod tests {
         let row = json!({ "id": "trade-123" });
         let result = TradeRow::from_d1_row(&row);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn create_trade_accepts_full_parameter_list() {
+        // Compile-only assertion that create_trade accepts NBBO + expanded Greeks.
+        // Build an async block that would call it; never executed.
+        let _unused = async {
+            let db: D1Client = unreachable!();
+            let nbbo: crate::measurement::nbbo::NbboSnapshot = unreachable!();
+            db.create_trade(
+                "id", "SPY", &SpreadType::BullPut, 460.0, 455.0, "2026-05-15",
+                2, 0.75, 425.0, None, Some(65.0), Some(-0.28), Some(0.05),
+                Some(&nbbo),
+                Some(0.010), Some(0.30), Some(-0.18), Some(0.008), Some(0.25),
+            ).await.ok();
+        };
     }
 }

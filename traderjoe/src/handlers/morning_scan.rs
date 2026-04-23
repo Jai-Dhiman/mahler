@@ -261,6 +261,7 @@ async fn run_inner(env: &Env, force: bool) -> Result<()> {
             Some(iv_metrics.iv_rank),
             spread.short_delta,
             spread.short_theta,
+            None, None, None, None, None, None,  // TEMP: Task 18 wires real values
         ).await {
             Ok(_) => {}
             Err(e) => {
