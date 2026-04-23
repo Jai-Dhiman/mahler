@@ -23,7 +23,11 @@ PASS if `missing = 0`.
 SELECT COUNT(*) AS violations FROM trades
  WHERE created_at >= date('now','-30 days')
    AND nbbo_displayed_size_short IS NOT NULL
-   AND contracts > MIN(nbbo_displayed_size_short, nbbo_displayed_size_long);
+   AND contracts > CASE
+       WHEN nbbo_displayed_size_short < nbbo_displayed_size_long
+       THEN nbbo_displayed_size_short
+       ELSE nbbo_displayed_size_long
+   END;
 ```
 PASS if `violations = 0`.
 
