@@ -95,7 +95,7 @@ describe("scheduled handler", () => {
 
     const controller = createScheduledController({
       scheduledTime: new Date("2026-04-19T07:00:00Z").getTime(),
-      cron: "0 7 * * MON",
+      cron: "0 7 * * SUN",
     });
     await worker.scheduled!(controller, env, {} as ExecutionContext);
 

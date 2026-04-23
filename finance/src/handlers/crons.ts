@@ -54,7 +54,7 @@ export async function handleScheduled(event: ScheduledEvent, env: Env): Promise<
   await syncAllItems(env, today);
   await snapshotAlpaca(env, today);
 
-  if (event.cron === "0 7 * * MON") {
+  if (event.cron === "0 7 * * SUN") {
     const data = await computeWeeklySummary(env, new Date(event.scheduledTime));
     await postWeeklySummary(env, data);
     await logEvent(env, {

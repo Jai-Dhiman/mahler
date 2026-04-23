@@ -47,15 +47,10 @@ describe("getBalances", () => {
 });
 
 describe("verifyWebhook", () => {
-  it("accepts a request with matching shared-secret header and rejects others", () => {
+  it("accepts a request with matching shared-secret header and rejects others", async () => {
     const body = JSON.stringify({ webhook_type: "ITEM", webhook_code: "ERROR" });
-    const ok = verifyWebhook(env, body, new Headers({ "plaid-verification": "test-webhook-secret" }));
-    expect(ok).toBe(true);
-
-    const bad = verifyWebhook(env, body, new Headers({ "plaid-verification": "wrong" }));
-    expect(bad).toBe(false);
-
-    const missing = verifyWebhook(env, body, new Headers());
-    expect(missing).toBe(false);
+    await expect(verifyWebhook(env, body, new Headers({ "plaid-verification": "test-webhook-secret" }))).resolves.toBe(true);
+    await expect(verifyWebhook(env, body, new Headers({ "plaid-verification": "wrong" }))).resolves.toBe(false);
+    await expect(verifyWebhook(env, body, new Headers())).resolves.toBe(false);
   });
 });

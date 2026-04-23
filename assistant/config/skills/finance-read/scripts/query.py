@@ -61,7 +61,8 @@ def main() -> int:
     elif args.command == "history":
         if not args.account_id:
             raise SystemExit("--account-id required for history")
-        path = f"/history?account_id={args.account_id}&days={args.days}"
+        from urllib.parse import urlencode
+        path = f"/history?{urlencode({'account_id': args.account_id, 'days': args.days})}"
         out = _request(path, mock_from=args.mock_from)
     elif args.command == "refresh":
         out = _request("/refresh", method="POST", mock_from=args.mock_from)

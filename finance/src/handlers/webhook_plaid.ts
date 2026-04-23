@@ -13,7 +13,7 @@ const REAUTH_CODES = new Set(["ERROR", "PENDING_EXPIRATION", "USER_PERMISSION_RE
 
 export async function handlePlaidWebhook(req: Request, env: Env): Promise<Response> {
   const raw = await req.text();
-  if (!verifyWebhook(env, raw, req.headers)) {
+  if (!await verifyWebhook(env, raw, req.headers)) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
   const body = JSON.parse(raw) as PlaidWebhookBody;
