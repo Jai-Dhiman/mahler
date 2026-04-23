@@ -1,5 +1,6 @@
 import { handleApi } from "./handlers/api";
 import { handleLink } from "./handlers/link";
+import { handlePlaidWebhook } from "./handlers/webhook_plaid";
 import type { Env } from "./types";
 
 const API_PATHS = new Set(["/balances", "/networth", "/history", "/refresh"]);
@@ -13,6 +14,7 @@ export default {
     }
     if (API_PATHS.has(url.pathname)) return handleApi(req, env);
     if (LINK_PATHS.has(url.pathname)) return handleLink(req, env);
+    if (url.pathname === "/webhook/plaid") return handlePlaidWebhook(req, env);
     return new Response("not found", { status: 404 });
   },
 
