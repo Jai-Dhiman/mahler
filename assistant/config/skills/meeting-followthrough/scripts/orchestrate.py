@@ -2,9 +2,15 @@
 from __future__ import annotations
 import json
 import os
+import ssl
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from d1_client import D1Client
 
 
 _DEFAULT_MODEL = "openai/gpt-5-nano"
@@ -201,13 +207,6 @@ def _parse_task_line(line: str) -> dict:
             attendee = title[1:end]
     return {"title": title, "priority": priority, "attendee": attendee}
 
-
-import ssl
-import urllib.request
-import urllib.error
-
-sys.path.insert(0, str(Path(__file__).parent))
-from d1_client import D1Client
 
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
