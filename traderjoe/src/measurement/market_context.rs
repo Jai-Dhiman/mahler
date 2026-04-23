@@ -38,6 +38,28 @@ pub fn compute_spy_stats(bars_20d: &[Bar], bars_52w: &[Bar]) -> SpyStats {
     SpyStats { realized_vol_20d, return_20d, drawdown_from_52w_high }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpotVixReading {
+    pub value: f64,
+    pub source: &'static str,
+    pub source_date: String,
+}
+
+/// Parse FRED VIXCLS CSV. Lines are `DATE,VALUE`. Missing values are `.`.
+/// Returns the most recent row with a numeric VIX, or None.
+pub fn parse_fred_vix_csv(body: &str) -> Option<SpotVixReading> {
+    body.lines().rev()
+        .filter(|l| !l.is_empty() && !l.starts_with("DATE"))
+        .filter_map(|l| {
+            let mut parts = l.split(',');
+            let date = parts.next()?.trim();
+            let val = parts.next()?.trim();
+            let v: f64 = val.parse().ok()?;
+            Some(SpotVixReading { value: v, source: "fred", source_date: date.to_string() })
+        })
+        .next()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -66,5 +88,21 @@ mod tests {
         let bars52 = bars20.clone();
         let stats = compute_spy_stats(&bars20, &bars52);
         assert!((stats.return_20d - 0.02).abs() < 1e-6);
+    }
+
+    #[test]
+    fn parse_fred_vix_csv_returns_most_recent_nonempty_row() {
+        // FRED CSV format: "DATE,VIXCLS\n2026-04-18,16.23\n2026-04-21,17.45\n2026-04-22,.\n"
+        // Value "." is FRED's marker for "no data yet" -- skip to prior row.
+        let csv = "DATE,VIXCLS\n2026-04-18,16.23\n2026-04-21,17.45\n2026-04-22,.\n";
+        let parsed = parse_fred_vix_csv(csv).expect("parse");
+        assert!((parsed.value - 17.45).abs() < 1e-6);
+        assert_eq!(parsed.source_date, "2026-04-21");
+    }
+
+    #[test]
+    fn parse_fred_vix_csv_returns_none_when_all_rows_empty() {
+        let csv = "DATE,VIXCLS\n2026-04-21,.\n2026-04-22,.\n";
+        assert!(parse_fred_vix_csv(csv).is_none());
     }
 }
