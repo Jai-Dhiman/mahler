@@ -130,7 +130,7 @@ pub async fn run(env: &Env) -> Result<()> {
 
             let net_pnl = (trade.entry_credit - current_debit) * 100.0 * trade.contracts as f64;
 
-            match db.close_trade(&trade.id, current_debit, &exit_reason, net_pnl).await {
+            match db.close_trade(&trade.id, current_debit, &exit_reason, net_pnl, None).await {
                 Err(e) => {
                     console_log!(
                         "CRITICAL: DB close_trade failed for trade {} after close order {}.",

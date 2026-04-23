@@ -163,19 +163,28 @@ impl D1Client {
         exit_price: f64,
         exit_reason: &ExitReason,
         net_pnl: f64,
+        exit_nbbo: Option<&crate::measurement::nbbo::NbboSnapshot>,
     ) -> Result<bool> {
         use chrono::Utc;
+        use worker::wasm_bindgen::JsValue;
         let now = Utc::now().to_rfc3339();
+        let ex_sb = exit_nbbo.map(|n| n.short_bid.into()).unwrap_or(JsValue::NULL);
+        let ex_sa = exit_nbbo.map(|n| n.short_ask.into()).unwrap_or(JsValue::NULL);
+        let ex_lb = exit_nbbo.map(|n| n.long_bid.into()).unwrap_or(JsValue::NULL);
+        let ex_la = exit_nbbo.map(|n| n.long_ask.into()).unwrap_or(JsValue::NULL);
+        let ex_mid = exit_nbbo.map(|n| n.net_mid.into()).unwrap_or(JsValue::NULL);
+
         let result = self.db
             .prepare(
                 "UPDATE trades SET status = 'closed', exit_price = ?, exit_time = ?,
-                exit_reason = ?, net_pnl = ? WHERE id = ? AND status = 'open'",
+                exit_reason = ?, net_pnl = ?,
+                exit_short_bid = ?, exit_short_ask = ?, exit_long_bid = ?, exit_long_ask = ?, exit_net_mid = ?
+                WHERE id = ? AND status = 'open'",
             )
             .bind(&[
-                exit_price.into(),
-                now.as_str().into(),
-                exit_reason.as_str().into(),
-                net_pnl.into(),
+                exit_price.into(), now.as_str().into(),
+                exit_reason.as_str().into(), net_pnl.into(),
+                ex_sb, ex_sa, ex_lb, ex_la, ex_mid,
                 trade_id.into(),
             ])?
             .run()
@@ -338,6 +347,16 @@ mod tests {
                 Some(&nbbo),
                 Some(0.010), Some(0.30), Some(-0.18), Some(0.008), Some(0.25),
             ).await.ok();
+        };
+    }
+
+    #[test]
+    fn close_trade_signature_accepts_exit_nbbo() {
+        let _unused = async {
+            let db: D1Client = unreachable!();
+            let nbbo: crate::measurement::nbbo::NbboSnapshot = unreachable!();
+            let reason: crate::types::ExitReason = unreachable!();
+            db.close_trade("id", 0.20, &reason, 55.0, Some(&nbbo)).await.ok();
         };
     }
 }
