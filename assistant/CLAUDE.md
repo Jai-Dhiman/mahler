@@ -55,6 +55,7 @@ assistant/
       reflection-journal/ # Sunday cron: reflection questions → D1 → Honcho
       relationship-manager/ # Contact CRM with Google Calendar auto-sync
       urgent-alert/       # Fires on URGENT-classified emails
+      finance-read/       # Read-only queries against finance-state Worker (balances, net worth, history)
     shared/
       honcho_client.py    # Shared honcho-ai SDK client (conclude, list_conclusions, query_conclusions)
 ```
@@ -95,4 +96,4 @@ flyctl status
 
 ## Roadmap
 
-**Shipped:** K1 (notion-wiki), E2 (email-triage + reply-attribution), E2a (Honcho memory), E3 (kaizen-reflection + kaizen-context), E3+ (reflection-journal + project analysis), E4 (google-calendar + meeting-prep + calendar-aware), E4.1 (conversation-history), E4b (project-context + SessionStop hook), E5 (relationship-manager), E7 (fathom-webhook CF Worker + meeting-followthrough skill), E8 (evening-sweep), E10 morning-brief news extension, memory-loop (shared honcho-ai SDK client + project-synthesis + memory-kaizen Sunday cron skills).
+**Shipped:** K1 (notion-wiki), E2 (email-triage + reply-attribution), E2a (Honcho memory), E3 (kaizen-reflection + kaizen-context), E3+ (reflection-journal + project analysis), E4 (google-calendar + meeting-prep + calendar-aware), E4.1 (conversation-history), E4b (project-context + SessionStop hook), E5 (relationship-manager), E7 (fathom-webhook CF Worker + meeting-followthrough skill), E8 (evening-sweep), E10 morning-brief news extension, memory-loop (shared honcho-ai SDK client + project-synthesis + memory-kaizen Sunday cron skills), finance-os-phase-0 (finance-state CF Worker + finance-read skill).
