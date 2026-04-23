@@ -5,6 +5,7 @@ mod broker;
 mod config;
 mod db;
 mod handlers;
+pub mod measurement;
 mod notifications;
 mod risk;
 mod types;
