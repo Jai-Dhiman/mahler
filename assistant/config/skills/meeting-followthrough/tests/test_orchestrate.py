@@ -259,5 +259,41 @@ class TestTasksCreate(unittest.TestCase):
         d1.mark_done.assert_called_once_with(71)
 
 
+class TestCrmTalkedTo(unittest.TestCase):
+    def test_talked_to_only_for_attendees_found_in_crm(self):
+        import orchestrate
+        row = {
+            "recording_id": 80,
+            "title": "Quarterly",
+            "attendees": (
+                '[{"name": "Alice", "email": "alice@ext.com", "is_external": true},'
+                ' {"name": "Bob", "email": "bob@ext.com", "is_external": true}]'
+            ),
+            "summary": "quarterly review",
+        }
+        calls: list[list[str]] = []
+        def runner(argv, **_):
+            calls.append(argv)
+            if "summarize" in argv and "Alice" in argv:
+                return MagicMock(returncode=0, stdout="Alice context", stderr="")
+            if "summarize" in argv and "Bob" in argv:
+                return MagicMock(returncode=1, stdout="", stderr="not in CRM")
+            return MagicMock(returncode=0, stdout="", stderr="")
+        captured_post = {}
+        def poster(content):
+            captured_post["c"] = content
+        orchestrate.process_meeting(
+            row,
+            runner=runner,
+            llm_caller=MagicMock(return_value="no action items"),
+            discord_poster=poster,
+            d1_client=MagicMock(),
+        )
+        talked_to = [c for c in calls if "talked-to" in c]
+        self.assertEqual(len(talked_to), 1)
+        self.assertIn("Alice", talked_to[0])
+        self.assertIn("CRM updated: Alice", captured_post["c"])
+
+
 if __name__ == "__main__":
     unittest.main()

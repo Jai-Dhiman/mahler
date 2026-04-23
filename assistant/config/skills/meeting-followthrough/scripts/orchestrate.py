@@ -98,6 +98,24 @@ def _create_tasks(action_items: list[dict], runner) -> list[str]:
     return created
 
 
+def _update_crm_last_contact(crm_context: dict[str, str], attendees: list[dict], runner) -> list[str]:
+    updated: list[str] = []
+    for a in attendees:
+        email = (a.get("email") or "").lower()
+        name = a.get("name")
+        if not name or email not in crm_context:
+            continue
+        result = runner(
+            ["python3", str(Path.home() / ".hermes" / "skills" / "relationship-manager" / "scripts" / "contacts.py"), "talked-to", "--name", name],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode == 0:
+            updated.append(name)
+    return updated
+
+
 def process_meeting(row, *, runner, llm_caller, discord_poster, d1_client) -> str:
     title = row["title"]
     attendees = _parse_attendees(row["attendees"])
@@ -119,7 +137,12 @@ def process_meeting(row, *, runner, llm_caller, discord_poster, d1_client) -> st
         action_lines = "\n".join(f"  · {t}" for t in created_titles)
     else:
         action_lines = "  None"
-    crm_line = "CRM updated: No CRM matches"
+    updated_contacts = _update_crm_last_contact(crm_context, attendees, runner)
+    crm_line = (
+        f"CRM updated: {', '.join(updated_contacts)}"
+        if updated_contacts
+        else "CRM updated: No CRM matches"
+    )
     summary_parts = [
         f"Post-meeting: {title}",
         "Action items created:",
