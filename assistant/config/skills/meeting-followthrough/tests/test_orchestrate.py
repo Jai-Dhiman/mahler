@@ -344,5 +344,28 @@ class TestMainErrorHandling(unittest.TestCase):
         self.assertTrue(any("Flaky" in p and "OpenRouter 500" in p for p in posted))
 
 
+class TestCliEntryPoint(unittest.TestCase):
+    def test_cli_entry_point_with_empty_queue_returns_zero(self):
+        import orchestrate
+        fake_d1 = MagicMock()
+        fake_d1.fetch_pending.return_value = []
+        captured = io.StringIO()
+        env = {
+            "CF_ACCOUNT_ID": "acct",
+            "CF_D1_DATABASE_ID": "db",
+            "CF_API_TOKEN": "tok",
+            "OPENROUTER_API_KEY": "k",
+            "DISCORD_TRIAGE_WEBHOOK": "https://discord.com/api/webhooks/x/y",
+        }
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("orchestrate.D1Client", return_value=fake_d1),
+            patch("sys.stdout", captured),
+        ):
+            rc = orchestrate.cli_main()
+        self.assertEqual(rc, 0)
+        self.assertIn("NO_WORK", captured.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

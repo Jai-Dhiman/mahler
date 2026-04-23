@@ -202,6 +202,84 @@ def _parse_task_line(line: str) -> dict:
     return {"title": title, "priority": priority, "attendee": attendee}
 
 
+import ssl
+import urllib.request
+import urllib.error
+
+sys.path.insert(0, str(Path(__file__).parent))
+from d1_client import D1Client
+
+_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+
+def _build_https_opener() -> urllib.request.OpenerDirector:
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = True
+    ctx.verify_mode = ssl.CERT_REQUIRED
+    opener = urllib.request.OpenerDirector()
+    opener.add_handler(urllib.request.HTTPSHandler(context=ctx))
+    opener.add_handler(urllib.request.HTTPDefaultErrorHandler())
+    opener.add_handler(urllib.request.UnknownHandler())
+    return opener
+
+
+_OPENER = _build_https_opener()
+
+
+def _call_openrouter(prompt: str) -> str:
+    api_key = os.environ["OPENROUTER_API_KEY"]
+    model = os.environ.get("OPENROUTER_MODEL", _DEFAULT_MODEL)
+    body = json.dumps({
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        _OPENROUTER_URL,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with _OPENER.open(req) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"OpenRouter error: HTTP {exc.code}") from exc
+    return data["choices"][0]["message"]["content"]
+
+
+def _post_discord(content: str) -> None:
+    post_discord_py = Path(__file__).parent / "post_discord.py"
+    result = subprocess.run(
+        ["python3", str(post_discord_py)],
+        input=content,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"post_discord.py failed: {result.stderr}")
+
+
+def cli_main() -> int:
+    _load_hermes_env()
+    d1 = D1Client(
+        account_id=os.environ["CF_ACCOUNT_ID"],
+        database_id=os.environ["CF_D1_DATABASE_ID"],
+        api_token=os.environ["CF_API_TOKEN"],
+    )
+    d1.ensure_queue_table()
+    return main(
+        argv=sys.argv[1:],
+        d1_client=d1,
+        runner=subprocess.run,
+        llm_caller=_call_openrouter,
+        discord_poster=_post_discord,
+    )
+
+
 def main(argv, *, d1_client, runner, llm_caller, discord_poster) -> int:
     rows = d1_client.fetch_pending()
     if not rows:
@@ -226,3 +304,7 @@ def main(argv, *, d1_client, runner, llm_caller, discord_poster) -> int:
                 print(f"discord_poster also failed: {disc_exc}", file=sys.stderr)
             print(err)
     return 1 if had_error else 0
+
+
+if __name__ == "__main__":
+    sys.exit(cli_main())
