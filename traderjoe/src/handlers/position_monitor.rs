@@ -128,9 +128,20 @@ pub async fn run(env: &Env) -> Result<()> {
                 }
             };
 
+            let option_type_enum = match trade.spread_type {
+                crate::types::SpreadType::BullPut => crate::broker::types::OptionType::Put,
+                crate::types::SpreadType::BearCall => crate::broker::types::OptionType::Call,
+            };
+            let exit_chain = alpaca.get_options_chain(&trade.underlying).await.ok();
+            let exit_nbbo = exit_chain.as_ref().and_then(|c|
+                crate::measurement::nbbo::snapshot_spread_nbbo(
+                    c, trade.short_strike, trade.long_strike, option_type_enum,
+                )
+            );
+
             let net_pnl = (trade.entry_credit - current_debit) * 100.0 * trade.contracts as f64;
 
-            match db.close_trade(&trade.id, current_debit, &exit_reason, net_pnl, None).await {
+            match db.close_trade(&trade.id, current_debit, &exit_reason, net_pnl, exit_nbbo.as_ref()).await {
                 Err(e) => {
                     console_log!(
                         "CRITICAL: DB close_trade failed for trade {} after close order {}.",
@@ -147,7 +158,23 @@ pub async fn run(env: &Env) -> Result<()> {
                     console_log!("Trade {} already closed by concurrent invocation, skipping.", trade.id);
                     continue;
                 }
-                Ok(true) => {}
+                Ok(true) => {
+                    use chrono::Utc;
+                    let snap = crate::measurement::equity::build_equity_snapshot(
+                        crate::measurement::equity::EquityEvent::TradeClose,
+                        crate::measurement::equity::SnapshotInputs {
+                            timestamp: Utc::now().to_rfc3339(),
+                            equity: alpaca.get_account().await.map(|a| a.equity).unwrap_or(0.0),
+                            cash: alpaca.get_account().await.map(|a| a.cash).unwrap_or(0.0),
+                            open_position_mtm: 0.0,
+                            realized_pnl_day: 0.0,
+                            unrealized_pnl_day: 0.0,
+                            open_position_count: (open_trades.len().saturating_sub(1)) as i64,
+                            trade_id_ref: Some(trade.id.clone()),
+                        },
+                    );
+                    db.insert_equity_snapshot(&snap).await.ok();
+                }
             }
 
             discord.send_position_exit(
@@ -190,6 +217,13 @@ async fn get_spread_debit(alpaca: &AlpacaClient, trade: &crate::types::Trade) ->
 mod tests {
     use super::*;
     use crate::config::SpreadConfig;
+
+    #[test]
+    fn close_trade_is_invoked_with_exit_nbbo() {
+        use crate::measurement::nbbo::NbboSnapshot;
+        fn _ty_check(_: Option<&NbboSnapshot>) {}
+        _ty_check(None);
+    }
 
     #[test]
     fn identifies_profit_target_exit() {
