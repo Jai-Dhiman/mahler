@@ -1,4 +1,4 @@
-import type { AccountRow, Env, PlaidItemRow, SnapshotRow } from "../types";
+import type { AccountRow, Env, EventRow, PlaidItemRow, SnapshotRow } from "../types";
 
 export async function upsertAccount(env: Env, row: Omit<AccountRow, "created_at">): Promise<void> {
   await env.DB.prepare(
@@ -126,4 +126,36 @@ export async function updateItemStatus(
   )
     .bind(status, lastError, itemId)
     .run();
+}
+
+export interface LogEventInput {
+  event_type: string;
+  item_id: string | null;
+  account_id: string | null;
+  payload: unknown;
+}
+
+export async function logEvent(env: Env, input: LogEventInput): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO finance_event_log (event_type, item_id, account_id, payload)
+     VALUES (?, ?, ?, ?)`,
+  )
+    .bind(
+      input.event_type,
+      input.item_id,
+      input.account_id,
+      input.payload === null || input.payload === undefined
+        ? null
+        : JSON.stringify(input.payload),
+    )
+    .run();
+}
+
+export async function listEvents(env: Env, limit: number): Promise<EventRow[]> {
+  const result = await env.DB.prepare(
+    `SELECT * FROM finance_event_log ORDER BY id ASC LIMIT ?`,
+  )
+    .bind(limit)
+    .all<EventRow>();
+  return result.results;
 }
