@@ -66,6 +66,21 @@ class TestGenerateActionItems(unittest.TestCase):
         )
         self.assertEqual(result, [])
 
+    def test_single_task_line_with_attendee_and_priority(self):
+        import orchestrate
+        llm = MagicMock(return_value="TASK: [Alice] Send Q2 memo | PRIORITY: High")
+        result = orchestrate.generate_action_items(
+            summary="meeting",
+            attendees=[],
+            crm_context={},
+            open_tasks=[],
+            llm_caller=llm,
+        )
+        self.assertEqual(
+            result,
+            [{"title": "[Alice] Send Q2 memo", "priority": "High", "attendee": "Alice"}],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
