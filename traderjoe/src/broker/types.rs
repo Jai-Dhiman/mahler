@@ -23,6 +23,8 @@ pub struct OptionContract {
     pub gamma: Option<f64>,
     pub theta: Option<f64>,
     pub vega: Option<f64>,
+    pub bid_size: Option<i64>,
+    pub ask_size: Option<i64>,
 }
 
 impl OptionContract {
@@ -133,6 +135,8 @@ mod tests {
             gamma: None,
             theta: None,
             vega: None,
+            bid_size: Some(10),
+            ask_size: Some(10),
         }
     }
 
@@ -168,5 +172,26 @@ mod tests {
         let calls = chain.get_calls("2026-05-15");
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].strike, 500.0);
+    }
+
+    #[test]
+    fn option_contract_round_trips_bid_and_ask_size() {
+        let contract = OptionContract {
+            symbol: "SPY260515P00460000".to_string(),
+            underlying: "SPY".to_string(),
+            expiration: "2026-05-15".to_string(),
+            strike: 460.0,
+            option_type: OptionType::Put,
+            bid: 1.00, ask: 1.05, last: 1.02,
+            volume: 100, open_interest: 500,
+            implied_volatility: Some(0.22),
+            delta: Some(-0.10), gamma: Some(0.01), theta: Some(-0.05), vega: Some(0.10),
+            bid_size: Some(25),
+            ask_size: Some(40),
+        };
+        let json = serde_json::to_string(&contract).expect("serialize");
+        let back: OptionContract = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.bid_size, Some(25));
+        assert_eq!(back.ask_size, Some(40));
     }
 }

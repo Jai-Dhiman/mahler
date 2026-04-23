@@ -237,6 +237,8 @@ mod tests {
             gamma: None,
             theta: None,
             vega: None,
+            bid_size: None,
+            ask_size: None,
         }
     }
 

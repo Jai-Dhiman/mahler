@@ -179,6 +179,8 @@ impl AlpacaClient {
                     gamma: greeks["gamma"].as_f64(),
                     theta: greeks["theta"].as_f64(),
                     vega: greeks["vega"].as_f64(),
+                    bid_size: quote["bs"].as_i64(),
+                    ask_size: quote["as"].as_i64(),
                 });
             }
         }
