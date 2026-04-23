@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -25,9 +26,47 @@ def _load_hermes_env() -> None:
                 os.environ[key] = value.strip()
 
 
+def _parse_attendees(raw: str) -> list[dict]:
+    try:
+        return json.loads(raw) if isinstance(raw, str) else list(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def _fetch_crm_context(attendees: list[dict], runner) -> dict[str, str]:
+    owner_email = os.environ.get("MAHLER_OWNER_EMAIL", "").lower()
+    ctx: dict[str, str] = {}
+    for a in attendees:
+        email = (a.get("email") or "").lower()
+        name = a.get("name")
+        if not name or not email or email == owner_email:
+            continue
+        result = runner(
+            ["python3", str(Path.home() / ".hermes" / "skills" / "relationship-manager" / "scripts" / "contacts.py"), "summarize", "--name", name],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            ctx[email] = result.stdout.strip()
+    return ctx
+
+
 def process_meeting(row, *, runner, llm_caller, discord_poster, d1_client) -> str:
     title = row["title"]
-    action_lines = "  None"
+    attendees = _parse_attendees(row["attendees"])
+    crm_context = _fetch_crm_context(attendees, runner)
+    action_items = generate_action_items(
+        summary=row["summary"],
+        attendees=attendees,
+        crm_context=crm_context,
+        open_tasks=[],
+        llm_caller=llm_caller,
+    )
+    if action_items:
+        action_lines = "\n".join(f"  · {i['title']}" for i in action_items)
+    else:
+        action_lines = "  None"
     crm_line = "CRM updated: No CRM matches"
     summary = (
         f"Post-meeting: {title}\n"

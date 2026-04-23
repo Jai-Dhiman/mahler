@@ -98,5 +98,32 @@ class TestGenerateActionItems(unittest.TestCase):
         self.assertIn("Review Q2 deck", captured["prompt"])
 
 
+class TestCrmFanout(unittest.TestCase):
+    def test_crm_context_for_external_attendee_flows_to_llm(self):
+        import orchestrate
+        row = {
+            "recording_id": 51,
+            "title": "Sync",
+            "attendees": '[{"name": "Alice", "email": "alice@ext.com", "is_external": true}]',
+            "summary": "we talked",
+        }
+        def runner(argv, **_):
+            if "summarize" in argv and "Alice" in argv:
+                return MagicMock(returncode=0, stdout="Alice is a senior PM", stderr="")
+            return MagicMock(returncode=0, stdout="", stderr="")
+        captured_prompt = {}
+        def llm(prompt):
+            captured_prompt["p"] = prompt
+            return "no action items"
+        orchestrate.process_meeting(
+            row,
+            runner=runner,
+            llm_caller=llm,
+            discord_poster=MagicMock(),
+            d1_client=MagicMock(),
+        )
+        self.assertIn("Alice is a senior PM", captured_prompt["p"])
+
+
 if __name__ == "__main__":
     unittest.main()
