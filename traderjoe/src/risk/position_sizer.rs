@@ -121,6 +121,11 @@ impl PositionSizer {
     }
 }
 
+/// Scales equity by a live-capital fraction, clamped to [0, 1].
+pub fn effective_equity(raw_equity: f64, fraction: f64) -> f64 {
+    raw_equity * fraction.clamp(0.0, 1.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +175,17 @@ mod tests {
         ];
         let result = sizer.calculate_for_underlying("SPY", 500.0, 100_000.0, &positions, 20.0);
         assert_eq!(result.contracts, 0);
+    }
+
+    #[test]
+    fn effective_equity_scales_by_fraction() {
+        assert!((effective_equity(100_000.0, 0.10) - 10_000.0).abs() < 1e-9);
+        assert!((effective_equity(100_000.0, 1.00) - 100_000.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn effective_equity_clamps_fraction_to_zero_one() {
+        assert!((effective_equity(100_000.0, 1.50) - 100_000.0).abs() < 1e-9);
+        assert!((effective_equity(100_000.0, -0.5) - 0.0).abs() < 1e-9);
     }
 }
