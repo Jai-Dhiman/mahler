@@ -422,6 +422,74 @@ impl D1Client {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct MarketContextRow {
+    pub date: String,
+    pub spot_vix: Option<f64>,
+    pub vixy_close: Option<f64>,
+    pub spy_20d_realized_vol: Option<f64>,
+    pub spy_20d_return: Option<f64>,
+    pub spy_drawdown_from_52w_high: Option<f64>,
+}
+
+impl D1Client {
+    pub async fn get_closed_trades_in_window(&self, start: &str, end: &str) -> Result<Vec<Trade>> {
+        let result = self.db.prepare(
+            "SELECT * FROM trades WHERE status = 'closed' AND date(exit_time) BETWEEN ? AND ?
+             ORDER BY exit_time ASC"
+        ).bind(&[start.into(), end.into()])?.all().await?;
+        let rows = result.results::<serde_json::Value>()?;
+        Ok(rows.iter().filter_map(TradeRow::from_d1_row).collect())
+    }
+
+    /// Returns (eod_date_iso, equity) pairs for EOD snapshots in window.
+    pub async fn get_equity_history_in_window(&self, start: &str, end: &str) -> Result<Vec<(String, f64)>> {
+        let result = self.db.prepare(
+            "SELECT date(timestamp) AS d, equity FROM equity_history
+             WHERE event_type = 'eod' AND date(timestamp) BETWEEN ? AND ? ORDER BY d ASC"
+        ).bind(&[start.into(), end.into()])?.all().await?;
+        let rows = result.results::<serde_json::Value>()?;
+        Ok(rows.iter().filter_map(|r|
+            Some((r["d"].as_str()?.to_string(), r["equity"].as_f64()?))
+        ).collect())
+    }
+
+    /// Returns (date, beta_weighted_delta, total_gamma, total_vega, total_theta).
+    pub async fn get_portfolio_greeks_history_in_window(
+        &self, start: &str, end: &str,
+    ) -> Result<Vec<(String, f64, f64, f64, f64)>> {
+        let result = self.db.prepare(
+            "SELECT date, beta_weighted_delta, total_gamma, total_vega, total_theta
+             FROM portfolio_greeks_eod WHERE date BETWEEN ? AND ? ORDER BY date ASC"
+        ).bind(&[start.into(), end.into()])?.all().await?;
+        let rows = result.results::<serde_json::Value>()?;
+        Ok(rows.iter().filter_map(|r| Some((
+            r["date"].as_str()?.to_string(),
+            r["beta_weighted_delta"].as_f64()?,
+            r["total_gamma"].as_f64()?,
+            r["total_vega"].as_f64()?,
+            r["total_theta"].as_f64()?,
+        ))).collect())
+    }
+
+    pub async fn get_market_context_in_window(
+        &self, start: &str, end: &str,
+    ) -> Result<Vec<MarketContextRow>> {
+        let result = self.db.prepare(
+            "SELECT * FROM market_context_daily WHERE date BETWEEN ? AND ? ORDER BY date ASC"
+        ).bind(&[start.into(), end.into()])?.all().await?;
+        let rows = result.results::<serde_json::Value>()?;
+        Ok(rows.iter().filter_map(|r| Some(MarketContextRow {
+            date: r["date"].as_str()?.to_string(),
+            spot_vix: r["spot_vix"].as_f64(),
+            vixy_close: r["vixy_close"].as_f64(),
+            spy_20d_realized_vol: r["spy_20d_realized_vol"].as_f64(),
+            spy_20d_return: r["spy_20d_return"].as_f64(),
+            spy_drawdown_from_52w_high: r["spy_drawdown_from_52w_high"].as_f64(),
+        })).collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -509,6 +577,19 @@ mod tests {
                 Some(14.2), Some(0.12), Some(0.02), Some(0.03),
             ).await.ok();
             db.insert_metrics_weekly(MetricsWeeklyRow::default()).await.ok();
+        };
+    }
+
+    #[test]
+    fn window_query_helpers_exist() {
+        let _unused = async {
+            let db: D1Client = unreachable!();
+            let _: Vec<Trade> = db.get_closed_trades_in_window("2026-03-22", "2026-04-22").await.unwrap();
+            let _: Vec<(String, f64)> = db.get_equity_history_in_window("2026-03-22", "2026-04-22").await.unwrap();
+            let _: Vec<(String, f64, f64, f64, f64)> =
+                db.get_portfolio_greeks_history_in_window("2026-03-22", "2026-04-22").await.unwrap();
+            let _: Vec<MarketContextRow> =
+                db.get_market_context_in_window("2026-03-22", "2026-04-22").await.unwrap();
         };
     }
 }
