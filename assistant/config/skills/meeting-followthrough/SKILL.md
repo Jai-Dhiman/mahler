@@ -18,119 +18,24 @@ env:
 
 # Meeting Follow-Through
 
-Closes the loop after any recorded meeting. Triggered by cron every 5 minutes.
-The `fathom-webhook` Cloudflare Worker writes completed meetings to D1; this
-skill polls for pending entries, processes each one, and marks them done.
+Closes the loop after any recorded meeting. Triggered by cron every 15 minutes.
+Everything is done by `orchestrate.py` — this skill just invokes it and reports the result.
 
 ## Procedure
 
-### Step 1 — Check for pending meetings
+Run the orchestrator:
 
 ```bash
-python3 ~/.hermes/skills/meeting-followthrough/scripts/poll.py fetch
+python3 ~/.hermes/skills/meeting-followthrough/scripts/orchestrate.py
 ```
 
-If the output is `NO_PENDING_MEETINGS`, stop immediately. Do not post anything.
+Report whatever it prints to stdout verbatim. If the exit code is non-zero, the orchestrator will have already posted a per-meeting error message to the Discord triage channel; repeat the error in your reply so the user sees it in the agent log too.
 
-Otherwise the output contains one or more meeting blocks separated by
-`---END_MEETING---`. For each block, extract:
-- `RECORDING_ID`: integer ID (needed for mark-done)
-- `TITLE`: meeting title
-- `ATTENDEES`: comma-separated `name <email>` pairs
-- `SUMMARY`: everything after `SUMMARY:` to end of block
-
-Process each meeting through Steps 2–7, then mark it done.
-
-### Step 2 — Fetch CRM context for each external attendee
-
-For each attendee in `ATTENDEES`, attempt:
-
-```bash
-python3 ~/.hermes/skills/relationship-manager/scripts/contacts.py summarize \
-  --name "ATTENDEE_NAME"
-```
-
-- If the command succeeds: record the output (last contact date, context, open tasks).
-- If the command fails (contact not in CRM): note "not in CRM" for that attendee and continue.
-
-### Step 3 — Fetch current open tasks
-
-```bash
-python3 ~/.hermes/skills/notion-tasks/scripts/tasks.py list \
-  --status "Not started"
-```
-
-Record the full output. Empty output means no existing open tasks — this is
-valid state. If this command fails with a non-zero exit code, surface the error
-in Discord and stop. Cannot safely generate action items without knowing
-existing tasks.
-
-### Step 4 — Generate action items
-
-Using all gathered context — meeting summary, CRM outputs from Step 2, open
-tasks from Step 3, and the injected context from project-log, kaizen priorities,
-and Honcho memory — reason about what action items arise from this meeting.
-
-Rules:
-- Only create tasks for concrete commitments (things said, agreed, or promised).
-- Do not create a task if an equivalent open task already exists from Step 3.
-- If the action item relates to a specific attendee in the CRM, prefix the task
-  title with `[Attendee Name]` (e.g., `[Alice Chen] Send Q2 IC memo`).
-- Default priority: Medium. Use High only for explicit deadlines or blockers.
-
-### Step 5 — Create Notion tasks
-
-For each action item:
-
-```bash
-python3 ~/.hermes/skills/notion-tasks/scripts/tasks.py create \
-  --title "TASK_TITLE" \
-  --priority PRIORITY
-```
-
-If `tasks.py create` fails for any task: surface the error in Discord and stop.
-Do not silently skip.
-
-### Step 6 — Update CRM last_contact
-
-For each attendee whose `contacts.py summarize` succeeded:
-
-```bash
-python3 ~/.hermes/skills/relationship-manager/scripts/contacts.py talked-to \
-  --name "ATTENDEE_NAME"
-```
-
-If this fails: surface the error in Discord but continue to Step 7.
-
-### Step 7 — Mark the meeting as processed
-
-```bash
-python3 ~/.hermes/skills/meeting-followthrough/scripts/poll.py mark-done \
-  --recording-id RECORDING_ID
-```
-
-This must run even if no action items were generated. If it fails, surface the
-error — the meeting will be reprocessed on the next cron run if not marked done.
-
-### Step 8 — Post summary to Discord
-
-Post a single Discord message via the triage webhook with:
-- **Meeting:** `TITLE`
-- **Action items created:** bulleted list of task titles, or "None"
-- **CRM updated:** comma-separated contact names, or "No CRM matches"
-
-Example:
-
-    Post-meeting: 1:1 with Alice Chen
-    Action items created:
-      · [Alice Chen] Send Q2 IC memo
-      · Follow up on Series A timeline
-    CRM updated: Alice Chen
+If stdout is `NO_WORK`, stop — no pending meetings this tick.
 
 ## Failure modes
 
-- `contacts.py summarize` fails → note "not in CRM", continue (non-fatal)
-- `tasks.py list` fails → surface error and stop
-- `tasks.py create` fails → surface error and stop
-- `contacts.py talked-to` fails → surface error, continue to Step 7
-- `poll.py mark-done` fails → surface error (meeting will reprocess next run)
+- OpenRouter returns 5xx while generating action items → orchestrator catches, posts error to Discord for the affected meeting, leaves the meeting UN-marked (next tick retries).
+- `contacts.py summarize` returns non-zero → attendee is treated as "not in CRM" and skipped for CRM fan-out.
+- `tasks.py create` returns non-zero for one action item → that item is dropped from the Discord summary; other items proceed.
+- `post_discord.py` fails → orchestrator exits non-zero; SessionStop hook surfaces the error.
