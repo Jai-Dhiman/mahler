@@ -49,6 +49,24 @@ impl TradeRow {
             iv_rank: row["iv_rank"].as_f64(),
             short_delta: row["short_delta"].as_f64(),
             short_theta: row["short_theta"].as_f64(),
+            entry_short_bid: row["entry_short_bid"].as_f64(),
+            entry_short_ask: row["entry_short_ask"].as_f64(),
+            entry_long_bid: row["entry_long_bid"].as_f64(),
+            entry_long_ask: row["entry_long_ask"].as_f64(),
+            entry_net_mid: row["entry_net_mid"].as_f64(),
+            exit_short_bid: row["exit_short_bid"].as_f64(),
+            exit_short_ask: row["exit_short_ask"].as_f64(),
+            exit_long_bid: row["exit_long_bid"].as_f64(),
+            exit_long_ask: row["exit_long_ask"].as_f64(),
+            exit_net_mid: row["exit_net_mid"].as_f64(),
+            entry_short_gamma: row["entry_short_gamma"].as_f64(),
+            entry_short_vega: row["entry_short_vega"].as_f64(),
+            entry_long_delta: row["entry_long_delta"].as_f64(),
+            entry_long_gamma: row["entry_long_gamma"].as_f64(),
+            entry_long_vega: row["entry_long_vega"].as_f64(),
+            nbbo_displayed_size_short: row["nbbo_displayed_size_short"].as_i64(),
+            nbbo_displayed_size_long: row["nbbo_displayed_size_long"].as_i64(),
+            nbbo_snapshot_time: row["nbbo_snapshot_time"].as_str().map(str::to_string),
         })
     }
 }
@@ -78,28 +96,50 @@ impl D1Client {
         iv_rank: Option<f64>,
         short_delta: Option<f64>,
         short_theta: Option<f64>,
+        nbbo: Option<&crate::measurement::nbbo::NbboSnapshot>,
+        entry_short_gamma: Option<f64>,
+        entry_short_vega: Option<f64>,
+        entry_long_delta: Option<f64>,
+        entry_long_gamma: Option<f64>,
+        entry_long_vega: Option<f64>,
     ) -> Result<()> {
+        use worker::wasm_bindgen::JsValue;
+        let nb_short_bid = nbbo.map(|n| n.short_bid.into()).unwrap_or(JsValue::NULL);
+        let nb_short_ask = nbbo.map(|n| n.short_ask.into()).unwrap_or(JsValue::NULL);
+        let nb_long_bid = nbbo.map(|n| n.long_bid.into()).unwrap_or(JsValue::NULL);
+        let nb_long_ask = nbbo.map(|n| n.long_ask.into()).unwrap_or(JsValue::NULL);
+        let nb_net_mid = nbbo.map(|n| n.net_mid.into()).unwrap_or(JsValue::NULL);
+        // For a spread entry we are selling the short leg (bid side) and buying the long leg
+        // (ask side), so the binding fill-size constraints are short_bid_size and long_ask_size.
+        let nb_sz_short = nbbo.and_then(|n| n.short_bid_size).map(|s| (s as f64).into()).unwrap_or(JsValue::NULL);
+        let nb_sz_long = nbbo.and_then(|n| n.long_ask_size).map(|s| (s as f64).into()).unwrap_or(JsValue::NULL);
+        let nb_time = nbbo.map(|n| n.snapshot_time.as_str().into()).unwrap_or(JsValue::NULL);
+
         self.db
             .prepare(
                 "INSERT INTO trades (id, underlying, spread_type, short_strike, long_strike,
                 expiration, contracts, entry_credit, max_loss, broker_order_id,
-                iv_rank, short_delta, short_theta)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                iv_rank, short_delta, short_theta,
+                entry_short_bid, entry_short_ask, entry_long_bid, entry_long_ask, entry_net_mid,
+                entry_short_gamma, entry_short_vega, entry_long_delta, entry_long_gamma, entry_long_vega,
+                nbbo_displayed_size_short, nbbo_displayed_size_long, nbbo_snapshot_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&[
-                id.into(),
-                underlying.into(),
-                spread_type.as_str().into(),
-                short_strike.into(),
-                long_strike.into(),
-                expiration.into(),
-                (contracts as f64).into(),
-                entry_credit.into(),
-                max_loss.into(),
-                broker_order_id.map(|s| s.into()).unwrap_or(worker::wasm_bindgen::JsValue::NULL),
-                iv_rank.map(|v| v.into()).unwrap_or(worker::wasm_bindgen::JsValue::NULL),
-                short_delta.map(|v| v.into()).unwrap_or(worker::wasm_bindgen::JsValue::NULL),
-                short_theta.map(|v| v.into()).unwrap_or(worker::wasm_bindgen::JsValue::NULL),
+                id.into(), underlying.into(), spread_type.as_str().into(),
+                short_strike.into(), long_strike.into(), expiration.into(),
+                (contracts as f64).into(), entry_credit.into(), max_loss.into(),
+                broker_order_id.map(|s| s.into()).unwrap_or(JsValue::NULL),
+                iv_rank.map(|v| v.into()).unwrap_or(JsValue::NULL),
+                short_delta.map(|v| v.into()).unwrap_or(JsValue::NULL),
+                short_theta.map(|v| v.into()).unwrap_or(JsValue::NULL),
+                nb_short_bid, nb_short_ask, nb_long_bid, nb_long_ask, nb_net_mid,
+                entry_short_gamma.map(|v| v.into()).unwrap_or(JsValue::NULL),
+                entry_short_vega.map(|v| v.into()).unwrap_or(JsValue::NULL),
+                entry_long_delta.map(|v| v.into()).unwrap_or(JsValue::NULL),
+                entry_long_gamma.map(|v| v.into()).unwrap_or(JsValue::NULL),
+                entry_long_vega.map(|v| v.into()).unwrap_or(JsValue::NULL),
+                nb_sz_short, nb_sz_long, nb_time,
             ])?
             .run()
             .await?;
@@ -125,19 +165,28 @@ impl D1Client {
         exit_price: f64,
         exit_reason: &ExitReason,
         net_pnl: f64,
+        exit_nbbo: Option<&crate::measurement::nbbo::NbboSnapshot>,
     ) -> Result<bool> {
         use chrono::Utc;
+        use worker::wasm_bindgen::JsValue;
         let now = Utc::now().to_rfc3339();
+        let ex_sb = exit_nbbo.map(|n| n.short_bid.into()).unwrap_or(JsValue::NULL);
+        let ex_sa = exit_nbbo.map(|n| n.short_ask.into()).unwrap_or(JsValue::NULL);
+        let ex_lb = exit_nbbo.map(|n| n.long_bid.into()).unwrap_or(JsValue::NULL);
+        let ex_la = exit_nbbo.map(|n| n.long_ask.into()).unwrap_or(JsValue::NULL);
+        let ex_mid = exit_nbbo.map(|n| n.net_mid.into()).unwrap_or(JsValue::NULL);
+
         let result = self.db
             .prepare(
                 "UPDATE trades SET status = 'closed', exit_price = ?, exit_time = ?,
-                exit_reason = ?, net_pnl = ? WHERE id = ? AND status = 'open'",
+                exit_reason = ?, net_pnl = ?,
+                exit_short_bid = ?, exit_short_ask = ?, exit_long_bid = ?, exit_long_ask = ?, exit_net_mid = ?
+                WHERE id = ? AND status = 'open'",
             )
             .bind(&[
-                exit_price.into(),
-                now.as_str().into(),
-                exit_reason.as_str().into(),
-                net_pnl.into(),
+                exit_price.into(), now.as_str().into(),
+                exit_reason.as_str().into(), net_pnl.into(),
+                ex_sb, ex_sa, ex_lb, ex_la, ex_mid,
                 trade_id.into(),
             ])?
             .run()
@@ -241,6 +290,207 @@ impl D1Client {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct MetricsWeeklyRow {
+    pub generated_at: String,
+    pub window_start: String,
+    pub window_end: String,
+    pub trade_count: i64,
+    pub sharpe: Option<f64>,
+    pub sortino: Option<f64>,
+    pub profit_factor: Option<f64>,
+    pub win_rate: Option<f64>,
+    pub pnl_skew: Option<f64>,
+    pub max_drawdown_pct: Option<f64>,
+    pub mean_slippage_vs_mid: Option<f64>,
+    pub max_slippage_vs_mid: Option<f64>,
+    pub slippage_vs_orats_ratio: Option<f64>,
+    pub fill_size_violation_count: i64,
+    pub fill_size_violation_pct: Option<f64>,
+    pub regime_buckets_json: String,
+    pub greek_ranges_json: String,
+    pub sample_size_tag: String,
+}
+
+impl D1Client {
+    pub async fn insert_equity_snapshot(
+        &self,
+        snap: &crate::measurement::equity::EquitySnapshot,
+    ) -> Result<()> {
+        use worker::wasm_bindgen::JsValue;
+        let trade_ref = snap.trade_id_ref.as_deref()
+            .map(|s| s.into()).unwrap_or(JsValue::NULL);
+        // INSERT OR REPLACE handles the EOD-per-day uniqueness via the partial index
+        // idx_equity_eod_unique without relying on ON CONFLICT...WHERE syntax,
+        // which has inconsistent support across D1/libSQL versions.
+        // Non-EOD event types (trade_open, trade_close, circuit_breaker) have no unique
+        // constraint and accumulate unboundedly — this is by design for full audit history.
+        self.db.prepare(
+            "INSERT OR REPLACE INTO equity_history
+             (timestamp, event_type, equity, cash, open_position_mtm,
+              realized_pnl_day, unrealized_pnl_day, open_position_count, trade_id_ref)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ).bind(&[
+            snap.timestamp.as_str().into(),
+            snap.event_type.into(),
+            snap.equity.into(), snap.cash.into(),
+            snap.open_position_mtm.into(),
+            snap.realized_pnl_day.into(), snap.unrealized_pnl_day.into(),
+            (snap.open_position_count as f64).into(),
+            trade_ref,
+        ])?.run().await?;
+        Ok(())
+    }
+
+    pub async fn insert_portfolio_greeks_eod(
+        &self, date: &str,
+        pg: &crate::measurement::portfolio_greeks::PortfolioGreeks,
+    ) -> Result<()> {
+        let delta_json = serde_json::to_string(&pg.delta_by_underlying)
+            .map_err(|e| worker::Error::RustError(e.to_string()))?;
+        self.db.prepare(
+            "INSERT OR REPLACE INTO portfolio_greeks_eod
+             (date, beta_weighted_delta, total_gamma, total_vega, total_theta,
+              delta_by_underlying, max_gamma_single_position, max_vega_single_position,
+              open_position_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ).bind(&[
+            date.into(),
+            pg.beta_weighted_delta.into(),
+            pg.total_gamma.into(), pg.total_vega.into(), pg.total_theta.into(),
+            delta_json.as_str().into(),
+            pg.max_gamma_single_position.into(),
+            pg.max_vega_single_position.into(),
+            (pg.open_position_count as f64).into(),
+        ])?.run().await?;
+        Ok(())
+    }
+
+    pub async fn insert_market_context_daily(
+        &self, date: &str,
+        spot_vix: Option<f64>, source: &str, source_date: Option<&str>,
+        vixy_close: Option<f64>,
+        spy_20d_rv: Option<f64>, spy_20d_ret: Option<f64>, spy_dd: Option<f64>,
+    ) -> Result<()> {
+        use worker::wasm_bindgen::JsValue;
+        let vix = spot_vix.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let src_date = source_date.map(|s| s.into()).unwrap_or(JsValue::NULL);
+        let vy = vixy_close.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let rv = spy_20d_rv.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let rt = spy_20d_ret.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let dd = spy_dd.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        self.db.prepare(
+            "INSERT OR REPLACE INTO market_context_daily
+             (date, spot_vix, spot_vix_source, spot_vix_source_date, vixy_close,
+              spy_20d_realized_vol, spy_20d_return, spy_drawdown_from_52w_high)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        ).bind(&[
+            date.into(), vix, source.into(), src_date, vy, rv, rt, dd,
+        ])?.run().await?;
+        Ok(())
+    }
+
+    pub async fn insert_metrics_weekly(&self, row: MetricsWeeklyRow) -> Result<()> {
+        use worker::wasm_bindgen::JsValue;
+        let sh = row.sharpe.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let so = row.sortino.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let pf = row.profit_factor.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let wr = row.win_rate.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let sk = row.pnl_skew.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let md = row.max_drawdown_pct.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let ms = row.mean_slippage_vs_mid.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let mx = row.max_slippage_vs_mid.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let rt = row.slippage_vs_orats_ratio.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        let fvp = row.fill_size_violation_pct.map(|v| v.into()).unwrap_or(JsValue::NULL);
+        self.db.prepare(
+            "INSERT INTO metrics_weekly (generated_at, window_start, window_end, trade_count,
+             sharpe, sortino, profit_factor, win_rate, pnl_skew, max_drawdown_pct,
+             mean_slippage_vs_mid, max_slippage_vs_mid, slippage_vs_orats_ratio,
+             fill_size_violation_count, fill_size_violation_pct,
+             regime_buckets, greek_ranges, sample_size_tag)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ).bind(&[
+            row.generated_at.as_str().into(),
+            row.window_start.as_str().into(),
+            row.window_end.as_str().into(),
+            (row.trade_count as f64).into(),
+            sh, so, pf, wr, sk, md, ms, mx, rt,
+            (row.fill_size_violation_count as f64).into(), fvp,
+            row.regime_buckets_json.as_str().into(),
+            row.greek_ranges_json.as_str().into(),
+            row.sample_size_tag.as_str().into(),
+        ])?.run().await?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MarketContextRow {
+    pub date: String,
+    pub spot_vix: Option<f64>,
+    pub vixy_close: Option<f64>,
+    pub spy_20d_realized_vol: Option<f64>,
+    pub spy_20d_return: Option<f64>,
+    pub spy_drawdown_from_52w_high: Option<f64>,
+}
+
+impl D1Client {
+    pub async fn get_closed_trades_in_window(&self, start: &str, end: &str) -> Result<Vec<Trade>> {
+        let result = self.db.prepare(
+            "SELECT * FROM trades WHERE status = 'closed' AND date(exit_time) BETWEEN ? AND ?
+             ORDER BY exit_time ASC"
+        ).bind(&[start.into(), end.into()])?.all().await?;
+        let rows = result.results::<serde_json::Value>()?;
+        Ok(rows.iter().filter_map(TradeRow::from_d1_row).collect())
+    }
+
+    /// Returns (eod_date_iso, equity) pairs for EOD snapshots in window.
+    pub async fn get_equity_history_in_window(&self, start: &str, end: &str) -> Result<Vec<(String, f64)>> {
+        let result = self.db.prepare(
+            "SELECT date(timestamp) AS d, equity FROM equity_history
+             WHERE event_type = 'eod' AND date(timestamp) BETWEEN ? AND ? ORDER BY d ASC"
+        ).bind(&[start.into(), end.into()])?.all().await?;
+        let rows = result.results::<serde_json::Value>()?;
+        Ok(rows.iter().filter_map(|r|
+            Some((r["d"].as_str()?.to_string(), r["equity"].as_f64()?))
+        ).collect())
+    }
+
+    /// Returns (date, beta_weighted_delta, total_gamma, total_vega, total_theta).
+    pub async fn get_portfolio_greeks_history_in_window(
+        &self, start: &str, end: &str,
+    ) -> Result<Vec<(String, f64, f64, f64, f64)>> {
+        let result = self.db.prepare(
+            "SELECT date, beta_weighted_delta, total_gamma, total_vega, total_theta
+             FROM portfolio_greeks_eod WHERE date BETWEEN ? AND ? ORDER BY date ASC"
+        ).bind(&[start.into(), end.into()])?.all().await?;
+        let rows = result.results::<serde_json::Value>()?;
+        Ok(rows.iter().filter_map(|r| Some((
+            r["date"].as_str()?.to_string(),
+            r["beta_weighted_delta"].as_f64()?,
+            r["total_gamma"].as_f64()?,
+            r["total_vega"].as_f64()?,
+            r["total_theta"].as_f64()?,
+        ))).collect())
+    }
+
+    pub async fn get_market_context_in_window(
+        &self, start: &str, end: &str,
+    ) -> Result<Vec<MarketContextRow>> {
+        let result = self.db.prepare(
+            "SELECT * FROM market_context_daily WHERE date BETWEEN ? AND ? ORDER BY date ASC"
+        ).bind(&[start.into(), end.into()])?.all().await?;
+        let rows = result.results::<serde_json::Value>()?;
+        Ok(rows.iter().filter_map(|r| Some(MarketContextRow {
+            date: r["date"].as_str()?.to_string(),
+            spot_vix: r["spot_vix"].as_f64(),
+            vixy_close: r["vixy_close"].as_f64(),
+            spy_20d_realized_vol: r["spy_20d_realized_vol"].as_f64(),
+            spy_20d_return: r["spy_20d_return"].as_f64(),
+            spy_drawdown_from_52w_high: r["spy_drawdown_from_52w_high"].as_f64(),
+        })).collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,5 +535,64 @@ mod tests {
         let row = json!({ "id": "trade-123" });
         let result = TradeRow::from_d1_row(&row);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn create_trade_signature_compiles() {
+        // Never executed: WASM prevents async DB calls in tests.
+        let _unused = async {
+            let db: D1Client = unreachable!();
+            let nbbo: crate::measurement::nbbo::NbboSnapshot = unreachable!();
+            db.create_trade(
+                "id", "SPY", &SpreadType::BullPut, 460.0, 455.0, "2026-05-15",
+                2, 0.75, 425.0, None, Some(65.0), Some(-0.28), Some(0.05),
+                Some(&nbbo),
+                Some(0.010), Some(0.30), Some(-0.18), Some(0.008), Some(0.25),
+            ).await.ok();
+        };
+    }
+
+    #[test]
+    fn close_trade_signature_compiles() {
+        // Never executed: WASM prevents async DB calls in tests.
+        let _unused = async {
+            let db: D1Client = unreachable!();
+            let nbbo: crate::measurement::nbbo::NbboSnapshot = unreachable!();
+            let reason: crate::types::ExitReason = unreachable!();
+            db.close_trade("id", 0.20, &reason, 55.0, Some(&nbbo)).await.ok();
+        };
+    }
+
+    #[test]
+    fn measurement_inserter_signatures_compile() {
+        // Never executed: WASM prevents async DB calls in tests.
+        use crate::measurement::equity::EquitySnapshot;
+        use crate::measurement::portfolio_greeks::PortfolioGreeks;
+        let _unused = async {
+            let db: D1Client = unreachable!();
+            let snap: EquitySnapshot = unreachable!();
+            let pg: PortfolioGreeks = unreachable!();
+            db.insert_equity_snapshot(&snap).await.ok();
+            db.insert_portfolio_greeks_eod("2026-04-22", &pg).await.ok();
+            db.insert_market_context_daily(
+                "2026-04-22", Some(17.5), "fred", Some("2026-04-21"),
+                Some(14.2), Some(0.12), Some(0.02), Some(0.03),
+            ).await.ok();
+            db.insert_metrics_weekly(MetricsWeeklyRow::default()).await.ok();
+        };
+    }
+
+    #[test]
+    fn window_query_helpers_signature_compiles() {
+        // Never executed: WASM prevents async DB calls in tests.
+        let _unused = async {
+            let db: D1Client = unreachable!();
+            let _: Vec<Trade> = db.get_closed_trades_in_window("2026-03-22", "2026-04-22").await.unwrap();
+            let _: Vec<(String, f64)> = db.get_equity_history_in_window("2026-03-22", "2026-04-22").await.unwrap();
+            let _: Vec<(String, f64, f64, f64, f64)> =
+                db.get_portfolio_greeks_history_in_window("2026-03-22", "2026-04-22").await.unwrap();
+            let _: Vec<MarketContextRow> =
+                db.get_market_context_in_window("2026-03-22", "2026-04-22").await.unwrap();
+        };
     }
 }

@@ -110,6 +110,24 @@ pub struct Trade {
     pub iv_rank: Option<f64>,
     pub short_delta: Option<f64>,
     pub short_theta: Option<f64>,
+    pub entry_short_bid: Option<f64>,
+    pub entry_short_ask: Option<f64>,
+    pub entry_long_bid: Option<f64>,
+    pub entry_long_ask: Option<f64>,
+    pub entry_net_mid: Option<f64>,
+    pub exit_short_bid: Option<f64>,
+    pub exit_short_ask: Option<f64>,
+    pub exit_long_bid: Option<f64>,
+    pub exit_long_ask: Option<f64>,
+    pub exit_net_mid: Option<f64>,
+    pub entry_short_gamma: Option<f64>,
+    pub entry_short_vega: Option<f64>,
+    pub entry_long_delta: Option<f64>,
+    pub entry_long_gamma: Option<f64>,
+    pub entry_long_vega: Option<f64>,
+    pub nbbo_displayed_size_short: Option<i64>,
+    pub nbbo_displayed_size_long: Option<i64>,
+    pub nbbo_snapshot_time: Option<String>,
 }
 
 #[cfg(test)]
@@ -143,5 +161,39 @@ mod tests {
     fn trade_status_closed_is_closed() {
         let status = TradeStatus::Closed;
         assert!(status.is_closed());
+    }
+
+    #[test]
+    fn trade_round_trips_nbbo_and_expanded_greeks() {
+        let trade = Trade {
+            id: "t1".to_string(),
+            created_at: "2026-04-22T10:00:00Z".to_string(),
+            underlying: "SPY".to_string(),
+            spread_type: SpreadType::BullPut,
+            short_strike: 460.0, long_strike: 455.0,
+            expiration: "2026-05-15".to_string(),
+            contracts: 2,
+            entry_credit: 0.75, max_loss: 425.0,
+            broker_order_id: Some("o1".to_string()),
+            status: TradeStatus::Open,
+            fill_price: Some(0.74), fill_time: Some("2026-04-22T10:05:00Z".to_string()),
+            exit_price: None, exit_time: None, exit_reason: None, net_pnl: None,
+            iv_rank: Some(65.0),
+            short_delta: Some(-0.28), short_theta: Some(0.05),
+            entry_short_bid: Some(0.74), entry_short_ask: Some(0.76),
+            entry_long_bid: Some(0.24), entry_long_ask: Some(0.26),
+            entry_net_mid: Some(0.75),
+            exit_short_bid: None, exit_short_ask: None,
+            exit_long_bid: None, exit_long_ask: None, exit_net_mid: None,
+            entry_short_gamma: Some(0.012), entry_short_vega: Some(0.32),
+            entry_long_delta: Some(-0.18), entry_long_gamma: Some(0.009), entry_long_vega: Some(0.28),
+            nbbo_displayed_size_short: Some(50), nbbo_displayed_size_long: Some(75),
+            nbbo_snapshot_time: Some("2026-04-22T10:00:00Z".to_string()),
+        };
+        let json = serde_json::to_string(&trade).unwrap();
+        let back: Trade = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.entry_net_mid, Some(0.75));
+        assert_eq!(back.entry_short_gamma, Some(0.012));
+        assert_eq!(back.nbbo_displayed_size_short, Some(50));
     }
 }

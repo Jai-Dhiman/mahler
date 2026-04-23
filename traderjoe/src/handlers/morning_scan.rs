@@ -86,6 +86,10 @@ async fn run_inner(env: &Env, force: bool) -> Result<()> {
     }
 
     let account = alpaca.get_account().await?;
+    let live_fraction: f64 = env.var("LIVE_CAPITAL_FRACTION")
+        .ok().and_then(|v| v.to_string().parse().ok())
+        .unwrap_or(0.10);
+    let effective_eq = crate::risk::position_sizer::effective_equity(account.equity, live_fraction);
     let vix_data = alpaca.get_vix().await?;
     let current_vix = vix_data.as_ref().map(|v| v.vix).unwrap_or(20.0);
 
@@ -108,6 +112,18 @@ async fn run_inner(env: &Env, force: bool) -> Result<()> {
     if risk_state.level == RiskLevel::Halted {
         let reason = risk_state.reason.as_deref().unwrap_or("risk threshold exceeded");
         console_log!("Risk evaluation halted: {}", reason);
+        let snap = crate::measurement::equity::build_equity_snapshot(
+            crate::measurement::equity::EquityEvent::CircuitBreaker,
+            crate::measurement::equity::SnapshotInputs {
+                timestamp: Utc::now().to_rfc3339(),
+                equity: account.equity, cash: account.cash,
+                open_position_mtm: 0.0,
+                realized_pnl_day: 0.0, unrealized_pnl_day: 0.0,
+                open_position_count: 0,
+                trade_id_ref: None,
+            },
+        );
+        db.insert_equity_snapshot(&snap).await.ok();
         let new_state = crate::db::kv::CircuitBreakerState {
             halted: true,
             reason: Some(reason.to_string()),
@@ -185,18 +201,18 @@ async fn run_inner(env: &Env, force: bool) -> Result<()> {
             symbol, iv_metrics.iv_percentile, iv_metrics.current_iv, found
         );
         for scored in spreads.drain(..).take(2) {
-            all_opportunities.push((scored, symbol.to_string(), iv_metrics.clone()));
+            all_opportunities.push((scored, symbol.to_string(), iv_metrics.clone(), chain.clone()));
         }
     }
 
-    all_opportunities.sort_by(|(a, _, _), (b, _, _)| {
+    all_opportunities.sort_by(|(a, _, _, _), (b, _, _, _)| {
         b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let opportunities_found = all_opportunities.len();
     let mut trades_placed = 0usize;
 
-    for (scored, _symbol, iv_metrics) in all_opportunities.into_iter().take(cfg.max_trades_per_scan) {
+    for (scored, _symbol, iv_metrics, chain) in all_opportunities.into_iter().take(cfg.max_trades_per_scan) {
         let spread = &scored.spread;
 
         let option_type = match spread.spread_type {
@@ -207,7 +223,7 @@ async fn run_inner(env: &Env, force: bool) -> Result<()> {
         let size_result = sizer.calculate_for_underlying(
             &spread.underlying,
             spread.max_loss_per_contract(),
-            account.equity,
+            effective_eq,
             &existing_positions,
             current_vix,
         );
@@ -233,6 +249,25 @@ async fn run_inner(env: &Env, force: bool) -> Result<()> {
             contracts: final_contracts,
             limit_price: spread.entry_credit,
         };
+
+        let option_type_enum = match spread.spread_type {
+            SpreadType::BullPut => crate::broker::types::OptionType::Put,
+            SpreadType::BearCall => crate::broker::types::OptionType::Call,
+        };
+        let nbbo = crate::measurement::nbbo::snapshot_spread_nbbo(
+            &chain,
+            spread.short_strike, spread.long_strike, option_type_enum.clone(),
+        );
+
+        let short_contract = chain.contracts.iter().find(|c|
+            (c.strike - spread.short_strike).abs() < 0.01 && c.option_type == option_type_enum);
+        let long_contract = chain.contracts.iter().find(|c|
+            (c.strike - spread.long_strike).abs() < 0.01 && c.option_type == option_type_enum);
+        let entry_short_gamma = short_contract.and_then(|c| c.gamma);
+        let entry_short_vega = short_contract.and_then(|c| c.vega);
+        let entry_long_delta = long_contract.and_then(|c| c.delta);
+        let entry_long_gamma = long_contract.and_then(|c| c.gamma);
+        let entry_long_vega = long_contract.and_then(|c| c.vega);
 
         let placed = match alpaca.place_spread_order(&order).await {
             Ok(o) => o,
@@ -261,8 +296,26 @@ async fn run_inner(env: &Env, force: bool) -> Result<()> {
             Some(iv_metrics.iv_rank),
             spread.short_delta,
             spread.short_theta,
+            nbbo.as_ref(),
+            entry_short_gamma, entry_short_vega,
+            entry_long_delta, entry_long_gamma, entry_long_vega,
         ).await {
-            Ok(_) => {}
+            Ok(_) => {
+                let open_trades_now = db.get_open_trades().await.unwrap_or_default();
+                let snap = crate::measurement::equity::build_equity_snapshot(
+                    crate::measurement::equity::EquityEvent::TradeOpen,
+                    crate::measurement::equity::SnapshotInputs {
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                        equity: account.equity, cash: account.cash,
+                        open_position_mtm: 0.0,
+                        realized_pnl_day: daily_stats.realized_pnl,
+                        unrealized_pnl_day: 0.0,
+                        open_position_count: open_trades_now.len() as i64,
+                        trade_id_ref: Some(trade_id.clone()),
+                    },
+                );
+                db.insert_equity_snapshot(&snap).await.ok();
+            }
             Err(e) => {
                 // Ghost trade prevention: DB write failed after order placed — cancel immediately
                 console_log!("CRITICAL: DB write failed for order {}. Cancelling.", placed.id);

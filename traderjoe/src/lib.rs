@@ -5,6 +5,7 @@ mod broker;
 mod config;
 mod db;
 mod handlers;
+pub mod measurement;
 mod notifications;
 mod risk;
 mod types;
@@ -64,6 +65,12 @@ async fn fetch(mut req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 if let Err(r) = check_auth(&req, &env) { return Ok(r); }
                 handlers::eod_summary::run(&env).await?;
                 return Response::from_json(&serde_json::json!({ "ok": true, "handler": "eod_summary" }));
+            }
+
+            if path == "/trigger/metrics" {
+                if let Err(r) = check_auth(&req, &env) { return Ok(r); }
+                handlers::weekly_metrics::run(&env).await?;
+                return Response::from_json(&serde_json::json!({ "ok": true, "handler": "weekly_metrics" }));
             }
 
             if path == "/circuit-breaker/reset" {
@@ -134,6 +141,7 @@ async fn scheduled(event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
         "0 14 * * MON-FRI" => handlers::morning_scan::run(&env).await,
         "*/5 14-20 * * MON-FRI" => handlers::position_monitor::run(&env).await,
         "15 20 * * MON-FRI" => handlers::eod_summary::run(&env).await,
+        "0 2 * * MON" => handlers::weekly_metrics::run(&env).await,
         unknown => {
             console_error!("Unknown cron expression: {}", unknown);
             Ok(())

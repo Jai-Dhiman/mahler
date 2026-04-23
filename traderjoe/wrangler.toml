@@ -13,6 +13,7 @@ crons = [
     "0 14 * * MON-FRI",
     "*/5 14-20 * * MON-FRI",
     "15 20 * * MON-FRI",
+    "0 2 * * MON",
 ]
 
 [[d1_databases]]
