@@ -47,7 +47,21 @@ def generate_action_items(summary, attendees, crm_context, open_tasks, llm_calle
 
 
 def _build_prompt(summary, attendees, crm_context, open_tasks) -> str:
-    return f"summary: {summary}"
+    attendees_block = "\n".join(
+        f"- {a.get('name') or a.get('email') or 'unknown'}: {crm_context.get(a.get('email', ''), 'not in CRM')}"
+        for a in attendees
+    ) or "- none"
+    open_tasks_block = "\n".join(f"- {t}" for t in open_tasks) or "- none"
+    return (
+        "You are generating post-meeting action items.\n\n"
+        f"Meeting summary:\n{summary}\n\n"
+        f"Attendees:\n{attendees_block}\n\n"
+        f"Existing open tasks (do NOT duplicate these):\n{open_tasks_block}\n\n"
+        "Output format: one action item per line, prefixed with 'TASK: '. "
+        "Include priority as '| PRIORITY: High|Medium|Low'. "
+        "Prefix the title with '[Attendee Name]' when the item relates to a specific attendee. "
+        "If there are no action items, respond with exactly 'no action items'."
+    )
 
 
 def _parse_action_items(raw: str) -> list[dict]:

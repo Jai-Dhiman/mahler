@@ -81,6 +81,22 @@ class TestGenerateActionItems(unittest.TestCase):
             [{"title": "[Alice] Send Q2 memo", "priority": "High", "attendee": "Alice"}],
         )
 
+    def test_open_tasks_flow_into_prompt_for_dedup(self):
+        import orchestrate
+        captured = {}
+        def llm(prompt):
+            captured["prompt"] = prompt
+            return "no action items"
+        orchestrate.generate_action_items(
+            summary="meeting",
+            attendees=[],
+            crm_context={},
+            open_tasks=["Follow up with Alice", "Review Q2 deck"],
+            llm_caller=llm,
+        )
+        self.assertIn("Follow up with Alice", captured["prompt"])
+        self.assertIn("Review Q2 deck", captured["prompt"])
+
 
 if __name__ == "__main__":
     unittest.main()
