@@ -1,4 +1,4 @@
-import type { AccountRow, Env, SnapshotRow } from "../types";
+import type { AccountRow, Env, PlaidItemRow, SnapshotRow } from "../types";
 
 export async function upsertAccount(env: Env, row: Omit<AccountRow, "created_at">): Promise<void> {
   await env.DB.prepare(
@@ -81,4 +81,49 @@ export async function getHistory(env: Env, accountId: string, days: number): Pro
     .bind(accountId, days)
     .all<SnapshotRow>();
   return result.results;
+}
+
+export interface UpsertItemInput {
+  item_id: string;
+  institution_name: string;
+}
+
+export async function upsertItem(env: Env, input: UpsertItemInput): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO finance_plaid_item (item_id, institution_name)
+     VALUES (?, ?)
+     ON CONFLICT(item_id) DO UPDATE SET
+       institution_name = excluded.institution_name`,
+  )
+    .bind(input.item_id, input.institution_name)
+    .run();
+}
+
+export async function listItems(env: Env): Promise<PlaidItemRow[]> {
+  const result = await env.DB.prepare(
+    `SELECT * FROM finance_plaid_item ORDER BY created_at ASC`,
+  ).all<PlaidItemRow>();
+  return result.results;
+}
+
+export async function listAccounts(env: Env): Promise<AccountRow[]> {
+  const result = await env.DB.prepare(
+    `SELECT * FROM finance_account WHERE is_active = 1 ORDER BY created_at ASC`,
+  ).all<AccountRow>();
+  return result.results;
+}
+
+export async function updateItemStatus(
+  env: Env,
+  itemId: string,
+  status: "ok" | "needs_reauth" | "error",
+  lastError: string | null = null,
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE finance_plaid_item
+     SET status = ?, last_error = ?, last_synced_at = datetime('now')
+     WHERE item_id = ?`,
+  )
+    .bind(status, lastError, itemId)
+    .run();
 }
