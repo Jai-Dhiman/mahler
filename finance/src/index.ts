@@ -1,6 +1,7 @@
 import { handleApi } from "./handlers/api";
 import { handleLink } from "./handlers/link";
 import { handlePlaidWebhook } from "./handlers/webhook_plaid";
+import { handleScheduled } from "./handlers/crons";
 import type { Env } from "./types";
 
 const API_PATHS = new Set(["/balances", "/networth", "/history", "/refresh"]);
@@ -18,7 +19,7 @@ export default {
     return new Response("not found", { status: 404 });
   },
 
-  async scheduled(_event: ScheduledEvent, _env: Env, _ctx: ExecutionContext): Promise<void> {
-    // wired in Task 14
+  async scheduled(event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
+    await handleScheduled(event, env);
   },
 } satisfies ExportedHandler<Env>;
