@@ -93,6 +93,42 @@ pub fn compute_max_drawdown_pct(equity_curve: &[f64]) -> f64 {
     max_dd
 }
 
+#[derive(Debug, Clone)]
+pub struct SlippageInput {
+    pub entry_mid: f64,
+    pub entry_fill: f64,
+    /// Mean of (short_ask-short_bid) and (long_ask-long_bid) at snapshot time.
+    pub leg_width: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SlippageStats {
+    pub mean_abs: f64,
+    pub max_abs: f64,
+    pub ratio_vs_orats: f64,
+}
+
+pub fn compute_slippage_stats(inputs: &[SlippageInput]) -> SlippageStats {
+    if inputs.is_empty() {
+        return SlippageStats { mean_abs: 0.0, max_abs: 0.0, ratio_vs_orats: 0.0 };
+    }
+    let slippages: Vec<f64> = inputs.iter().map(|i| (i.entry_mid - i.entry_fill).abs()).collect();
+    let mean = slippages.iter().sum::<f64>() / slippages.len() as f64;
+    let max = slippages.iter().cloned().fold(0.0f64, f64::max);
+    let assumed: f64 = inputs.iter()
+        .map(|i| ORATS_ASSUMED_SLIPPAGE_PCT_OF_SPREAD * i.leg_width)
+        .sum::<f64>() / inputs.len() as f64;
+    let ratio = if assumed > 0.0 { mean / assumed } else { 0.0 };
+    SlippageStats { mean_abs: mean, max_abs: max, ratio_vs_orats: ratio }
+}
+
+/// Regime bucket from spot VIX level.
+pub fn classify_regime(spot_vix: f64) -> &'static str {
+    if spot_vix < 15.0 { "low_vol" }
+    else if spot_vix < 25.0 { "med_vol" }
+    else { "high_vol" }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,5 +200,27 @@ mod tests {
         let equity = vec![100.0, 120.0, 90.0, 110.0];
         let dd = compute_max_drawdown_pct(&equity);
         assert!((dd - 0.25).abs() < 1e-6, "expected 0.25, got {}", dd);
+    }
+
+    #[test]
+    fn slippage_stats_mean_and_max_from_entry_fills() {
+        // Trade A: entry_net_mid 0.50, fill_price 0.48 → slippage 0.02
+        // Trade B: entry_net_mid 0.60, fill_price 0.56 → slippage 0.04
+        let inputs = vec![
+            SlippageInput { entry_mid: 0.50, entry_fill: 0.48, leg_width: 0.10 },
+            SlippageInput { entry_mid: 0.60, entry_fill: 0.56, leg_width: 0.10 },
+        ];
+        let s = compute_slippage_stats(&inputs);
+        assert!((s.mean_abs - 0.03).abs() < 1e-9);
+        assert!((s.max_abs - 0.04).abs() < 1e-9);
+        // ORATS constant = 0.34 × 0.10 = 0.034 per trade assumed; mean 0.03 / 0.034 ≈ 0.882
+        assert!((s.ratio_vs_orats - (0.03 / (0.34 * 0.10))).abs() < 1e-6);
+    }
+
+    #[test]
+    fn classify_regime_thresholds_on_spot_vix() {
+        assert_eq!(classify_regime(12.0), "low_vol");
+        assert_eq!(classify_regime(20.0), "med_vol");
+        assert_eq!(classify_regime(30.0), "high_vol");
     }
 }
