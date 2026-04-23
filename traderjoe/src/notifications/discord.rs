@@ -1,6 +1,9 @@
 use serde_json::{json, Value};
 use worker::{Fetch, Headers, Method, Request, RequestInit, Result};
 
+use crate::measurement::market_context::SpyStats;
+use crate::measurement::portfolio_greeks::PortfolioGreeks;
+
 const COLOR_GREEN: u32 = 0x57F287;
 const COLOR_RED: u32 = 0xED4245;
 const COLOR_BLUE: u32 = 0x5865F2;
@@ -76,21 +79,92 @@ pub fn build_error_embed(title: &str, error: &str) -> Value {
     })
 }
 
-/// Build a Discord embed for EOD summary.
-pub fn build_eod_embed(
-    date: &str,
-    realized_pnl: f64,
-    trades_closed: i64,
-    win_rate: f64,
-) -> Value {
-    let color = if realized_pnl >= 0.0 { COLOR_GREEN } else { COLOR_RED };
+pub struct EodEmbedInput<'a> {
+    pub date: &'a str,
+    pub realized_pnl: f64,
+    pub trades_closed: i64,
+    pub win_rate: f64,
+    pub open_count: i64,
+    pub open_mtm: f64,
+    pub max_loss_remaining: f64,
+    pub greeks: Option<&'a PortfolioGreeks>,
+    pub spy_price: Option<f64>,
+    pub dte_buckets: (i64, i64, i64),
+    pub spot_vix: Option<f64>,
+    pub vix_source: &'a str,
+    pub vixy: Option<f64>,
+    pub spy_stats: Option<&'a SpyStats>,
+    pub equity: Option<f64>,
+    pub cash: Option<f64>,
+}
+
+pub fn regime_tag(spot_vix: Option<f64>) -> &'static str {
+    match spot_vix {
+        Some(v) if v < 15.0 => "calm",
+        Some(v) if v < 20.0 => "normal",
+        Some(v) if v < 30.0 => "elevated",
+        Some(_) => "stress",
+        None => "unknown",
+    }
+}
+
+fn fmt_dollar(v: Option<f64>) -> String {
+    v.map(|x| format!("${:.0}", x)).unwrap_or_else(|| "—".into())
+}
+
+pub fn build_eod_embed(i: &EodEmbedInput) -> Value {
+    let color = if i.realized_pnl >= 0.0 { COLOR_GREEN } else { COLOR_RED };
+
+    let (dollar_delta, theta_day, vega) = match (i.greeks, i.spy_price) {
+        (Some(g), Some(p)) => (
+            format!("${:+.0}", g.beta_weighted_delta * p),
+            format!("${:+.0}", g.total_theta),
+            format!("${:+.0}", g.total_vega),
+        ),
+        _ => ("—".into(), "—".into(), "—".into()),
+    };
+
+    let (rv, r20, ddn) = match i.spy_stats {
+        Some(s) => (
+            format!("{:.1}%", s.realized_vol_20d * 100.0),
+            format!("{:+.1}%", s.return_20d * 100.0),
+            format!("-{:.1}%", s.drawdown_from_52w_high * 100.0),
+        ),
+        None => ("—".into(), "—".into(), "—".into()),
+    };
+
+    let (d7, d21, d_long) = i.dte_buckets;
+    let dte_str = format!("{} ≤7d · {} 8-21d · {} >21d", d7, d21, d_long);
+
+    let vix_str = match i.spot_vix {
+        Some(v) => format!("{:.2} ({})", v, i.vix_source),
+        None => format!("— ({})", i.vix_source),
+    };
+
     json!({
-        "title": format!("EOD Summary — {}", date),
+        "title": format!("EOD Summary — {}", i.date),
         "color": color,
+        "description": format!("Regime: **{}**", regime_tag(i.spot_vix)),
         "fields": [
-            { "name": "Realized P&L", "value": format!("${:.0}", realized_pnl), "inline": true },
-            { "name": "Trades Closed", "value": trades_closed.to_string(), "inline": true },
-            { "name": "Win Rate", "value": format!("{:.0}%", win_rate * 100.0), "inline": true }
+            { "name": "Realized P&L",   "value": format!("${:.0}", i.realized_pnl), "inline": true },
+            { "name": "Trades Closed",  "value": i.trades_closed.to_string(),       "inline": true },
+            { "name": "Win Rate",       "value": format!("{:.0}%", i.win_rate * 100.0), "inline": true },
+
+            { "name": "Open Positions",    "value": format!("{} · MTM ${:+.0}", i.open_count, i.open_mtm), "inline": true },
+            { "name": "Max Loss at Risk",  "value": format!("${:.0}", i.max_loss_remaining), "inline": true },
+            { "name": "DTE Mix",           "value": dte_str, "inline": true },
+
+            { "name": "$Δ (per $1 SPY)", "value": dollar_delta, "inline": true },
+            { "name": "Θ / day",         "value": theta_day,    "inline": true },
+            { "name": "Vega / 1% IV",    "value": vega,         "inline": true },
+
+            { "name": "Spot VIX",            "value": vix_str, "inline": true },
+            { "name": "VIXY",                "value": i.vixy.map(|v| format!("{:.2}", v)).unwrap_or_else(|| "—".into()), "inline": true },
+            { "name": "SPY 20d RV/Ret/DD",   "value": format!("{} · {} · {}", rv, r20, ddn), "inline": true },
+
+            { "name": "Equity", "value": fmt_dollar(i.equity), "inline": true },
+            { "name": "Cash",   "value": fmt_dollar(i.cash),   "inline": true },
+            { "name": "\u{200b}", "value": "\u{200b}", "inline": true }
         ]
     })
 }
@@ -192,8 +266,8 @@ impl DiscordClient {
         self.send("**Error**", vec![embed]).await
     }
 
-    pub async fn send_eod_summary(&self, date: &str, pnl: f64, closed: i64, win_rate: f64) -> Result<()> {
-        let embed = build_eod_embed(date, pnl, closed, win_rate);
+    pub async fn send_eod_summary(&self, input: &EodEmbedInput<'_>) -> Result<()> {
+        let embed = build_eod_embed(input);
         self.send("", vec![embed]).await
     }
 
@@ -262,5 +336,80 @@ mod tests {
         let desc = embed["description"].as_str().unwrap_or("");
         assert!(desc.contains("2026-03-22"));
         assert!(desc.contains("WEAK"));
+    }
+
+    fn mk_greeks() -> PortfolioGreeks {
+        use std::collections::HashMap;
+        PortfolioGreeks {
+            beta_weighted_delta: -42.0,
+            total_gamma: -0.08,
+            total_vega: -35.0,
+            total_theta: 18.0,
+            delta_by_underlying: HashMap::new(),
+            max_gamma_single_position: 0.05,
+            max_vega_single_position: 20.0,
+            open_position_count: 3,
+        }
+    }
+
+    fn mk_stats() -> SpyStats {
+        SpyStats { realized_vol_20d: 0.123, return_20d: 0.012, drawdown_from_52w_high: 0.034 }
+    }
+
+    #[test]
+    fn eod_embed_zero_trades_still_shows_open_book_and_regime() {
+        let g = mk_greeks();
+        let s = mk_stats();
+        let embed = build_eod_embed(&EodEmbedInput {
+            date: "2026-04-23",
+            realized_pnl: 0.0, trades_closed: 0, win_rate: 1.0,
+            open_count: 3, open_mtm: 45.0, max_loss_remaining: 1275.0,
+            greeks: Some(&g), spy_price: Some(480.0),
+            dte_buckets: (0, 2, 1),
+            spot_vix: Some(17.45), vix_source: "fred",
+            vixy: Some(21.30),
+            spy_stats: Some(&s),
+            equity: Some(102_430.0), cash: Some(98_100.0),
+        });
+        let desc = embed["description"].as_str().unwrap_or("");
+        assert!(desc.contains("normal"), "regime should be normal at VIX=17.45");
+        let fields = embed["fields"].as_array().expect("fields");
+        let joined: String = fields.iter()
+            .filter_map(|f| f["value"].as_str())
+            .collect::<Vec<_>>()
+            .join("|");
+        assert!(joined.contains("MTM"), "should show open MTM even on zero-close day");
+        assert!(joined.contains("≤7d"), "should show DTE mix");
+        // $Δ = -42 * 480 = -20160
+        assert!(joined.contains("-20160") || joined.contains("-20,160"),
+                "should show $delta scaled by spy price; got: {}", joined);
+    }
+
+    #[test]
+    fn regime_tag_boundaries() {
+        assert_eq!(regime_tag(Some(14.9)), "calm");
+        assert_eq!(regime_tag(Some(15.0)), "normal");
+        assert_eq!(regime_tag(Some(19.9)), "normal");
+        assert_eq!(regime_tag(Some(20.0)), "elevated");
+        assert_eq!(regime_tag(Some(29.9)), "elevated");
+        assert_eq!(regime_tag(Some(30.0)), "stress");
+        assert_eq!(regime_tag(None), "unknown");
+    }
+
+    #[test]
+    fn eod_embed_shows_em_dash_when_greeks_unavailable() {
+        let embed = build_eod_embed(&EodEmbedInput {
+            date: "2026-04-23",
+            realized_pnl: 0.0, trades_closed: 0, win_rate: 1.0,
+            open_count: 0, open_mtm: 0.0, max_loss_remaining: 0.0,
+            greeks: None, spy_price: None,
+            dte_buckets: (0, 0, 0),
+            spot_vix: None, vix_source: "unavailable",
+            vixy: None, spy_stats: None,
+            equity: None, cash: None,
+        });
+        let fields = embed["fields"].as_array().expect("fields");
+        let greek_field = fields.iter().find(|f| f["name"] == "$Δ (per $1 SPY)").unwrap();
+        assert_eq!(greek_field["value"], "—");
     }
 }

@@ -145,11 +145,32 @@ pub async fn run(env: &Env) -> Result<()> {
     daily_stats.trades_closed = closed_summaries.len() as i64;
     kv.set_daily_stats(&daily_stats).await.ok();
 
-    discord.send_eod_summary(&today, realized_pnl, closed_summaries.len() as i64, win_rate).await.ok();
-
     let account_final = alpaca.get_account().await.ok();
     let (eq, cash) = account_final.as_ref().map(|a| (a.equity, a.cash)).unwrap_or((0.0, 0.0));
     let open_mtm = compute_open_mtm(&open_trades, &chain_map);
+    let spy_price = chain_map.get("SPY").map(|c| c.underlying_price);
+    let max_loss_remaining: f64 = open_trades.iter().map(|t| t.max_loss * t.contracts as f64).sum();
+    let dte_buckets = bucket_dtes(&open_trades, &today);
+
+    discord.send_eod_summary(&crate::notifications::discord::EodEmbedInput {
+        date: &today,
+        realized_pnl,
+        trades_closed: closed_summaries.len() as i64,
+        win_rate,
+        open_count: open_trades.len() as i64,
+        open_mtm,
+        max_loss_remaining,
+        greeks: Some(&pg),
+        spy_price,
+        dte_buckets,
+        spot_vix: spot_vix_val,
+        vix_source: src,
+        vixy,
+        spy_stats: Some(&spy_stats),
+        equity: account_final.as_ref().map(|_| eq),
+        cash: account_final.as_ref().map(|_| cash),
+    }).await.ok();
+
     let snap = crate::measurement::equity::build_equity_snapshot(
         crate::measurement::equity::EquityEvent::Eod,
         crate::measurement::equity::SnapshotInputs {
@@ -171,6 +192,23 @@ pub async fn run(env: &Env) -> Result<()> {
         win_rate * 100.0
     );
     Ok(())
+}
+
+fn bucket_dtes(trades: &[crate::types::Trade], today: &str) -> (i64, i64, i64) {
+    use chrono::NaiveDate;
+    let today_d = NaiveDate::parse_from_str(today, "%Y-%m-%d").ok();
+    let mut b = (0i64, 0i64, 0i64);
+    for t in trades {
+        let exp = NaiveDate::parse_from_str(&t.expiration, "%Y-%m-%d").ok();
+        let dte = match (today_d, exp) {
+            (Some(a), Some(e)) => (e - a).num_days(),
+            _ => continue,
+        };
+        if dte <= 7 { b.0 += 1; }
+        else if dte <= 21 { b.1 += 1; }
+        else { b.2 += 1; }
+    }
+    b
 }
 
 async fn fetch_fred_spot_vix() -> Option<crate::measurement::market_context::SpotVixReading> {
@@ -261,6 +299,34 @@ mod tests {
         map.insert("SPY".to_string(), chain);
         let mtm = compute_open_mtm(&[trade], &map);
         assert!((mtm - 70.0).abs() < 1e-9, "expected 70.0, got {}", mtm);
+    }
+
+    #[test]
+    fn bucket_dtes_groups_trades_by_expiry_window() {
+        use crate::types::{SpreadType, Trade, TradeStatus};
+        let mk = |exp: &str| Trade {
+            id: exp.to_string(), created_at: "2026-04-23T00:00:00Z".to_string(),
+            underlying: "SPY".to_string(), spread_type: SpreadType::BullPut,
+            short_strike: 460.0, long_strike: 455.0,
+            expiration: exp.to_string(),
+            contracts: 1, entry_credit: 0.5, max_loss: 450.0,
+            broker_order_id: None, status: TradeStatus::Open,
+            fill_price: None, fill_time: None,
+            exit_price: None, exit_time: None, exit_reason: None, net_pnl: None,
+            iv_rank: None, short_delta: None, short_theta: None,
+            entry_short_bid: None, entry_short_ask: None,
+            entry_long_bid: None, entry_long_ask: None, entry_net_mid: None,
+            exit_short_bid: None, exit_short_ask: None,
+            exit_long_bid: None, exit_long_ask: None, exit_net_mid: None,
+            entry_short_gamma: None, entry_short_vega: None,
+            entry_long_delta: None, entry_long_gamma: None, entry_long_vega: None,
+            nbbo_displayed_size_short: None, nbbo_displayed_size_long: None,
+            nbbo_snapshot_time: None,
+        };
+        // Today 2026-04-23; expiries: +5d, +14d, +30d
+        let trades = vec![mk("2026-04-28"), mk("2026-05-07"), mk("2026-05-23")];
+        let (short, mid, long) = bucket_dtes(&trades, "2026-04-23");
+        assert_eq!((short, mid, long), (1, 1, 1));
     }
 
     #[test]
