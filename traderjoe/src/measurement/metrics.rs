@@ -81,6 +81,7 @@ pub fn compute_pnl_skew(pnls: &[f64]) -> f64 {
 
 /// Max drawdown as a positive fraction (e.g. 0.25 for 25%).
 pub fn compute_max_drawdown_pct(equity_curve: &[f64]) -> f64 {
+    if equity_curve.len() < 2 { return 0.0; }
     let mut peak = 0.0f64;
     let mut max_dd = 0.0f64;
     for &e in equity_curve {

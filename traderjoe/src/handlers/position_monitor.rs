@@ -170,7 +170,8 @@ pub async fn run(env: &Env) -> Result<()> {
                             equity: eq,
                             cash,
                             open_position_mtm: 0.0,
-                            realized_pnl_day: 0.0,
+                            // This trade's P&L only; full-day realized P&L is in the EOD snapshot.
+                            realized_pnl_day: net_pnl,
                             unrealized_pnl_day: 0.0,
                             open_position_count: (open_trades.len().saturating_sub(closed_this_pass + 1)) as i64,
                             trade_id_ref: Some(trade.id.clone()),

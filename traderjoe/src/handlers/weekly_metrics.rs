@@ -76,8 +76,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn run_has_expected_signature() {
-        // Verify run accepts &Env and returns a future by calling it in a type-checked context.
+    fn run_signature_compiles_wasm_constrained() {
+        // Never executed: WASM prevents async handler calls in tests.
         fn _check_sig<'a>(env: &'a worker::Env) -> impl std::future::Future<Output = worker::Result<()>> + 'a {
             run(env)
         }

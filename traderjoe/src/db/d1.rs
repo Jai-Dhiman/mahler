@@ -109,6 +109,8 @@ impl D1Client {
         let nb_long_bid = nbbo.map(|n| n.long_bid.into()).unwrap_or(JsValue::NULL);
         let nb_long_ask = nbbo.map(|n| n.long_ask.into()).unwrap_or(JsValue::NULL);
         let nb_net_mid = nbbo.map(|n| n.net_mid.into()).unwrap_or(JsValue::NULL);
+        // For a spread entry we are selling the short leg (bid side) and buying the long leg
+        // (ask side), so the binding fill-size constraints are short_bid_size and long_ask_size.
         let nb_sz_short = nbbo.and_then(|n| n.short_bid_size).map(|s| (s as f64).into()).unwrap_or(JsValue::NULL);
         let nb_sz_long = nbbo.and_then(|n| n.long_ask_size).map(|s| (s as f64).into()).unwrap_or(JsValue::NULL);
         let nb_time = nbbo.map(|n| n.snapshot_time.as_str().into()).unwrap_or(JsValue::NULL);
@@ -321,6 +323,8 @@ impl D1Client {
         // INSERT OR REPLACE handles the EOD-per-day uniqueness via the partial index
         // idx_equity_eod_unique without relying on ON CONFLICT...WHERE syntax,
         // which has inconsistent support across D1/libSQL versions.
+        // Non-EOD event types (trade_open, trade_close, circuit_breaker) have no unique
+        // constraint and accumulate unboundedly — this is by design for full audit history.
         self.db.prepare(
             "INSERT OR REPLACE INTO equity_history
              (timestamp, event_type, equity, cash, open_position_mtm,
@@ -534,9 +538,8 @@ mod tests {
     }
 
     #[test]
-    fn create_trade_accepts_full_parameter_list() {
-        // Compile-only assertion that create_trade accepts NBBO + expanded Greeks.
-        // Build an async block that would call it; never executed.
+    fn create_trade_signature_compiles() {
+        // Never executed: WASM prevents async DB calls in tests.
         let _unused = async {
             let db: D1Client = unreachable!();
             let nbbo: crate::measurement::nbbo::NbboSnapshot = unreachable!();
@@ -550,7 +553,8 @@ mod tests {
     }
 
     #[test]
-    fn close_trade_signature_accepts_exit_nbbo() {
+    fn close_trade_signature_compiles() {
+        // Never executed: WASM prevents async DB calls in tests.
         let _unused = async {
             let db: D1Client = unreachable!();
             let nbbo: crate::measurement::nbbo::NbboSnapshot = unreachable!();
@@ -560,7 +564,8 @@ mod tests {
     }
 
     #[test]
-    fn measurement_inserters_exist_with_expected_signatures() {
+    fn measurement_inserter_signatures_compile() {
+        // Never executed: WASM prevents async DB calls in tests.
         use crate::measurement::equity::EquitySnapshot;
         use crate::measurement::portfolio_greeks::PortfolioGreeks;
         let _unused = async {
@@ -578,7 +583,8 @@ mod tests {
     }
 
     #[test]
-    fn window_query_helpers_exist() {
+    fn window_query_helpers_signature_compiles() {
+        // Never executed: WASM prevents async DB calls in tests.
         let _unused = async {
             let db: D1Client = unreachable!();
             let _: Vec<Trade> = db.get_closed_trades_in_window("2026-03-22", "2026-04-22").await.unwrap();
