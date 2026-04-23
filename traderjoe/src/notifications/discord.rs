@@ -95,6 +95,34 @@ pub fn build_eod_embed(
     })
 }
 
+/// Build a Discord embed for weekly metrics report.
+pub fn build_metrics_embed(b: &crate::measurement::metrics::MetricBundle) -> Value {
+    use crate::measurement::metrics::SampleSizeTag;
+    let (color, tag_str) = match b.sample_size_tag {
+        SampleSizeTag::Ok => (COLOR_BLUE, "OK"),
+        SampleSizeTag::Weak => (0xF0B232u32, "WEAK"),
+        SampleSizeTag::Insufficient => (COLOR_RED, "INSUFFICIENT"),
+    };
+    json!({
+        "title": format!("Weekly Metrics — {} to {}", b.window_start, b.window_end),
+        "color": color,
+        "description": format!(
+            "Window: {} → {}\nSample tag: **{}** (n={})",
+            b.window_start, b.window_end, tag_str, b.trade_count
+        ),
+        "fields": [
+            { "name": "Sharpe", "value": format!("{:.2}", b.sharpe), "inline": true },
+            { "name": "Sortino", "value": format!("{:.2}", b.sortino), "inline": true },
+            { "name": "Profit Factor", "value": format!("{:.2}", b.profit_factor), "inline": true },
+            { "name": "Win Rate", "value": format!("{:.0}%", b.win_rate * 100.0), "inline": true },
+            { "name": "Max DD", "value": format!("{:.1}%", b.max_drawdown_pct * 100.0), "inline": true },
+            { "name": "P&L Skew", "value": format!("{:.2}", b.pnl_skew), "inline": true },
+            { "name": "Slippage Ratio vs ORATS", "value": format!("{:.2}", b.slippage_vs_orats_ratio), "inline": true },
+            { "name": "Fill Size Violations", "value": format!("{} ({:.1}%)", b.fill_size_violation_count, b.fill_size_violation_pct * 100.0), "inline": true },
+        ]
+    })
+}
+
 /// Client for sending Discord notifications via bot API.
 pub struct DiscordClient {
     bot_token: String,
@@ -180,6 +208,11 @@ impl DiscordClient {
         let embed = build_exit_embed(underlying, short_strike, long_strike, exit_reason, net_pnl);
         self.send("", vec![embed]).await
     }
+
+    pub async fn send_metrics_report(&self, b: &crate::measurement::metrics::MetricBundle) -> Result<()> {
+        let embed = build_metrics_embed(b);
+        self.send("**Weekly Metrics**", vec![embed]).await
+    }
 }
 
 #[cfg(test)]
@@ -205,5 +238,29 @@ mod tests {
         let embed = build_scan_summary_embed("morning", 3, 5, 2, Some(22.5));
         let description = embed["description"].as_str().expect("description");
         assert!(description.contains("2"), "should mention 2 trades placed");
+    }
+
+    use crate::measurement::metrics::{MetricBundle, SampleSizeTag};
+    use std::collections::HashMap;
+
+    fn mk_bundle(tag: SampleSizeTag) -> MetricBundle {
+        MetricBundle {
+            window_start: "2026-03-22".to_string(), window_end: "2026-04-22".to_string(),
+            trade_count: 42, sharpe: 1.2, sortino: 1.8, profit_factor: 1.5,
+            win_rate: 0.72, pnl_skew: -1.1, max_drawdown_pct: 0.06,
+            mean_slippage_vs_mid: 0.012, max_slippage_vs_mid: 0.04,
+            slippage_vs_orats_ratio: 1.1,
+            fill_size_violation_count: 0, fill_size_violation_pct: 0.0,
+            regime_buckets: HashMap::new(), greek_ranges: HashMap::new(),
+            sample_size_tag: tag,
+        }
+    }
+
+    #[test]
+    fn metrics_embed_includes_window_and_tag() {
+        let embed = build_metrics_embed(&mk_bundle(SampleSizeTag::Weak));
+        let desc = embed["description"].as_str().unwrap_or("");
+        assert!(desc.contains("2026-03-22"));
+        assert!(desc.contains("WEAK"));
     }
 }
