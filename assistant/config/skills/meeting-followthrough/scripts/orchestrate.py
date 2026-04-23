@@ -52,6 +52,26 @@ def _fetch_crm_context(attendees: list[dict], runner) -> dict[str, str]:
     return ctx
 
 
+def _fetch_open_tasks(runner) -> list[str]:
+    result = runner(
+        ["python3", str(Path.home() / ".hermes" / "skills" / "notion-tasks" / "scripts" / "tasks.py"), "list", "--status", "Not started"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if result.returncode != 0:
+        print(f"WARNING: tasks.py list failed (exit {result.returncode}): {result.stderr.strip()}", file=sys.stderr)
+        return []
+    # tasks.py list format: "[uuid] Title\n  (status=..., priority=...)"
+    # Extract only title lines (start with "[") and strip the UUID prefix.
+    titles = []
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and "] " in stripped:
+            titles.append(stripped[stripped.index("] ") + 2:])
+    return titles
+
+
 def process_meeting(row, *, runner, llm_caller, discord_poster, d1_client) -> str:
     title = row["title"]
     attendees = _parse_attendees(row["attendees"])
@@ -60,7 +80,7 @@ def process_meeting(row, *, runner, llm_caller, discord_poster, d1_client) -> st
         summary=row["summary"],
         attendees=attendees,
         crm_context=crm_context,
-        open_tasks=[],
+        open_tasks=_fetch_open_tasks(runner),
         llm_caller=llm_caller,
     )
     if action_items:

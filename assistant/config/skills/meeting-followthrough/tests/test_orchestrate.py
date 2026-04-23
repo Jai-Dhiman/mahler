@@ -153,5 +153,43 @@ class TestCrmFanout(unittest.TestCase):
         self.assertNotIn("jai@mahler.local", captured["p"])
 
 
+class TestOpenTasksFlow(unittest.TestCase):
+    def test_open_tasks_from_tasks_list_appear_in_llm_prompt(self):
+        import orchestrate
+        row = {
+            "recording_id": 60,
+            "title": "Planning",
+            "attendees": "[]",
+            "summary": "planning chat",
+        }
+        def runner(argv, **_):
+            if "list" in argv and "--status" in argv:
+                # Matches real tasks.py list output: "[uuid] Title\n  (meta)"
+                return MagicMock(
+                    returncode=0,
+                    stdout=(
+                        "[abc-111] Follow up with Alice\n"
+                        "  (status=Not started, priority=Medium)\n"
+                        "[abc-222] Review Q2 deck\n"
+                        "  (status=Not started)\n"
+                    ),
+                    stderr="",
+                )
+            return MagicMock(returncode=0, stdout="", stderr="")
+        captured = {}
+        def llm(prompt):
+            captured["p"] = prompt
+            return "no action items"
+        orchestrate.process_meeting(
+            row,
+            runner=runner,
+            llm_caller=llm,
+            discord_poster=MagicMock(),
+            d1_client=MagicMock(),
+        )
+        self.assertIn("Follow up with Alice", captured["p"])
+        self.assertIn("Review Q2 deck", captured["p"])
+
+
 if __name__ == "__main__":
     unittest.main()
