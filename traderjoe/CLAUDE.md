@@ -25,24 +25,28 @@ Data lives in `data/orats/` (gitignored). Tests skip gracefully when data is abs
 
 ## Rust Worker (`trader-joe/`)
 
-Cloudflare Worker (WASM via worker-rs 0.4). Three cron handlers in `src/handlers/`:
+Cloudflare Worker (WASM via worker-rs 0.4). Four cron handlers in `src/handlers/`:
 
-- `morning_scan.rs` — 10:00 AM ET (`0 14 * * MON-FRI`), primary scan + order placement
-- `position_monitor.rs` — every 5 min during market hours (`*/5 14-20 * * MON-FRI`), profit/stop/gamma exits
-- `eod_summary.rs` — 9:00 PM ET (`0 1 * * TUE-SAT`), daily P&L Discord report
+- `morning_scan.rs` — 10:00 AM ET (`0 14 * * MON-FRI`), primary scan + order placement; captures entry NBBO and equity snapshot per trade
+- `position_monitor.rs` — every 5 min during market hours (`*/5 14-20 * * MON-FRI`), profit/stop/gamma exits; captures exit NBBO and equity snapshot per close
+- `eod_summary.rs` — 9:00 PM ET (`0 1 * * TUE-SAT`), daily P&L report + EOD equity/greeks/market-context snapshots
+- `weekly_metrics.rs` — Monday 2 AM UTC (`0 2 * * MON`), 30-day rolling metrics report to Discord
 
 All trade decisions are **algorithmic only** — IV rank/percentile, delta filters, spread scoring, position sizing. No LLM involvement in trade logic.
 
+`LIVE_CAPITAL_FRACTION` env var (default 0.10) scales equity for position sizing during the paper→live ramp. See `traderjoe/docs/GO_LIVE_GATE.md` for the 10-criteria go-live checklist.
+
 Key modules:
 - `analysis/`: `greeks.rs` (Black-Scholes delta), `iv_rank.rs` (IVMetrics), `screener.rs` (OptionsScreener)
-- `broker/`: `alpaca.rs` (AlpacaClient HTTP), `types.rs` (OptionsChain, Order, VixData)
-- `db/`: `d1.rs` (D1Client — trades table CRUD), `kv.rs` (KvClient — circuit breaker + daily stats)
-- `risk/`: `circuit_breaker.rs` (CircuitBreaker with 6 RiskLevels), `position_sizer.rs` (PositionSizer)
-- `notifications/`: `discord.rs` (DiscordClient embed builders)
+- `broker/`: `alpaca.rs` (AlpacaClient HTTP), `types.rs` (OptionsChain, Order, VixData — includes `bid_size`/`ask_size`)
+- `db/`: `d1.rs` (D1Client — trades CRUD + measurement inserters/window queries), `kv.rs` (KvClient — circuit breaker + daily stats)
+- `measurement/`: `nbbo.rs` (spread NBBO snapshotter), `equity.rs` (EquitySnapshot builder), `portfolio_greeks.rs` (beta-weighted greeks aggregator), `market_context.rs` (SPY stats + FRED VIX CSV parser), `metrics.rs` (Sharpe, Sortino, profit factor, drawdown, slippage, fill-size violations)
+- `risk/`: `circuit_breaker.rs` (CircuitBreaker with 6 RiskLevels), `position_sizer.rs` (PositionSizer + `effective_equity`)
+- `notifications/`: `discord.rs` (DiscordClient embed builders — includes weekly metrics embed)
 - `config.rs`: `SpreadConfig` — autoresearch-validated params (profit_target=0.25, stop_loss=1.25)
-- `types.rs`: `CreditSpread`, `Trade`, `TradeStatus`, `SpreadType`, `ExitReason`
+- `types.rs`: `CreditSpread`, `Trade` (extended with NBBO + Greeks fields), `TradeStatus`, `SpreadType`, `ExitReason`
 
-Storage: Cloudflare D1 (`trades`, `iv_history`, `scan_log` tables — migration `0017`) + KV (circuit breaker state, daily stats).
+Storage: Cloudflare D1 (`trades`, `iv_history`, `scan_log`, `equity_history`, `portfolio_greeks_eod`, `market_context_daily`, `metrics_weekly` — migrations `0001`–`0002`) + KV (circuit breaker state, daily stats).
 
 Build: `wrangler deploy` (WASM target). Local dev: `wrangler dev`.
 
@@ -52,5 +56,5 @@ Note: VIX is proxied via VIXY ETF (Alpaca has no spot VIX endpoint). Circuit bre
 
 - `BacktestConfig::default()` is still used in `engine_core/engine.rs:build_result()` — do not remove it
 - Walk-forward optimizer uses `PutSpreadConfig` (not `BacktestConfig`) for parameter sweeps
-- 154 Rust tests must pass: `cargo test` (101 backtest + 53 trader-joe)
+- 91 Rust tests must pass: `cargo test` from `traderjoe/` (measurement module + handler tests)
 - `trader-joe/` builds to WASM: `cargo build --target wasm32-unknown-unknown`
