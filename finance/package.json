@@ -1,0 +1,22 @@
+{
+  "name": "finance-state",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.5.0",
+    "@cloudflare/workers-types": "^4.20240909.0",
+    "typescript": "^5.5.0",
+    "vitest": "~1.5.0",
+    "wrangler": "^3.78.0"
+  },
+  "dependencies": {
+    "plaid": "^27.0.0"
+  }
+}

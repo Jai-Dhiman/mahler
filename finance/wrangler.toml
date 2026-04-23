@@ -1,0 +1,27 @@
+name = "finance-state"
+main = "src/index.ts"
+compatibility_date = "2026-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+[triggers]
+crons = [
+  "0 7 * * *",
+  "0 7 * * MON",
+]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "mahler-db"
+database_id = "b6cb2eac-2903-46bd-baea-b4ff2dc904d0"
+migrations_dir = "migrations"
+
+[[kv_namespaces]]
+binding = "FINANCE_KV"
+id = "REPLACE_WITH_KV_ID_BEFORE_DEPLOY"
+
+[vars]
+ENVIRONMENT = "dev"
+LOG_LEVEL = "INFO"
