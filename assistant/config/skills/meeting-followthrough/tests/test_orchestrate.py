@@ -295,5 +295,30 @@ class TestCrmTalkedTo(unittest.TestCase):
         self.assertIn("CRM updated: Alice", captured_post["c"])
 
 
+class TestMainMultipleMeetings(unittest.TestCase):
+    def test_each_pending_row_is_processed_independently(self):
+        import orchestrate
+        d1 = MagicMock()
+        d1.fetch_pending.return_value = [
+            {"recording_id": 101, "title": "Sync A", "attendees": "[]", "summary": "a"},
+            {"recording_id": 102, "title": "Sync B", "attendees": "[]", "summary": "b"},
+        ]
+        posted: list[str] = []
+        def poster(c):
+            posted.append(c)
+        orchestrate.main(
+            argv=[],
+            d1_client=d1,
+            runner=lambda argv, **_: MagicMock(returncode=0, stdout="", stderr=""),
+            llm_caller=MagicMock(return_value="no action items"),
+            discord_poster=poster,
+        )
+        marked = [call.args[0] for call in d1.mark_done.call_args_list]
+        self.assertEqual(marked, [101, 102])
+        self.assertEqual(len(posted), 2)
+        self.assertIn("Sync A", posted[0])
+        self.assertIn("Sync B", posted[1])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -207,4 +207,12 @@ def main(argv, *, d1_client, runner, llm_caller, discord_poster) -> int:
     if not rows:
         print("NO_WORK")
         return 0
+    for row in rows:
+        process_meeting(
+            row,
+            runner=runner,
+            llm_caller=llm_caller,
+            discord_poster=discord_poster,
+            d1_client=d1_client,
+        )
     return 0
