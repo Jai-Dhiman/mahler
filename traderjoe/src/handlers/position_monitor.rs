@@ -62,6 +62,7 @@ pub async fn run(env: &Env) -> Result<()> {
     }
 
     let cfg = SpreadConfig::default();
+    let mut closed_this_pass: usize = 0;
 
     for trade in &open_trades {
         if matches!(trade.status, crate::types::TradeStatus::PendingFill) {
@@ -160,20 +161,23 @@ pub async fn run(env: &Env) -> Result<()> {
                 }
                 Ok(true) => {
                     use chrono::Utc;
+                    let account = alpaca.get_account().await;
+                    let (eq, cash) = account.map(|a| (a.equity, a.cash)).unwrap_or((0.0, 0.0));
                     let snap = crate::measurement::equity::build_equity_snapshot(
                         crate::measurement::equity::EquityEvent::TradeClose,
                         crate::measurement::equity::SnapshotInputs {
                             timestamp: Utc::now().to_rfc3339(),
-                            equity: alpaca.get_account().await.map(|a| a.equity).unwrap_or(0.0),
-                            cash: alpaca.get_account().await.map(|a| a.cash).unwrap_or(0.0),
+                            equity: eq,
+                            cash,
                             open_position_mtm: 0.0,
                             realized_pnl_day: 0.0,
                             unrealized_pnl_day: 0.0,
-                            open_position_count: (open_trades.len().saturating_sub(1)) as i64,
+                            open_position_count: (open_trades.len().saturating_sub(closed_this_pass + 1)) as i64,
                             trade_id_ref: Some(trade.id.clone()),
                         },
                     );
                     db.insert_equity_snapshot(&snap).await.ok();
+                    closed_this_pass += 1;
                 }
             }
 
@@ -219,7 +223,9 @@ mod tests {
     use crate::config::SpreadConfig;
 
     #[test]
-    fn close_trade_is_invoked_with_exit_nbbo() {
+    fn close_trade_exit_nbbo_param_type_check() {
+        // Compile-only: verifies close_trade accepts Option<&NbboSnapshot>.
+        // WASM constraints prevent executing async DB calls in #[test].
         use crate::measurement::nbbo::NbboSnapshot;
         fn _ty_check(_: Option<&NbboSnapshot>) {}
         _ty_check(None);

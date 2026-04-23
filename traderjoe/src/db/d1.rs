@@ -318,17 +318,14 @@ impl D1Client {
         use worker::wasm_bindgen::JsValue;
         let trade_ref = snap.trade_id_ref.as_deref()
             .map(|s| s.into()).unwrap_or(JsValue::NULL);
+        // INSERT OR REPLACE handles the EOD-per-day uniqueness via the partial index
+        // idx_equity_eod_unique without relying on ON CONFLICT...WHERE syntax,
+        // which has inconsistent support across D1/libSQL versions.
         self.db.prepare(
-            "INSERT INTO equity_history
+            "INSERT OR REPLACE INTO equity_history
              (timestamp, event_type, equity, cash, open_position_mtm,
               realized_pnl_day, unrealized_pnl_day, open_position_count, trade_id_ref)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(date(timestamp)) WHERE event_type = 'eod'
-               DO UPDATE SET equity = excluded.equity, cash = excluded.cash,
-                 open_position_mtm = excluded.open_position_mtm,
-                 realized_pnl_day = excluded.realized_pnl_day,
-                 unrealized_pnl_day = excluded.unrealized_pnl_day,
-                 open_position_count = excluded.open_position_count"
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
         ).bind(&[
             snap.timestamp.as_str().into(),
             snap.event_type.into(),
