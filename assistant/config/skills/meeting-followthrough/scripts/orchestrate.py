@@ -120,12 +120,15 @@ def process_meeting(row, *, runner, llm_caller, discord_poster, d1_client) -> st
     else:
         action_lines = "  None"
     crm_line = "CRM updated: No CRM matches"
-    summary = (
-        f"Post-meeting: {title}\n"
-        f"Action items created:\n"
-        f"{action_lines}\n"
-        f"{crm_line}"
-    )
+    summary_parts = [
+        f"Post-meeting: {title}",
+        "Action items created:",
+        action_lines,
+        crm_line,
+    ]
+    if task_error:
+        summary_parts.append(f"WARNING: {task_error}")
+    summary = "\n".join(summary_parts)
     discord_poster(summary)
     d1_client.mark_done(row["recording_id"])
     return summary

@@ -223,5 +223,41 @@ class TestTasksCreate(unittest.TestCase):
         self.assertEqual(priorities, {"High", "Medium"})
 
 
+    def test_partial_create_failure_posts_partial_and_marks_done(self):
+        import orchestrate
+        row = {
+            "recording_id": 71,
+            "title": "1:1",
+            "attendees": "[]",
+            "summary": "1:1 summary",
+        }
+        create_count = 0
+        def runner(argv, **_):
+            nonlocal create_count
+            if "create" in argv:
+                create_count += 1
+                if create_count == 1:
+                    return MagicMock(returncode=0, stdout="Created: x", stderr="")
+                return MagicMock(returncode=1, stdout="", stderr="Notion 500")
+            return MagicMock(returncode=0, stdout="", stderr="")
+        llm = MagicMock(return_value=(
+            "TASK: First task | PRIORITY: High\n"
+            "TASK: Second task | PRIORITY: Medium"
+        ))
+        posted: list[str] = []
+        d1 = MagicMock()
+        orchestrate.process_meeting(
+            row,
+            runner=runner,
+            llm_caller=llm,
+            discord_poster=lambda c: posted.append(c),
+            d1_client=d1,
+        )
+        self.assertEqual(len(posted), 1)
+        self.assertIn("First task", posted[0])
+        self.assertIn("WARNING", posted[0])
+        d1.mark_done.assert_called_once_with(71)
+
+
 if __name__ == "__main__":
     unittest.main()
