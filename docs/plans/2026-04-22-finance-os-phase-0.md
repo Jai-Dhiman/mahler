@@ -3097,6 +3097,185 @@ git add assistant/config/skills/finance-read/ && git commit -m "feat(finance-rea
 - Tests do not mock internal collaborators of the module under test (only the network boundary: `fetch` to plaid/alpaca/discord). D1 + KV are real miniflare instances.
 - File ownership: tasks within Group B all touch `queries.ts` and are sequential. Group C: T5 + T6 share `plaid/client.ts` (sequential); T7 + T8 are independent. Group E: all wire `index.ts` and are sequential. Group D's two tasks touch disjoint files and are parallel.
 - Type/method names are consistent across tasks (`syncAllItems`, `computeWeeklySummary`, `postWeeklySummary`, `WeeklyData`, `SyncResult`, `Env`, etc.).
+
+---
+
+## Challenge Review
+
+### CEO Pass
+
+**Premise:** Correct problem, direct path. Without a balance history, no downstream advice system has data to ground itself in. No simpler framing exists given Plaid's server-side token exchange requirement.
+
+**Scope:** Plan maps 1:1 to spec. Every "File Changes" row in the spec has a corresponding task. No scope drift detected in either direction. All 15 tasks are new files in a new directory — file count is high but unavoidable for a greenfield worker.
+
+**12-Month Alignment:**
+```
+CURRENT STATE                    THIS PLAN                          12-MONTH IDEAL
+Fragmented accounts,         ->  D1 snapshot history,           ->  Active advisor with
+no unified view,                 weekly Discord summary,             recommendations
+no history                       Hermes read skill                   grounded in real data
+```
+Plan moves directly toward the ideal. No tech debt introduced that conflicts with Phase 1+.
+
+**Alternatives:** Spec documents the "Why this shape" rationale (separate worker vs. monorepo, TS vs. Rust, pure-cron vs. LLM). Trade-offs accepted section covers known limitations. Well-documented.
+
+---
+
+### Engineering Pass
+
+**Architecture data flow:**
+
+```
+daily cron          -> syncAllItems -> getBalances (Plaid) -> insertSnapshot (D1)
+                    -> snapshotAlpaca -> getPaperEquity (Alpaca) -> insertSnapshot (D1)
+sunday cron         -> above + computeWeeklySummary (D1) -> postWeeklySummary (Discord)
+POST /webhook/plaid -> verifyWebhook -> updateItemStatus (D1) -> Discord nudge
+POST /refresh       -> syncAllItems (same as daily cron)
+GET /balances|networth|history -> bearer auth -> D1 queries
+```
+
+**[RISK] (confidence: 9/10) — `verifyWebhook` uses plain string equality, not HMAC or JWT.**
+
+`plaid/client.ts` Task 6: `return provided === env.PLAID_WEBHOOK_SECRET`. Plaid's actual `Plaid-Verification` header contains a signed JWT (RS256, keys from Plaid's JWK endpoint) — not the raw secret. This implementation will reject every real Plaid webhook with 401 in production. The test passes only because it sets `plaid-verification: "test-webhook-secret"` in the miniflare binding, which matches the fake env. The existing `fathom-webhook/src/index.ts:verifySignature` uses `crypto.subtle.importKey` + HMAC-SHA256 and is the established pattern in this repo. The plan should implement JWT verification or, minimally, HMAC-SHA256 against the Plaid-supplied signature. Plaid's SDK (`plaid@^27.0.0`, already in `package.json`) includes `plaidClient.webhookVerificationKeyGet()` for JWK-based verification.
+
+**[RISK] (confidence: 8/10) — `updateItemStatus` bumps `last_synced_at` on both success and failure, making stale detection miss actively erroring items.**
+
+`db/queries.ts` (Task 3): `UPDATE ... SET status = ?, last_error = ?, last_synced_at = datetime('now')`. When an item errors, `syncAllItems` calls `updateItemStatus(env, item.item_id, "error", message)`, bumping `last_synced_at` to now. `computeWeeklySummary`'s stale filter checks `last_synced_at < (asOf - 36h)` — an item that errors every day will have `last_synced_at` = today and never appear in `staleItems`, even though its balance data is stale. The stale check should also flag items whose `status !== "ok"`.
+
+**[RISK] (confidence: 8/10) — Discord post in `webhook_plaid.ts` has no error handling.**
+
+`handlers/webhook_plaid.ts` (Task 13): the `fetch(env.DISCORD_WEBHOOK_URL, ...)` call has no `if (!res.ok)` check and no try/catch. If Discord is down, the handler swallows the failure and returns `{ ok: true }`. The spec and CLAUDE.md both state "explicit error handling (no silent fallbacks)." This is a direct violation. Should throw or log via `logEvent` on non-204 response.
+
+**[RISK] (confidence: 7/10) — Task 3 and Task 4 "append" instructions produce duplicate `import type` statements in `queries.ts`.**
+
+Task 2 creates `queries.ts` with `import type { AccountRow, Env, SnapshotRow } from "../types"`. Task 3 appends `import type { PlaidItemRow } from "../types"`. Task 4 appends `import type { EventRow } from "../types"`. TypeScript compiles duplicate module imports, but the build agent may produce a structurally odd file with three separate import lines from the same module. The build agent should merge these into the existing import statement. Flag for explicit attention during Task 3 Step 3.
+
+**[RISK] (confidence: 6/10) — `createLinkToken` is implemented in Task 6 but has no test and the `POST /link/token` route in `link.ts` has no test in Task 12.**
+
+Task 6 adds `createLinkToken` to `plaid/client.ts`. Task 12's `link.test.ts` covers `GET /link` (HTML check) and `POST /link/exchange`, but not `POST /link/token`. The route in `handleLink` that calls `createLinkToken` is exercised only by the user clicking "Open Plaid Link" — never in any automated test. Low severity for Phase 0 (it's a one-time dev-only flow), but a gap.
+
+**[OBS] — `plaid@^27.0.0` is in `package.json` but never imported.**
+
+The Plaid SDK is listed as a runtime dependency but all Plaid calls use raw `fetch`. The SDK is dead weight at 2MB+ in the bundle. Either remove it, or use it for JWK-based webhook verification (see RISK above), which would justify its presence.
+
+**[OBS] — `snapshotsWritten` counter in `SyncResult` counts write attempts, not actual inserts.**
+
+The plan note at Task 9 acknowledges this: "the `snapshotsWritten` counter increments on attempt, not on actual insert." On a re-run for the same day, the event log records `snapshotsWritten: N` even though 0 rows were written (all `INSERT OR IGNORE`d). The audit log is therefore misleading on idempotent re-runs. Consider naming it `snapshotsAttempted` or computing actual inserts from `result.meta.changes`.
+
+**[OBS] — Cron schedule is PST-aligned but will fire 1 hour late during PDT.**
+
+`wrangler.toml`: `"0 7 * * *"` = 07:00 UTC. During PST (UTC-8) this is 23:00 Pacific (correct). During PDT (UTC-7) this is midnight Pacific (1 hour late). This is minor for a daily snapshot but the spec says "23:00 Pacific." No fix required for Phase 0 — worth noting for a future `TZ`-aware cron.
+
+---
+
+### Module Depth Audit
+
+| Module | Interface size | Implementation | Verdict |
+|--------|----------------|----------------|---------|
+| `db/queries.ts` | 9 exported functions | 150+ LOC SQL hiding idempotency, JSON serialization | DEEP |
+| `plaid/client.ts` | 4 exports | Plaid auth, env routing, KV token I/O | DEEP |
+| `plaid/sync.ts` | 1 export (`syncAllItems`) | 60 LOC orchestration, error isolation per item | DEEP |
+| `alpaca/client.ts` | 1 export | HTTP auth, JSON parsing, NaN guard | DEEP |
+| `summary/compute.ts` | 1 export | Multi-query computation, sparkline, stale detection | DEEP |
+| `discord/embed.ts` | 1 export | Embed shape, color coding, webhook I/O | DEEP |
+| `auth.ts` | 1 fn + 1 class | 3 lines (spec calls out as intentionally shallow) | SHALLOW (intentional) |
+| `handlers/api.ts` | 1 export | Route table, auth check, param validation | DEEP enough |
+| `handlers/link.ts` | 1 export | HTML, multi-route dispatch, env gate | DEEP |
+| `handlers/webhook_plaid.ts` | 1 export | Verification, code routing, Discord nudge | DEEP |
+| `handlers/crons.ts` | 1 export | Daily vs. Monday dispatch, Alpaca snapshot | DEEP enough |
+
+No shallow modules beyond `auth.ts`, which is explicitly noted as intentional in the spec.
+
+---
+
+### Test Philosophy Audit
+
+All tests exercise behavior through public interfaces. D1 and KV are real miniflare instances throughout — no mocking of internal collaborators. Network calls (Plaid, Alpaca, Discord) are mocked at the `fetch` boundary via `vi.spyOn(globalThis, "fetch")`. Tests assert on user-observable state (D1 rows, KV values, captured request bodies), not on internal call counts.
+
+Task 12's production-gate test directly imports `handleLink` to bypass the miniflare env constraint — acceptable workaround, not a philosophy violation.
+
+Task 15 uses subprocess invocation for `query.py` — correct approach for a CLI.
+
+---
+
+### Vertical Slice Audit
+
+All 15 tasks follow: write failing test → verify FAIL → implement minimum → verify PASS → commit. No horizontal slicing. No task writes multiple tests before any implementation. No deferred implementations.
+
+---
+
+### Test Coverage Gaps
+
+```
+[+] plaid/client.ts
+    ├── exchangePublicToken()   [TESTED ★★] Task 5 — happy path + KV write
+    ├── getBalances()           [TESTED ★★] Task 6 — happy path + missing token error
+    ├── verifyWebhook()         [TESTED ★]  Task 6 — string match only; real JWT not covered
+    └── createLinkToken()       [GAP]       No test. /link/token route untested.
+
+[+] handlers/webhook_plaid.ts
+    ├── unauthorized rejection  [TESTED ★★] Task 13
+    ├── ITEM ERROR -> reauth    [TESTED ★★] Task 13
+    ├── unrelated codes ignored [TESTED ★★] Task 13
+    └── Discord post failure    [GAP]       No test for Discord down path.
+
+[+] handlers/crons.ts
+    ├── daily cron              [TESTED ★★] Task 14
+    ├── Sunday cron             [TESTED ★★] Task 14
+    └── Alpaca fetch failure    [GAP]       snapshotAlpaca catch path untested.
+
+[+] query.py
+    ├── balances subcommand     [TESTED ★]  Task 15 — smoke test via --mock-from
+    ├── networth subcommand     [GAP]       No test
+    ├── history subcommand      [GAP]       No test
+    └── refresh subcommand      [GAP]       No test
+```
+
+The `query.py` gaps are acceptable for a dev CLI with a smoke test. The `createLinkToken` gap is low severity (dev-only path). The `verifyWebhook` gap is load-bearing (see RISK above).
+
+---
+
+### Failure Modes
+
+| Scenario | Outcome | Silent? |
+|----------|---------|---------|
+| Plaid balance fetch fails for one item | Item marked `error`, sync continues, event logged | No |
+| Alpaca fetch fails during cron | Logged via `logEvent`, snapshot skipped | No |
+| Discord post fails in `postWeeklySummary` | `throw new Error(...)` — worker observability catches it | No |
+| Discord post fails in `handlePlaidWebhook` | Swallowed, returns `{ ok: true }` | **YES — silent** |
+| Real Plaid webhook arrives | 401 rejected (see verifyWebhook RISK) | No (visible failure) |
+| `wrangler deploy` before migration applied | Runtime D1 error on first request | No (visible) |
+| KV ID placeholder not replaced before deploy | `wrangler deploy` fails at CLI | No (visible) |
+
+---
+
+### Presumption Inventory
+
+| Assumption | Verdict | Reason |
+|------------|---------|--------|
+| `vitest-pool-workers` auto-applies D1 migrations from `migrations_dir` in `wrangler.toml` | VALIDATE | Documented behavior but version-sensitive; confirm against `^0.5.0` resolved version |
+| `vi.spyOn(globalThis, "fetch")` intercepts worker-internal `fetch` in miniflare | SAFE | Established pattern; same approach used in fathom-webhook tests |
+| `createScheduledController` available from `"cloudflare:test"` at `^0.5.0` | VALIDATE | Added in a later 0.x version; fathom-webhook pins `0.12.21` — the `^0.5.0` lower bound may resolve too low if bun caches an old version |
+| Plaid `development` environment supports Wells Fargo + Wealthfront | RISKY | Spec acknowledges uncertainty; some institutions require production approval |
+| `Plaid-Verification` header contains raw shared secret (not JWT) | RISKY | Plaid uses JWT-based verification; this assumption is almost certainly wrong in production |
+| `package.json` `"@cloudflare/vitest-pool-workers": "^0.5.0"` resolves consistently with fathom-webhook's pinned `0.12.21` | VALIDATE | Semver range means it could resolve to any 0.x — prefer pinning to match fathom-webhook |
+
+---
+
+### Summary
+
+```
+[RISK]     count: 4 (verifyWebhook, updateItemStatus stale detection, Discord silent failure, duplicate imports)
+[OBS]      count: 3 (dead plaid SDK dep, snapshotsWritten counter, PST/PDT cron offset)
+[QUESTION] count: 0
+[BLOCKER]  count: 0
+```
+
+VERDICT: PROCEED_WITH_CAUTION — monitor these risks during execution:
+1. **verifyWebhook** — implement HMAC or JWT verification before enabling the webhook endpoint in production; the current implementation will silently reject all real Plaid webhooks
+2. **Discord silent failure in webhook handler** — add error handling before Task 13 commit
+3. **stale item detection** — add `status !== "ok"` to the stale filter in Task 10
+4. **duplicate imports in Tasks 3/4** — build agent must merge into existing `import type {...} from "../types"` line rather than appending new import statements
 - Open questions from the spec (Plaid environment, Wealthfront splits, Discord channel, manual edits) all have explicit defaults in the spec and do not block the plan.
 
 

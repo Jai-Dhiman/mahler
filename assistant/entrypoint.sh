@@ -130,6 +130,14 @@ if 'morning-brief' not in existing_skills:
     ))
     added.append('morning-brief (8am + 8pm PST)')
 
+if 'meeting-followthrough' not in existing_skills:
+    jobs.append(make_job(
+        ['meeting-followthrough', 'relationship-manager', 'notion-tasks'],
+        'Check the Fathom meeting queue for pending completed meetings. If there are pending meetings, process each one: gather CRM context for attendees, generate action items, create Notion tasks, update CRM last_contact, mark the meeting as done, and post a summary to Discord. If there are no pending meetings, do nothing.',
+        '*/5 * * * *',
+    ))
+    added.append('meeting-followthrough (every 5 min)')
+
 if 'meeting-prep' not in existing_skills:
     jobs.append(make_job(
         ['meeting-prep', 'google-calendar', 'notion-tasks', 'notion-wiki'],

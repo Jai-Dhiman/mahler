@@ -6,5 +6,7 @@ compatibility_date = "2025-01-01"
 binding = "KV"
 id = "4e63db1305a1424ead3565522a47b5f4"
 
-[vars]
-DISCORD_BOT_USER_ID = ""
+[[d1_databases]]
+binding = "DB"
+database_name = "mahler-db"
+database_id = "b6cb2eac-2903-46bd-baea-b4ff2dc904d0"

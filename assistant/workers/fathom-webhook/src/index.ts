@@ -1,9 +1,8 @@
 export interface Env {
   KV: KVNamespace;
+  DB: D1Database;
   FATHOM_WEBHOOK_SECRET: string;
   FATHOM_API_KEY: string;
-  DISCORD_TRIAGE_WEBHOOK: string;
-  DISCORD_BOT_USER_ID: string;
 }
 
 export interface Invitee {
@@ -53,9 +52,6 @@ export async function verifySignature(
   return false;
 }
 
-// Non-atomic read-then-write: CF KV has no compare-and-set, so two concurrent
-// requests for the same recording_id can both pass this check. Acceptable given
-// Fathom's low retry frequency and the narrow window.
 export async function checkAndSetDedup(kv: KVNamespace, recordingId: number): Promise<boolean> {
   const key = `fathom:${recordingId}`;
   const existing = await kv.get(key);
@@ -84,27 +80,31 @@ export async function extractSummary(
   return data.markdown_formatted;
 }
 
-export function buildDiscordMessage(
-  title: string,
-  attendees: Invitee[],
-  summary: string,
-  botUserId: string
-): string {
-  const attendeeStr = attendees
-    .filter(a => a.email !== null)
-    .map(a => (a.name !== null ? `${a.name} <${a.email}>` : a.email!))
-    .join(", ");
-  const full = [
-    `<@${botUserId}> [FATHOM_MEETING]`,
-    `Meeting: ${title}`,
-    `Attendees: ${attendeeStr || "none"}`,
-    "",
-    "Summary:",
-    summary,
-  ].join("\n");
-  if (full.length <= 2000) return full;
-  const SUFFIX = "\n…(truncated)";
-  return full.slice(0, 2000 - SUFFIX.length) + SUFFIX;
+export async function enqueueToD1(
+  db: D1Database,
+  meeting: Meeting,
+  summary: string
+): Promise<boolean> {
+  await db.prepare(`CREATE TABLE IF NOT EXISTS fathom_meeting_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recording_id INTEGER NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    attendees TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    processed_at TEXT
+  )`).run();
+
+  const attendees = JSON.stringify(meeting.calendar_invitees ?? []);
+  const result = await db.prepare(
+    "INSERT OR IGNORE INTO fathom_meeting_queue (recording_id, title, attendees, summary) VALUES (?, ?, ?, ?)"
+  ).bind(meeting.recording_id, meeting.title, attendees, summary).run();
+
+  return (result.meta?.changes ?? 0) > 0;
+}
+
+function sanitize(s: string): string {
+  return s.replace(/[\r\n\t]/g, " ").slice(0, 200);
 }
 
 export default {
@@ -116,40 +116,47 @@ export default {
     const webhookTimestamp = req.headers.get("webhook-timestamp") ?? "";
     const webhookSignature = req.headers.get("webhook-signature") ?? "";
 
+    console.log(`[fathom-webhook] POST received, id=${sanitize(webhookId)}, ts=${sanitize(webhookTimestamp)}`);
+
     const valid = await verifySignature(
       webhookId, webhookTimestamp, rawBody, webhookSignature, env.FATHOM_WEBHOOK_SECRET
     );
-    if (!valid) return new Response("Unauthorized", { status: 401 });
+    if (!valid) {
+      console.log("[fathom-webhook] Signature verification FAILED");
+      return new Response("Unauthorized", { status: 401 });
+    }
+    console.log("[fathom-webhook] Signature OK");
 
     let meeting: Meeting;
     try {
       meeting = JSON.parse(rawBody) as Meeting;
     } catch {
+      console.log("[fathom-webhook] JSON parse failed");
       return new Response("Bad Request", { status: 400 });
     }
+    console.log(`[fathom-webhook] recording_id=${meeting.recording_id} title="${sanitize(meeting.title)}"`);
+
     const isDup = await checkAndSetDedup(env.KV, meeting.recording_id);
-    if (isDup) return new Response("OK", { status: 200 });
+    if (isDup) {
+      console.log(`[fathom-webhook] KV dedup hit for recording_id=${meeting.recording_id}`);
+      return new Response("OK", { status: 200 });
+    }
 
     let summary: string;
     try {
       summary = await extractSummary(meeting, env.FATHOM_API_KEY);
+      console.log(`[fathom-webhook] summary fetched, length=${summary.length}`);
     } catch (err) {
+      console.log(`[fathom-webhook] summary fetch FAILED: ${(err as Error).message}`);
       return new Response(`Failed to fetch summary: ${(err as Error).message}`, { status: 500 });
     }
-    const message = buildDiscordMessage(
-      meeting.title,
-      meeting.calendar_invitees ?? [],
-      summary,
-      env.DISCORD_BOT_USER_ID
-    );
 
-    const discordResp = await fetch(env.DISCORD_TRIAGE_WEBHOOK, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: message }),
-    });
-    if (!discordResp.ok) {
-      return new Response(`Discord webhook failed with ${discordResp.status}`, { status: 500 });
+    try {
+      await enqueueToD1(env.DB, meeting, summary);
+      console.log(`[fathom-webhook] enqueued recording_id=${meeting.recording_id} to D1`);
+    } catch (err) {
+      console.log(`[fathom-webhook] D1 enqueue FAILED: ${(err as Error).message}`);
+      return new Response(`D1 enqueue failed: ${(err as Error).message}`, { status: 500 });
     }
 
     return new Response("OK", { status: 200 });

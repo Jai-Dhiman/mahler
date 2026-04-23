@@ -2,6 +2,32 @@ model:
   default: "openai/gpt-5-nano"
   provider: "openrouter"
 
+auxiliary:
+  vision:
+    provider: openrouter
+    model: "google/gemma-4-31b-it:free"
+  web_extract:
+    provider: openrouter
+    model: "google/gemma-4-31b-it:free"
+  compression:
+    provider: openrouter
+    model: "google/gemma-4-31b-it:free"
+  session_search:
+    provider: openrouter
+    model: "google/gemma-4-31b-it:free"
+  skills_hub:
+    provider: openrouter
+    model: "google/gemma-4-31b-it:free"
+  approval:
+    provider: openrouter
+    model: "google/gemma-4-31b-it:free"
+  mcp:
+    provider: openrouter
+    model: "google/gemma-4-31b-it:free"
+  flush_memories:
+    provider: openrouter
+    model: "google/gemma-4-31b-it:free"
+
 terminal:
   backend: local
 

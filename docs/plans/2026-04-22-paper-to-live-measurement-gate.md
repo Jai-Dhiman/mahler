@@ -1769,8 +1769,8 @@ Change `D1Client::create_trade` in `traderjoe/src/db/d1.rs` to accept the additi
         let nb_long_bid = nbbo.map(|n| n.long_bid.into()).unwrap_or(JsValue::NULL);
         let nb_long_ask = nbbo.map(|n| n.long_ask.into()).unwrap_or(JsValue::NULL);
         let nb_net_mid = nbbo.map(|n| n.net_mid.into()).unwrap_or(JsValue::NULL);
-        let nb_sz_short = nbbo.and_then(|n| n.short_ask_size).map(|s| (s as f64).into()).unwrap_or(JsValue::NULL);
-        let nb_sz_long = nbbo.and_then(|n| n.long_bid_size).map(|s| (s as f64).into()).unwrap_or(JsValue::NULL);
+        let nb_sz_short = nbbo.and_then(|n| n.short_bid_size).map(|s| (s as f64).into()).unwrap_or(JsValue::NULL);
+        let nb_sz_long = nbbo.and_then(|n| n.long_ask_size).map(|s| (s as f64).into()).unwrap_or(JsValue::NULL);
         let nb_time = nbbo.map(|n| n.snapshot_time.as_str().into()).unwrap_or(JsValue::NULL);
 
         self.db
@@ -2626,11 +2626,17 @@ Inside `run()`, after the existing IV-snapshot loop over SPY/QQQ/IWM:
     let spy_bars_20d: Vec<_> = spy_bars_52w.iter().rev().take(20).rev().cloned().collect();
     let spy_stats = crate::measurement::market_context::compute_spy_stats(&spy_bars_20d, &spy_bars_52w);
 
-    // Spot VIX: try FRED
+    // Spot VIX: try FRED; alert via Discord if unavailable so failures are visible.
     let spot_vix_reading = fetch_fred_spot_vix().await;
     let (spot_vix_val, src, src_date) = match spot_vix_reading {
         Some(r) => (Some(r.value), r.source, Some(r.source_date)),
-        None => (None, "unavailable", None),
+        None => {
+            discord.send_error(
+                "VIX Data Unavailable",
+                &format!("FRED VIXCLS fetch failed for {}. spot_vix stored as NULL — regime tagging for today will be absent.", today),
+            ).await.ok();
+            (None, "unavailable", None)
+        }
     };
     db.insert_market_context_daily(
         &today, spot_vix_val, src, src_date.as_deref(),
@@ -3204,3 +3210,145 @@ git add traderjoe/src/lib.rs traderjoe/wrangler.toml && \
   - Tasks 14, 15: compile-only contract tests (D1 integration not runnable in unit tests).
 - **Behavior through public interfaces:** All non-compile tests exercise public functions (`snapshot_spread_nbbo`, `compute_sharpe`, `build_equity_snapshot`, `classify_regime`, etc.). No private-method access, no mocking of internal collaborators.
 - **Known constraint:** This plan is large (24 tasks). `/challenge` should confirm feasibility in one `/build` cycle or recommend a split post-spec.
+
+---
+
+## Challenge Review
+
+### CEO Pass
+
+**Premise.** The problem is real and the data is well-articulated: Alpaca paper fills are untrustworthy without NBBO capture; six months of daily equity points cannot statistically validate the strategy but can prove plumbing correctness. Framework C (operational gate, not P&L gate) is the right framing given the expected sample size of 50–100 trades. No simpler alternative exists—the four new tables and measurement modules are the minimum required to answer "can we trust the data?"
+
+**Scope.** The plan touches 14 files, introduces 5 new modules, 1 new handler, and a new cron. This crosses the 8-file smell threshold. However, the scope is entirely justified by the spec, which is itself well-bounded. No scope drift from spec detected.
+
+**Twelve-month alignment.**
+```
+CURRENT STATE                    THIS PLAN                    12-MONTH IDEAL
+No equity curve, no NBBO,   →   All measurement infra     →   Go-live with capital ramp
+no gate criteria, no             live and recording.            validated by captured data.
+regime tagging.
+```
+This plan is a prerequisite for any go-live decision. It does not create tech debt that conflicts with the 12-month ideal.
+
+**Alternatives.** The spec documents Framework C vs. statistical P&L gate with the rationale. Nothing to add.
+
+---
+
+### Engineering Pass
+
+#### Architecture
+
+Data flow is clean: entry handler captures NBBO → D1 stores measurement rows → EOD handler aggregates Greeks and market context → weekly handler reads window and posts metrics. The measurement module is pure (all I/O at boundaries). One layering violation flagged below.
+
+No security issues: no user input flows to SQL without parameterization; all D1 calls use prepared statements with `?` placeholders.
+
+#### Module Depth
+
+| Module | Interface | Implementation | Verdict |
+|--------|-----------|----------------|---------|
+| `measurement::nbbo` | 1 function, 1 struct | strike-match, bid/ask/size extraction, timestamp gen | DEEP |
+| `measurement::portfolio_greeks` | 1 method, 1 struct, 1 const | per-leg lookup, beta-weighting, max-concentration scan | DEEP |
+| `measurement::market_context` | 2 functions, 2 structs | FRED CSV parsing, log-return stdev, drawdown-from-peak | DEEP |
+| `measurement::metrics` | `compute_metrics` + 7 helpers | Sharpe/Sortino/profit factor/skew/DD/slippage/regime | DEEP |
+| `measurement::equity` | 1 function, 2 structs, 1 enum | event-type string dispatch, field mapping | SHALLOW — but correctly kept small per spec |
+| `db::d1` additions | 4 insert methods + 4 query methods | SQL bind construction | DEEP enough (hides SQL verbosity) |
+
+#### Code Quality
+
+**DRY.** The pattern `v.map(|x| x.into()).unwrap_or(JsValue::NULL)` appears 25+ times across the new D1 methods. No abstraction is planned. Each instance is only 1-2 lines, so this is acceptable, but a `opt_val(v: Option<f64>) -> JsValue` helper would cut noise by ~15 lines. Not a blocker.
+
+**Error handling.** Measurement writes in handlers all use `.await.ok()` — silent drops on failure. This is documented as intentional (measurement failures must not block trade execution). Consistent with existing pattern (`discord.send_error(...).await.ok()`). Acceptable.
+
+#### Test Philosophy
+
+All substantive tests exercise public functions through their declared signatures. No internal mocking. Compile-check tests (Tasks 14, 15, 16, 17, 19) are honest about what they verify and call out their limitations explicitly. This is the right approach given D1 is untestable in unit tests.
+
+The `run_has_expected_signature` test in Task 23 is weak — it only verifies the closure type-checks, not behavior. Acceptable since the handler is integration-level and tested by running it.
+
+#### Vertical Slice
+
+All 24 tasks follow one-test → one-impl → one-commit. The three exceptions (SQL migration shell check, grep structure check, compile-only D1 tests) are explicitly flagged in the plan's self-review notes. No horizontal slicing detected.
+
+#### Test Coverage Gaps
+
+```
+[+] measurement/metrics.rs::compute_metrics
+    ├── [TESTED]  small sample → INSUFFICIENT tag — Task 21 test ★★
+    ├── [GAP]     empty trades → profit_factor = Infinity not asserted
+    └── [GAP]     trade opened before window window → regime bucketing uses
+                  created_at but market_context queried by window → silent med_vol
+
+[+] measurement/market_context.rs
+    ├── [TESTED]  parse_fred_vix_csv happy path ★★★
+    ├── [TESTED]  parse_fred_vix_csv all-empty rows ★★
+    ├── [GAP]     Stooq fallback — no function, no test (see BLOCKER below)
+    └── [GAP]     fetch_spot_vix (async HTTP) — integration-only, acknowledged
+
+[+] handlers/morning_scan.rs Task 18 wiring
+    ├── [TESTED]  effective_equity clamps ★★★
+    └── [GAP]     NBBO snapshot captured and passed to create_trade — no behavioral test
+                  (compile-only, accepted by plan)
+```
+
+#### Failure Modes
+
+- All measurement writes in handlers use `.await.ok()`. Equity snapshot failures, Greeks insert failures, and market context failures are logged by `console_log!` in surrounding code but are otherwise silent. Acceptable because measurement failures must not abort trade execution. However, there is no Discord alert on measurement failure. If the FRED fetch silently fails daily for 30 days, the reviewer checking GO_LIVE_GATE.md criterion 7 ("Regime tags present on 100% of trades") would see 0 market_context rows with no prior warning.
+
+- Duplicate equity snapshots for `trade_open`, `trade_close`, and `circuit_breaker` events: only `eod` is deduplicated. A retried morning_scan that opens a trade twice (after order placement succeeds but before DB write), or a retried position_monitor close, would append a second snapshot. The equity curve calculation in `compute_metrics` uses consecutive EOD rows — non-EOD duplicates don't affect it. Acceptable.
+
+---
+
+### Findings
+
+**[RESOLVED]** — Task 14 NBBO size sides corrected: `nb_sz_short` now reads `short_bid_size` (you sell into the bid) and `nb_sz_long` reads `long_ask_size` (you buy at the ask).
+
+**[RESOLVED]** — Stooq fallback replaced with a Discord error alert. When FRED VIXCLS fetch fails, Task 20 sends a "VIX Data Unavailable" Discord error naming the affected date before storing NULL. No silent failure. The Stooq fallback is deferred; failures are now visible in the same channel as all other trading alerts.
+
+**[RISK]** (confidence: 9/10) — The weekly metrics run computes only a 30-day trailing window. The spec explicitly states "Compute window = trailing 30 days **and full paper history**" and "Call `compute_metrics` twice (30d + full). Insert rows into `metrics_weekly`." Task 23 only calls `compute_metrics` once. The "full history" window — needed for GO_LIVE_GATE.md criteria C2 (profit factor < 1.0 over full window) — is never computed or stored. Criterion C2's SQL query (`WHERE window_end = (SELECT MAX(window_end) FROM metrics_weekly)`) would return the latest 30-day row, not a full-window row. The catastrophic halt check becomes unreliable. Fallback: a `?window=full` parameter on the HTTP trigger could compute on demand, but the weekly scheduled job must also insert the full-window row.
+
+**[RISK]** (confidence: 8/10) — Task 19 calls `alpaca.get_account()` twice inside the `Ok(true) =>` close branch to get `equity` and `cash` separately. If the second call fails, `cash` silently defaults to `0.0` while `equity` carries the real value. The equity snapshot row for that trade close would record realistic equity but zero cash — corrupting the ratio for any analysis that uses cash separately. Fallback in the plan: "Future refactor can snapshot once and pass." Acceptable for MVP but worth noting that `open_position_mtm = 0.0` is also hardcoded here, meaning the unrealized P&L in the equity snapshot on trade close is always zero. This affects the `unrealized_pnl_day` column but not the equity curve calculation.
+
+**[RISK]** (confidence: 7/10) — Task 19 adds `alpaca.get_options_chain(&trade.underlying).await.ok()` inside the per-open-trade loop in position_monitor. With N open trades, this is N extra chain fetches on every position monitor invocation (every 5 minutes during market hours). At peak (6 open positions across 3 underlyings, 3 chains already fetched for pricing), this doubles the chain fetches per invocation. Monitor for rate limit (429) errors from Alpaca under load. Fallback: reuse the chain already fetched for debit pricing — restructure to fetch once per underlying.
+
+**[RISK]** (confidence: 6/10) — `measurement::metrics::compute_metrics` imports `use crate::db::d1::MarketContextRow` (Task 21). This creates a dependency from the pure measurement layer into the database layer. If `MarketContextRow` moves or changes, `metrics.rs` must be updated. The cleaner design is a `MarketContextSnapshot` type in `measurement::market_context.rs` with a conversion at the `D1Client` callsite. Low severity since the code compiles and works, but it couples two layers that the spec intended to be separate.
+
+**[RISK]** (confidence: 7/10) — Task 18's `all_opportunities` tuple expansion from 3-tuple to 4-tuple is underspecified. The plan says "update the downstream consumption to destructure the chain out" without giving the concrete sort closure pattern (`|(a, _, _, _), (b, _, _, _)|`) or the for-loop destructuring. The build agent must infer these. The sort-by closure at line 192 of `morning_scan.rs` currently uses `|(a, _, _), (b, _, _)|` — if the subagent misses this it will get a compile error. Low risk since the error is compile-time visible.
+
+**[QUESTION]** — Task 24's `/trigger/metrics` route returns `{ "ok": true, "handler": "weekly_metrics" }`, not the `MetricBundle` JSON that the spec promises. The spec says "Returns the same bundle for ad-hoc queries." If the on-demand metrics endpoint is meant to return the bundle (e.g., for monitoring scripts to query without waiting for Sunday), the response must be the bundle. Currently `MetricBundle` does not derive `Serialize`, so this would require adding that derive. Needs a decision: simplified response OK, or return bundle?
+
+**[QUESTION]** — `compute_metrics` regime bucketing uses `t.created_at.get(..10)` to find the market context row for each trade. But `get_closed_trades_in_window` queries by `date(exit_time) BETWEEN start AND end`. For a 30-day window, trades opened more than 30 days ago but closed within the window are included — and their `created_at` date falls before the window, so `get_market_context_in_window` (also bounded by the same window dates) may not return a row for that date. Those trades silently default to `med_vol`. Acceptable if this is known behavior, but the GO_LIVE_GATE.md's criterion 7 regime check uses a different approach (trade count against market_context join) so there's no inconsistency in the gate criteria. Informational.
+
+**[OBS]** — `PortfolioGreeks` (Task 7) does not derive `Serialize` or `Deserialize`. This is fine for the current plan because serialization of the struct itself is never needed — only `delta_by_underlying` (a `HashMap`) is serialized to JSON string for storage. But any future code that tries to JSON-serialize a `PortfolioGreeks` value will get a compile error. Worth noting for the future.
+
+**[OBS]** — Task 20 uses `alpaca.get_vix().await.ok().flatten().map(|v| v.vix)` to get VIXY close. The `get_vix` function returns `VixData { vix: f64, vix3m: Option<f64> }` where `vix` is the VIXY ETF price. The naming in `market_context_daily.vixy_close` is accurate but the `VixData.vix` field name is misleading (it's a VIXY price, not spot VIX). No action required — the CLAUDE.md acknowledges this proxy.
+
+**[OBS]** — The `ORATS_ASSUMED_SLIPPAGE_PCT_OF_SPREAD = 0.34` constant is a hardcoded assumption from the backtest. The `slippage_vs_orats_ratio` metric depends on this constant being accurate. If the backtest ORATS model is ever recalibrated, this constant must be updated in `metrics.rs`. The spec notes this as a constant, not a derived value.
+
+---
+
+### Presumption Inventory
+
+| Assumption | Verdict | Reason |
+|-----------|---------|--------|
+| `worker-rs 0.7` is used (plan header) — confirmed by `Cargo.toml`: `worker = { version = "0.7" }` | SAFE | Verified in Cargo.toml |
+| `OptionContract` doesn't have `bid_size`/`ask_size` yet — confirmed by reading `broker/types.rs:1-26` | SAFE | Verified: fields absent |
+| `Trade` doesn't have new NBBO fields yet — confirmed by reading `src/types.rs:91-113` | SAFE | Verified: fields absent |
+| D1 `ON CONFLICT(date(timestamp)) WHERE event_type = 'eod'` is valid SQLite upsert syntax | VALIDATE | SQLite 3.24+ supports expression partial-index upsert; D1 SQLite version needs verification |
+| `all_opportunities` is a `Vec<(ScoredSpread, String, IvMetrics)>` 3-tuple at line 188 | SAFE | Verified by reading `morning_scan.rs:187-189` |
+| Alpaca's chain response includes `latestQuote.bs` and `latestQuote.as` for bid/ask size | VALIDATE | Plan asserts this but it's not verified against live Alpaca API docs |
+| `chrono::Duration::days` is available in the WASM target | VALIDATE | `Cargo.toml` has `chrono = { features = ["wasmbind"] }` — `Duration::days` should work, but `Utc::now().date_naive()` (used in Task 23) may panic in WASM without `wasmbind`; verify |
+| `eod_summary.rs` currently has `realized_pnl` variable in scope at the equity-snapshot insertion point (Task 20) | VALIDATE | Not verified — the variable name depends on existing eod_summary structure |
+| `account` variable from `alpaca.get_account()` is in scope at the circuit breaker fire site (morning_scan.rs ~line 108) | SAFE | Verified: `account` is fetched at line 88 and circuit breaker evaluated at line 100 |
+| `D1Client::close_trade` at current call site in position_monitor has the exact signature `(trade_id, exit_price, exit_reason, net_pnl)` | SAFE | Verified by reading d1.rs:119-150 |
+
+---
+
+### Summary
+
+**[BLOCKER]** count: 0 (both resolved above)
+**[RISK]**    count: 5
+**[QUESTION]** count: 2
+
+Both blockers are resolved in the plan: NBBO size sides corrected in Task 14; FRED failure surfaces a Discord alert instead of silently storing NULL. Remaining risks are manageable and none block execution.
+
+VERDICT: PROCEED_WITH_CAUTION — [weekly metrics missing full-window pass; redundant get_account() calls in Task 19; N+1 chain fetches in position_monitor]
