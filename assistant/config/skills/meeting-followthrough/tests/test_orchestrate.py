@@ -124,6 +124,34 @@ class TestCrmFanout(unittest.TestCase):
         )
         self.assertIn("Alice is a senior PM", captured_prompt["p"])
 
+    def test_owner_attendee_not_fetched_from_crm(self):
+        import orchestrate
+        row = {
+            "recording_id": 52,
+            "title": "Solo",
+            "attendees": '[{"name": "Jai Dhiman", "email": "jai@mahler.local", "is_external": false}]',
+            "summary": "solo prep",
+        }
+        calls: list[list[str]] = []
+        def runner(argv, **_):
+            calls.append(argv)
+            return MagicMock(returncode=0, stdout="", stderr="")
+        captured = {}
+        def llm(prompt):
+            captured["p"] = prompt
+            return "no action items"
+        with patch.dict("os.environ", {"MAHLER_OWNER_EMAIL": "jai@mahler.local"}):
+            orchestrate.process_meeting(
+                row,
+                runner=runner,
+                llm_caller=llm,
+                discord_poster=MagicMock(),
+                d1_client=MagicMock(),
+            )
+        summarize_calls = [c for c in calls if "summarize" in c]
+        self.assertEqual(summarize_calls, [])
+        self.assertNotIn("jai@mahler.local", captured["p"])
+
 
 if __name__ == "__main__":
     unittest.main()
