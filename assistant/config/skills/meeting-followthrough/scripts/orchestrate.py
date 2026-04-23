@@ -40,6 +40,37 @@ def process_meeting(row, *, runner, llm_caller, discord_poster, d1_client) -> st
     return summary
 
 
+def generate_action_items(summary, attendees, crm_context, open_tasks, llm_caller) -> list[dict]:
+    prompt = _build_prompt(summary, attendees, crm_context, open_tasks)
+    raw = llm_caller(prompt)
+    return _parse_action_items(raw)
+
+
+def _build_prompt(summary, attendees, crm_context, open_tasks) -> str:
+    return f"summary: {summary}"
+
+
+def _parse_action_items(raw: str) -> list[dict]:
+    items: list[dict] = []
+    for line in raw.splitlines():
+        if line.startswith("TASK:"):
+            items.append(_parse_task_line(line))
+    return items
+
+
+def _parse_task_line(line: str) -> dict:
+    body = line[len("TASK:"):].strip()
+    title_part, _, priority_part = body.partition("| PRIORITY:")
+    title = title_part.strip()
+    priority = priority_part.strip() or "Medium"
+    attendee = None
+    if title.startswith("["):
+        end = title.find("]")
+        if end > 0:
+            attendee = title[1:end]
+    return {"title": title, "priority": priority, "attendee": attendee}
+
+
 def main(argv, *, d1_client, runner, llm_caller, discord_poster) -> int:
     rows = d1_client.fetch_pending()
     if not rows:

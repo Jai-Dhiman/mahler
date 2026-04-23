@@ -53,5 +53,19 @@ class TestTrivialMeeting(unittest.TestCase):
         d1.mark_done.assert_called_once_with(42)
 
 
+class TestGenerateActionItems(unittest.TestCase):
+    def test_no_action_items_llm_response_returns_empty_list(self):
+        import orchestrate
+        llm = MagicMock(return_value="no action items")
+        result = orchestrate.generate_action_items(
+            summary="a meeting happened",
+            attendees=[],
+            crm_context={},
+            open_tasks=[],
+            llm_caller=llm,
+        )
+        self.assertEqual(result, [])
+
+
 if __name__ == "__main__":
     unittest.main()
