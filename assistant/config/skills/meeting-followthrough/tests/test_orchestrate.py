@@ -320,5 +320,29 @@ class TestMainMultipleMeetings(unittest.TestCase):
         self.assertIn("Sync B", posted[1])
 
 
+class TestMainErrorHandling(unittest.TestCase):
+    def test_llm_exception_surfaces_to_discord_and_returns_nonzero(self):
+        import orchestrate
+        d1 = MagicMock()
+        d1.fetch_pending.return_value = [
+            {"recording_id": 201, "title": "Flaky", "attendees": "[]", "summary": "x"},
+        ]
+        def bad_llm(_prompt):
+            raise RuntimeError("OpenRouter 500")
+        posted: list[str] = []
+        def poster(c):
+            posted.append(c)
+        rc = orchestrate.main(
+            argv=[],
+            d1_client=d1,
+            runner=lambda argv, **_: MagicMock(returncode=0, stdout="", stderr=""),
+            llm_caller=bad_llm,
+            discord_poster=poster,
+        )
+        self.assertEqual(rc, 1)
+        self.assertEqual(d1.mark_done.call_count, 0)
+        self.assertTrue(any("Flaky" in p and "OpenRouter 500" in p for p in posted))
+
+
 if __name__ == "__main__":
     unittest.main()

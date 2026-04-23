@@ -207,12 +207,22 @@ def main(argv, *, d1_client, runner, llm_caller, discord_poster) -> int:
     if not rows:
         print("NO_WORK")
         return 0
+    had_error = False
     for row in rows:
-        process_meeting(
-            row,
-            runner=runner,
-            llm_caller=llm_caller,
-            discord_poster=discord_poster,
-            d1_client=d1_client,
-        )
-    return 0
+        try:
+            process_meeting(
+                row,
+                runner=runner,
+                llm_caller=llm_caller,
+                discord_poster=discord_poster,
+                d1_client=d1_client,
+            )
+        except Exception as exc:
+            had_error = True
+            err = f"Meeting processing FAILED for {row.get('title', '?')}: {exc}"
+            try:
+                discord_poster(err)
+            except Exception as disc_exc:
+                print(f"discord_poster also failed: {disc_exc}", file=sys.stderr)
+            print(err)
+    return 1 if had_error else 0
