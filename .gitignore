@@ -100,3 +100,4 @@ wiki/codedb.snapshot
 # notion-wiki: override the repo-wide `CLAUDE.md` ignore so the wiki's
 # CLAUDE.md (created in Task A4) can be committed.
 !wiki/CLAUDE.md
+.pytest_cache

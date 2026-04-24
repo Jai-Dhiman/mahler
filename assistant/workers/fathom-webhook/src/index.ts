@@ -29,10 +29,10 @@ export async function verifySignature(
   const ts = parseInt(webhookTimestamp, 10);
   if (isNaN(ts) || Math.abs(now - ts) > 300) return false;
 
-  const rawSecret = atob(secret.replace(/^whsec_/, ""));
+  const secretBytes = Uint8Array.from(atob(secret.replace(/^whsec_/, "")), c => c.charCodeAt(0));
   const key = await crypto.subtle.importKey(
     "raw",
-    new TextEncoder().encode(rawSecret),
+    secretBytes,
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["verify"]
