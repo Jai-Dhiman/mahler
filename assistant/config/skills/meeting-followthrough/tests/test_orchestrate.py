@@ -259,6 +259,85 @@ class TestTasksCreate(unittest.TestCase):
         d1.mark_done.assert_called_once_with(71)
 
 
+class TestFetchOpenTasksFailure(unittest.TestCase):
+    def test_tasks_list_failure_raises_and_does_not_mark_done(self):
+        import orchestrate
+        row = {
+            "recording_id": 90,
+            "title": "Blocked",
+            "attendees": "[]",
+            "summary": "some meeting",
+        }
+        def runner(argv, **_):
+            if "list" in argv and "--status" in argv:
+                return MagicMock(returncode=1, stdout="", stderr="Notion 503")
+            return MagicMock(returncode=0, stdout="", stderr="")
+        posted: list[str] = []
+        d1 = MagicMock()
+        rc = orchestrate.main(
+            argv=[],
+            d1_client=MagicMock(fetch_pending=MagicMock(return_value=[row])),
+            runner=runner,
+            llm_caller=MagicMock(),
+            discord_poster=lambda c: posted.append(c),
+        )
+        self.assertEqual(rc, 1)
+        d1.mark_done.assert_not_called()
+        self.assertTrue(any("Blocked" in p for p in posted))
+
+    def test_tasks_list_failure_message_reaches_discord(self):
+        import orchestrate
+        row = {
+            "recording_id": 91,
+            "title": "Notion Down",
+            "attendees": "[]",
+            "summary": "some meeting",
+        }
+        def runner(argv, **_):
+            if "list" in argv and "--status" in argv:
+                return MagicMock(returncode=1, stdout="", stderr="connection refused")
+            return MagicMock(returncode=0, stdout="", stderr="")
+        posted: list[str] = []
+        orchestrate.main(
+            argv=[],
+            d1_client=MagicMock(fetch_pending=MagicMock(return_value=[row])),
+            runner=runner,
+            llm_caller=MagicMock(),
+            discord_poster=lambda c: posted.append(c),
+        )
+        self.assertTrue(any("connection refused" in p or "tasks.py list failed" in p for p in posted))
+
+
+class TestCrmTalkedToFailure(unittest.TestCase):
+    def test_talked_to_failure_surfaces_warning_in_discord_post(self):
+        import orchestrate
+        row = {
+            "recording_id": 82,
+            "title": "CRM error meeting",
+            "attendees": '[{"name": "Alice", "email": "alice@ext.com"}]',
+            "summary": "we talked",
+        }
+        def runner(argv, **_):
+            if "summarize" in argv and "Alice" in argv:
+                return MagicMock(returncode=0, stdout="Alice is a PM", stderr="")
+            if "talked-to" in argv and "Alice" in argv:
+                return MagicMock(returncode=1, stdout="", stderr="CRM write failed")
+            return MagicMock(returncode=0, stdout="", stderr="")
+        posted: list[str] = []
+        d1 = MagicMock()
+        orchestrate.process_meeting(
+            row,
+            runner=runner,
+            llm_caller=MagicMock(return_value="no action items"),
+            discord_poster=lambda c: posted.append(c),
+            d1_client=d1,
+        )
+        self.assertEqual(len(posted), 1)
+        self.assertIn("WARNING", posted[0])
+        self.assertIn("CRM write failed", posted[0])
+        d1.mark_done.assert_called_once_with(82)
+
+
 class TestCrmTalkedTo(unittest.TestCase):
     def test_talked_to_only_for_attendees_found_in_crm(self):
         import orchestrate

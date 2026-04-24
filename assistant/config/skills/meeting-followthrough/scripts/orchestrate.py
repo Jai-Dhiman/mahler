@@ -66,8 +66,9 @@ def _fetch_open_tasks(runner) -> list[str]:
         timeout=60,
     )
     if result.returncode != 0:
-        print(f"WARNING: tasks.py list failed (exit {result.returncode}): {result.stderr.strip()}", file=sys.stderr)
-        return []
+        raise RuntimeError(
+            f"tasks.py list failed (exit {result.returncode}): {result.stderr.strip()}"
+        )
     # tasks.py list format: "[uuid] Title\n  (status=..., priority=...)"
     # Extract only title lines (start with "[") and strip the UUID prefix.
     titles = []
@@ -104,8 +105,9 @@ def _create_tasks(action_items: list[dict], runner) -> list[str]:
     return created
 
 
-def _update_crm_last_contact(crm_context: dict[str, str], attendees: list[dict], runner) -> list[str]:
+def _update_crm_last_contact(crm_context: dict[str, str], attendees: list[dict], runner) -> tuple[list[str], list[str]]:
     updated: list[str] = []
+    failed: list[str] = []
     for a in attendees:
         email = (a.get("email") or "").lower()
         name = a.get("name")
@@ -119,7 +121,9 @@ def _update_crm_last_contact(crm_context: dict[str, str], attendees: list[dict],
         )
         if result.returncode == 0:
             updated.append(name)
-    return updated
+        else:
+            failed.append(f"{name}: {result.stderr.strip()}")
+    return updated, failed
 
 
 def process_meeting(row, *, runner, llm_caller, discord_poster, d1_client) -> str:
@@ -143,7 +147,7 @@ def process_meeting(row, *, runner, llm_caller, discord_poster, d1_client) -> st
         action_lines = "\n".join(f"  · {t}" for t in created_titles)
     else:
         action_lines = "  None"
-    updated_contacts = _update_crm_last_contact(crm_context, attendees, runner)
+    updated_contacts, crm_failures = _update_crm_last_contact(crm_context, attendees, runner)
     crm_line = (
         f"CRM updated: {', '.join(updated_contacts)}"
         if updated_contacts
@@ -157,6 +161,8 @@ def process_meeting(row, *, runner, llm_caller, discord_poster, d1_client) -> st
     ]
     if task_error:
         summary_parts.append(f"WARNING: {task_error}")
+    for crm_err in crm_failures:
+        summary_parts.append(f"WARNING: CRM talked-to failed for {crm_err}")
     summary = "\n".join(summary_parts)
     discord_poster(summary)
     d1_client.mark_done(row["recording_id"])
