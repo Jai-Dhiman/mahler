@@ -133,3 +133,38 @@ Tests mock only the HTTP transport at the `_OPENER` boundary. No tests hit the r
 ## Relationship to the Hermes read skill
 
 The Hermes read-only counterpart lives at `assistant/config/skills/notion-wiki/`. It has its own `notion_client.py` (read-only), its own tests, and uses `NOTION_WIKI_READ_TOKEN` (a separate read-only integration). The two halves deliberately do not share code.
+
+## Semantic Analysis
+
+When asked to "semantically lint", "analyze", or "find concept gaps" in the wiki:
+
+1. Run from the repo root:
+
+   ```bash
+   python3 wiki/scripts/lint.py dump
+   ```
+
+   This prints a JSON array of all concepts with their linked source bodies. It may
+   take a minute — it fetches each linked source from Notion.
+
+2. Parse the JSON. Each element has:
+   - `title`: concept name
+   - `body`: the concept's current synthesized text
+   - `sources`: array of `{title, body}` for every source linked to this concept
+   - `all_concept_titles`: list of every concept title currently in the wiki
+
+3. Fan out one subagent per concept in parallel. For each concept, pass its element
+   from the JSON and ask the subagent two questions:
+
+   a) Given these sources and the existing concept list, is there a sub-concept hiding
+      here that warrants its own wiki page? Suggest a title and a one-sentence rationale.
+      If no clear sub-concept exists, say "No sub-concept found."
+
+   b) Do any of these sources make contradictory claims? Name the two sources and
+      describe the specific tension in one sentence. If no contradiction exists, say
+      "No contradictions."
+
+   Concepts with empty `sources` arrays should return "No sources to analyze."
+
+4. Aggregate all subagent findings and print grouped by concept title to session stdout.
+   Do not write findings to Notion — the user acts on them manually.
