@@ -222,6 +222,13 @@ class NotionWikiWriter:
                 raise RuntimeError("Notion API returned has_more=True but no next_cursor")
         return results
 
+    def get_source(self, page_id: str) -> dict:
+        page = self._request("GET", f"/pages/{page_id}", None)
+        title_parts = page.get("properties", {}).get("Title", {}).get("title", [])
+        title = "".join(p.get("plain_text", "") for p in title_parts).strip()
+        body = self._fetch_concept_body_markdown(page_id)
+        return {"title": title, "body": body}
+
     def _fetch_concept_body_markdown(self, page_id: str) -> str:
         data = self._request("GET", f"/blocks/{page_id}/children", None)
         parts = []

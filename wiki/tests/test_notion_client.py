@@ -437,5 +437,51 @@ class TestListAllConcepts(unittest.TestCase):
         self.assertIn("next_cursor", str(ctx.exception))
 
 
+class TestGetSource(unittest.TestCase):
+    def test_returns_title_and_body(self):
+        page_response = {
+            "id": "src-abc",
+            "properties": {
+                "Title": {"title": [{"plain_text": "Thin Harness, Fat Skills"}]}
+            },
+        }
+        blocks_response = {
+            "results": [
+                {
+                    "type": "paragraph",
+                    "paragraph": {"rich_text": [{"plain_text": "First paragraph."}]},
+                },
+                {
+                    "type": "paragraph",
+                    "paragraph": {"rich_text": [{"plain_text": "Second paragraph."}]},
+                },
+            ]
+        }
+        responses = [_make_response(page_response), _make_response(blocks_response)]
+        calls = []
+
+        def side_effect(req):
+            calls.append(req)
+            return responses[len(calls) - 1]
+
+        with patch.object(_OPENER, "open", side_effect=side_effect):
+            writer = _make_writer()
+            result = writer.get_source("src-abc")
+
+        self.assertEqual(result["title"], "Thin Harness, Fat Skills")
+        self.assertIn("First paragraph.", result["body"])
+        self.assertIn("Second paragraph.", result["body"])
+        self.assertIn("/pages/src-abc", calls[0].full_url)
+        self.assertIn("/blocks/src-abc/children", calls[1].full_url)
+
+    def test_raises_on_notion_api_error(self):
+        error_response = {"object": "error", "status": 404, "message": "not found"}
+        with patch.object(_OPENER, "open", return_value=_make_response(error_response, status=404)):
+            writer = _make_writer()
+            with self.assertRaises(RuntimeError) as ctx:
+                writer.get_source("missing-id")
+        self.assertIn("404", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
