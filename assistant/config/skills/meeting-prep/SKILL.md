@@ -68,18 +68,20 @@ Read the top hit with `wiki.py read --id PAGE_ID`.
 
 ### Step 4 — Synthesize and post brief
 
-Compose 3–5 bullet points summarising what to know for this meeting, then call:
+Based on all context gathered in Step 3, write 3–5 bullet points covering what to know for this meeting. Each bullet should be a concrete, specific takeaway — not a generic placeholder. Then call:
 
 ```bash
 python3 ~/.hermes/skills/meeting-prep/scripts/post_brief.py \
   --title "MEETING_TITLE" \
   --start "ISO8601_UTC_START" \
-  --synthesis "• Bullet 1\n• Bullet 2\n• Bullet 3" \
+  --synthesis "• [Your first actual bullet from the gathered context]\n• [Your second actual bullet]\n• [Your third actual bullet]" \
   [--attendees "email1, email2"] \
   [--emails "Recent email summary text"] \
   [--tasks "Task 1\nTask 2"] \
   [--wiki "Wiki context sentence"]
 ```
+
+The `--synthesis` value must be your own generated content from the gathered context — concrete bullets specific to this meeting, not placeholder text.
 
 Omit optional flags when that context is empty. If the script raises RuntimeError, surface the error to Discord and stop — do NOT proceed to Step 5.
 

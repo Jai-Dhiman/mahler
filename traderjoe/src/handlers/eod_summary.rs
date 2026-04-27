@@ -124,13 +124,17 @@ pub async fn run(env: &Env) -> Result<()> {
     let spot_vix_reading = fetch_fred_spot_vix().await;
     let (spot_vix_val, src, src_date) = match spot_vix_reading {
         Some(r) => (Some(r.value), r.source, Some(r.source_date)),
-        None => {
-            discord.send_error(
-                "VIX Data Unavailable",
-                &format!("FRED VIXCLS fetch failed for {}. spot_vix stored as NULL — regime tagging for today will be absent.", today),
-            ).await.ok();
-            (None, "unavailable", None)
-        }
+        // FRED publishes VIXCLS with T+1 delay; fall back to VIXY (already fetched) as proxy
+        None => match vixy {
+            Some(v) => (Some(v), "vixy_proxy", None),
+            None => {
+                discord.send_error(
+                    "VIX Data Unavailable",
+                    &format!("FRED VIXCLS fetch failed for {}. spot_vix stored as NULL — regime tagging for today will be absent.", today),
+                ).await.ok();
+                (None, "unavailable", None)
+            }
+        },
     };
     db.insert_market_context_daily(
         &today, spot_vix_val, src, src_date.as_deref(),

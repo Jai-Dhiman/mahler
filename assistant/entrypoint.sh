@@ -56,7 +56,7 @@ except (FileNotFoundError, json.JSONDecodeError):
 def next_run_for(cron_expr, now):
     \"\"\"Compute next run for simple cron patterns without croniter.\"\"\"
     parts = cron_expr.strip().split()
-    minute_field, hour_field = parts[0], parts[1]
+    minute_field, hour_field, dow_field = parts[0], parts[1], parts[4]
     base = now.replace(second=0, microsecond=0)
     if minute_field.startswith('*/') and hour_field == '*':
         # e.g. */15 * * * *
@@ -64,11 +64,16 @@ def next_run_for(cron_expr, now):
         delta = interval - (base.minute % interval)
         return base + timedelta(minutes=delta)
     elif minute_field == '0' and hour_field.isdigit():
-        # e.g. 0 16 * * *
+        # e.g. 0 16 * * * or 0 18 * * 0 (Sunday-only)
         h = int(hour_field)
         candidate = base.replace(hour=h, minute=0)
         if candidate <= now:
             candidate += timedelta(days=1)
+        if dow_field != '*':
+            # cron dow: 0=Sun..6=Sat; Python weekday(): 0=Mon..6=Sun
+            py_target = (int(dow_field) + 6) % 7
+            while candidate.weekday() != py_target:
+                candidate += timedelta(days=1)
         return candidate
     else:
         # Fallback: 1 minute from now (Hermes will correct it after first run)
