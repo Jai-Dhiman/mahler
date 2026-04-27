@@ -6,6 +6,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -109,13 +110,38 @@ def cmd_lint(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_dump(args: argparse.Namespace) -> None:
+    writer = _get_writer()
+    concepts = writer.list_all_concepts()
+    all_concept_titles = [c["title"] for c in concepts]
+
+    unique_source_ids = list(dict.fromkeys(
+        sid for c in concepts for sid in c["source_ids"]
+    ))
+    sources_by_id = {sid: writer.get_source(sid) for sid in unique_source_ids}
+
+    output = []
+    for concept in concepts:
+        output.append({
+            "title": concept["title"],
+            "body": concept["body_markdown"],
+            "all_concept_titles": all_concept_titles,
+            "sources": [sources_by_id[sid] for sid in concept["source_ids"]],
+        })
+
+    print(json.dumps(output, ensure_ascii=False, indent=2))
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description="Mahler notion-wiki linter")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("lint")
+    sub.add_parser("dump")
     args = parser.parse_args(argv)
     if args.command == "lint":
         cmd_lint(args)
+    elif args.command == "dump":
+        cmd_dump(args)
 
 
 if __name__ == "__main__":
