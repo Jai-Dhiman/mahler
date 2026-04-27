@@ -3,6 +3,7 @@ Notion wiki lint CLI.
 
 Usage:
     python3 lint.py lint
+    python3 lint.py dump
 """
 
 import argparse
