@@ -73,10 +73,10 @@ def _parse_gcal_output(output: str) -> GcalEvent | None:
     return GcalEvent(event_id, start, title, attendees, description)
 
 
-def fetch_upcoming_event(runner) -> GcalEvent | None:
+def fetch_upcoming_event(runner, min_minutes: int = 45, max_minutes: int = 75) -> GcalEvent | None:
     result = _run(
         ["python3", str(_SKILLS / "google-calendar" / "scripts" / "gcal.py"),
-         "upcoming", "--min-minutes", "45", "--max-minutes", "75",
+         "upcoming", "--min-minutes", str(min_minutes), "--max-minutes", str(max_minutes),
          "--skip-keywords", _GCAL_SKIP],
         runner,
     )
@@ -345,12 +345,14 @@ def _call_openrouter(prompt: str) -> str:
 
 # --- Entry point ---
 
-def run_prep(*, runner, llm_caller) -> str:
-    event = fetch_upcoming_event(runner)
+def run_prep(*, runner, llm_caller, test: bool = False) -> str:
+    min_minutes = 0 if test else 45
+    max_minutes = 1440 if test else 75
+    event = fetch_upcoming_event(runner, min_minutes=min_minutes, max_minutes=max_minutes)
     if event is None:
         return "NO_WORK"
 
-    if not check_dedup(event.event_id, runner):
+    if not test and not check_dedup(event.event_id, runner):
         return "NO_WORK"
 
     due_date = event.start[:10] if event.start else datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -388,9 +390,14 @@ def run_prep(*, runner, llm_caller) -> str:
 
 
 def cli_main() -> int:
+    import argparse
     _load_hermes_env()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--test", action="store_true",
+                        help="Look 24h ahead, skip dedup — for manually triggering a test brief")
+    args = parser.parse_args()
     try:
-        result = run_prep(runner=subprocess.run, llm_caller=_call_openrouter)
+        result = run_prep(runner=subprocess.run, llm_caller=_call_openrouter, test=args.test)
         print(result)
         return 0
     except Exception as exc:
