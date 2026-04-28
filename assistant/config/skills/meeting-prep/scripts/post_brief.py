@@ -45,6 +45,13 @@ def _build_https_opener() -> urllib.request.OpenerDirector:
 _OPENER = _build_https_opener()
 
 
+def _clean_synthesis(text: str) -> str:
+    import re
+    # Strip Perplexity citation markers like [1], [2], [1][2]
+    text = re.sub(r"\[\d+\]", "", text)
+    return text.strip()
+
+
 def _format_start(iso_utc: str) -> str:
     try:
         from datetime import datetime, timezone
@@ -71,12 +78,12 @@ def build_payload(
     if attendees:
         fields.append({"name": "Attendees", "value": attendees, "inline": False})
     if emails:
-        fields.append({"name": "Recent emails", "value": emails[:1000], "inline": False})
+        fields.append({"name": "Recent emails", "value": emails[:1024], "inline": False})
     if tasks:
-        fields.append({"name": "Open tasks", "value": tasks[:1000], "inline": False})
+        fields.append({"name": "Open tasks", "value": tasks[:1024], "inline": False})
     if wiki:
         fields.append({"name": "Wiki context", "value": wiki[:500], "inline": False})
-    fields.append({"name": "What to know", "value": synthesis[:1500], "inline": False})
+    fields.append({"name": "What to know", "value": _clean_synthesis(synthesis)[:1024], "inline": False})
     return {
         "embeds": [
             {
