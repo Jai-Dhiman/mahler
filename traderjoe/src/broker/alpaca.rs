@@ -88,7 +88,10 @@ impl AlpacaClient {
         );
         match self.get(&url).await {
             Ok(json) => {
-                let vix = json["VIXY"]["latestTrade"]["p"].as_f64();
+                // latestTrade.p is only available during market hours (IEX feed).
+                // After close, fall back to dailyBar.c which persists all day.
+                let vix = json["VIXY"]["latestTrade"]["p"].as_f64()
+                    .or_else(|| json["VIXY"]["dailyBar"]["c"].as_f64());
                 Ok(vix.map(|v| VixData { vix: v, vix3m: None }))
             }
             Err(_) => Ok(None),

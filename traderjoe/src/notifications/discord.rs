@@ -118,8 +118,8 @@ pub fn build_eod_embed(i: &EodEmbedInput) -> Value {
     let (dollar_delta, theta_day, vega) = match (i.greeks, i.spy_price) {
         (Some(g), Some(p)) => (
             format!("${:+.0}", g.beta_weighted_delta * p),
-            format!("${:+.0}", g.total_theta),
-            format!("${:+.0}", g.total_vega),
+            format!("${:+.0}", -g.total_theta),
+            format!("${:+.0}", -g.total_vega),
         ),
         _ => ("—".into(), "—".into(), "—".into()),
     };
