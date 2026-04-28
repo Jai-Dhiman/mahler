@@ -1,10 +1,12 @@
 # Mahler
 
-Personal AI infrastructure/projects. 
+Personal AI infrastructure/projects.
 
-**`assistant/`** — AI chief of staff (Hermes Agent on Fly.io + Discord). Handles email triage, meeting prep, morning briefs, task management, and memory. Connects to Notion, Google Calendar, Gmail, and Cloudflare D1/KV for persistence.
+**`assistant/`** — AI chief of staff (Hermes Agent on Fly.io + Discord). Handles email triage, meeting prep, morning briefs, task management, and memory. Connects to Notion, Google Calendar, Gmail, and Cloudflare D1/KV for persistence. Includes the finance-state Cloudflare Worker (`assistant/finance/`) for daily balance snapshots and weekly net-worth summaries.
 
 **`traderjoe/`** — Autonomous options credit-spread trading system. Two codebases: a Rust backtesting engine (`traderjoe-backtest/`) and a Cloudflare Worker (`trader-joe/`) that runs live scans and manages positions via Alpaca. All trade decisions are algorithmic.
+
+**`wiki/`** — Karpathy-style personal knowledge wiki backed by Notion. Local write-side tooling for ingesting sources, writing concept pages, and linting the graph.
 
 ## Stack
 
