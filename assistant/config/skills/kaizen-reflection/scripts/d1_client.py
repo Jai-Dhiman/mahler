@@ -1,68 +1,15 @@
-import json
-import re
-import ssl
-import urllib.error
-import urllib.request
-from typing import Optional
+import sys
+from pathlib import Path
 
-_ID_RE = re.compile(r'^[a-zA-Z0-9_-]+$')
-_URL_TEMPLATE = "https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database/{database_id}/query"
+for _p in (str(Path.home() / ".hermes" / "shared"), str(Path(__file__).resolve().parents[3] / "shared")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
-
-def _build_https_opener() -> urllib.request.OpenerDirector:
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = True
-    ctx.verify_mode = ssl.CERT_REQUIRED
-    opener = urllib.request.OpenerDirector()
-    opener.add_handler(urllib.request.HTTPSHandler(context=ctx))
-    opener.add_handler(urllib.request.UnknownHandler())
-    return opener
+from d1_base import D1Client as _D1Base
 
 
-_OPENER = _build_https_opener()
-
-
-class D1Client:
-    def __init__(self, account_id: str, database_id: str, api_token: str):
-        if not _ID_RE.match(account_id):
-            raise ValueError(f"Invalid account_id: {account_id!r}")
-        if not _ID_RE.match(database_id):
-            raise ValueError(f"Invalid database_id: {database_id!r}")
-        self.account_id = account_id
-        self.database_id = database_id
-        self.api_token = api_token
-        self._url = _URL_TEMPLATE.format(account_id=account_id, database_id=database_id)
-
-    def query(self, sql: str, params: Optional[list] = None) -> list[dict]:
-        """Execute SQL against D1. Returns list of row dicts. Raises on error."""
-        body = json.dumps({"sql": sql, "params": params or []}).encode("utf-8")
-        req = urllib.request.Request(
-            self._url,
-            data=body,
-            method="POST",
-            headers={
-                "Authorization": f"Bearer {self.api_token}",
-                "Content-Type": "application/json",
-            },
-        )
-        try:
-            with _OPENER.open(req) as resp:
-                status = resp.status
-                raw = resp.read()
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"D1 API error (connection failed): {exc.reason}") from exc
-        if status != 200:
-            raise RuntimeError(f"D1 API error {status}: {raw.decode('utf-8', errors='replace')}")
-        data = json.loads(raw)
-        if not data.get("success") or data.get("errors"):
-            raise RuntimeError(f"D1 query failed: {data.get('errors', [])}")
-        results = data.get("result", [])
-        if not results:
-            return []
-        return results[0].get("results") or []
-
+class D1Client(_D1Base):
     def get_triage_patterns(self, since_days: int = 7, min_count: int = 3) -> list[dict]:
-        """Return senders appearing >= min_count times at the same tier in the last since_days days."""
         if not isinstance(since_days, int) or since_days <= 0:
             raise ValueError(f"since_days must be a positive integer, got {since_days!r}")
         return self.query(
@@ -78,11 +25,6 @@ class D1Client:
     def get_triage_patterns_with_reply_rate(
         self, since_days: int = 7, min_count: int = 3
     ) -> list[dict]:
-        """Return triage patterns with occurrence and reply counts.
-
-        Each row: from_addr, classification, occurrence_count, reply_count.
-        reply_count uses COUNT(replied_at) which counts non-NULL values only.
-        """
         if not isinstance(since_days, int) or since_days <= 0:
             raise ValueError(
                 f"since_days must be a positive integer, got {since_days!r}"
@@ -100,7 +42,6 @@ class D1Client:
         )
 
     def get_priority_map(self) -> str:
-        """Read the current priority map content from D1. Raises RuntimeError if no row exists."""
         rows = self.query(
             "SELECT content FROM priority_map ORDER BY version DESC LIMIT 1",
             [],
@@ -112,7 +53,6 @@ class D1Client:
         return rows[0]["content"]
 
     def set_priority_map(self, content: str) -> None:
-        """Write updated priority map content to D1, incrementing version."""
         self.query(
             "INSERT INTO priority_map (content, version, updated_at) "
             "VALUES (?, COALESCE((SELECT MAX(version) FROM priority_map), 0) + 1, datetime('now'))",
@@ -120,7 +60,6 @@ class D1Client:
         )
 
     def ensure_priority_map_table(self) -> None:
-        """Create priority_map table if it does not exist. Does not seed initial content."""
         self.query(
             """CREATE TABLE IF NOT EXISTS priority_map (
     version INTEGER PRIMARY KEY,
@@ -131,7 +70,6 @@ class D1Client:
         )
 
     def get_recent_project_log(self, since_days: int = 7) -> list[dict]:
-        """Return project_log rows from the last since_days days, newest first."""
         if not isinstance(since_days, int) or since_days <= 0:
             raise ValueError(
                 f"since_days must be a positive integer, got {since_days!r}"
@@ -145,7 +83,6 @@ class D1Client:
         )
 
     def get_recent_reflections(self, since_weeks: int = 4) -> list[dict]:
-        """Return reflection_log rows from the last since_weeks weeks, newest first."""
         if not isinstance(since_weeks, int) or since_weeks <= 0:
             raise ValueError(
                 f"since_weeks must be a positive integer, got {since_weeks!r}"

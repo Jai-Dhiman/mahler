@@ -1,0 +1,2 @@
+assistant/**/tests/*.py linguist-detectable=false
+wiki/**/tests/*.py linguist-detectable=false

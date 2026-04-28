@@ -1,83 +1,16 @@
-import json
-import re
-import ssl
-import urllib.request
+import sys
+from pathlib import Path
 from typing import Optional
 
+for _p in (str(Path.home() / ".hermes" / "shared"), str(Path(__file__).resolve().parents[3] / "shared")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
-_ID_RE = re.compile(r'^[a-zA-Z0-9_-]+$')
-
-_URL_TEMPLATE = "https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database/{database_id}/query"
-
-
-def _build_https_opener() -> urllib.request.OpenerDirector:
-    """
-    Build a urllib opener restricted to HTTPS with certificate verification
-    enforced. FileHandler and FTPHandler are intentionally excluded to prevent
-    file:// and ftp:// scheme access.
-    """
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = True
-    ctx.verify_mode = ssl.CERT_REQUIRED
-    https_handler = urllib.request.HTTPSHandler(context=ctx)
-    opener = urllib.request.OpenerDirector()
-    opener.add_handler(https_handler)
-    opener.add_handler(urllib.request.UnknownHandler())
-    return opener
+from d1_base import D1Client as _D1Base
 
 
-_OPENER = _build_https_opener()
-
-
-class D1Client:
-    def __init__(self, account_id: str, database_id: str, api_token: str):
-        if not _ID_RE.match(account_id):
-            raise ValueError(f"Invalid account_id: {account_id!r}")
-        if not _ID_RE.match(database_id):
-            raise ValueError(f"Invalid database_id: {database_id!r}")
-
-        self.account_id = account_id
-        self.database_id = database_id
-        self.api_token = api_token
-        self._url = _URL_TEMPLATE.format(
-            account_id=account_id,
-            database_id=database_id,
-        )
-
-    def query(self, sql: str, params: Optional[list] = None) -> list[dict]:
-        """Execute SQL, return list of row dicts. Raises on error."""
-        body = json.dumps({"sql": sql, "params": params or []}).encode("utf-8")
-        req = urllib.request.Request(
-            self._url,
-            data=body,
-            method="POST",
-            headers={
-                "Authorization": f"Bearer {self.api_token}",
-                "Content-Type": "application/json",
-            },
-        )
-
-        with _OPENER.open(req) as resp:
-            status = resp.status
-            raw = resp.read()
-
-        if status != 200:
-            raise RuntimeError(f"D1 API error {status}: {raw.decode('utf-8', errors='replace')}")
-
-        data = json.loads(raw)
-
-        if not data.get("success") or data.get("errors"):
-            errors = data.get("errors", [])
-            raise RuntimeError(f"D1 query failed: {errors}")
-
-        results = data.get("result", [])
-        if not results:
-            return []
-
-        return results[0].get("results") or []
-
+class D1Client(_D1Base):
     def is_already_processed(self, message_id: str) -> bool:
-        """Return True if message_id exists in email_triage_log."""
         rows = self.query(
             "SELECT message_id FROM email_triage_log WHERE message_id = ? LIMIT 1",
             [message_id],
@@ -85,7 +18,6 @@ class D1Client:
         return len(rows) > 0
 
     def insert_triage_result(self, result: dict) -> None:
-        """Insert one triage result. result dict has keys matching table columns."""
         sql = (
             "INSERT OR IGNORE INTO email_triage_log "
             "(message_id, source, from_addr, subject, received_at, classification, "
@@ -108,7 +40,6 @@ class D1Client:
         self.query(sql, params)
 
     def get_unattributed_recent(self, since_days: int = 3) -> list[dict]:
-        """Return URGENT/NEEDS_ACTION Outlook rows with a conversation_id and no replied_at."""
         return self.query(
             """SELECT message_id, conversation_id, from_addr, subject, classification
                FROM email_triage_log
@@ -122,14 +53,12 @@ class D1Client:
         )
 
     def mark_replied(self, message_id: str, replied_at: str) -> None:
-        """Set replied_at for the given email_triage_log row."""
         self.query(
             "UPDATE email_triage_log SET replied_at = ? WHERE message_id = ?",
             [replied_at, message_id],
         )
 
     def get_kv(self, key: str) -> Optional[str]:
-        """Read a value from mahler_kv. Returns None if the key doesn't exist."""
         rows = self.query(
             "SELECT value FROM mahler_kv WHERE key = ? LIMIT 1",
             [key],
@@ -139,7 +68,6 @@ class D1Client:
         return None
 
     def set_kv(self, key: str, value: str) -> None:
-        """Write a value to mahler_kv. Upserts on conflict."""
         self.query(
             "INSERT INTO mahler_kv (key, value, updated_at) VALUES (?, ?, datetime('now'))"
             " ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
@@ -147,7 +75,6 @@ class D1Client:
         )
 
     def get_priority_map(self) -> str:
-        """Read current priority map content from D1. Raises RuntimeError if no row exists."""
         rows = self.query(
             "SELECT content FROM priority_map ORDER BY version DESC LIMIT 1",
             [],
@@ -159,7 +86,6 @@ class D1Client:
         return rows[0]["content"]
 
     def set_priority_map(self, content: str) -> None:
-        """Write updated priority map content to D1, incrementing version."""
         self.query(
             "INSERT INTO priority_map (content, version, updated_at) "
             "VALUES (?, COALESCE((SELECT MAX(version) FROM priority_map), 0) + 1, datetime('now'))",
@@ -167,7 +93,6 @@ class D1Client:
         )
 
     def get_recent_project_log(self, days: int = 7) -> list[dict]:
-        """Return project_log rows from the last N days, newest first."""
         return self.query(
             "SELECT project, entry_type, summary, git_ref, created_at FROM project_log "
             "WHERE created_at >= datetime('now', ? || ' days') ORDER BY created_at DESC",
@@ -175,21 +100,18 @@ class D1Client:
         )
 
     def insert_project_log(self, project: str, entry_type: str, summary: str, git_ref: str) -> None:
-        """Insert one project log entry. Raises RuntimeError on D1 failure."""
         self.query(
             "INSERT INTO project_log (project, entry_type, summary, git_ref) VALUES (?, ?, ?, ?)",
             [project, entry_type, summary, git_ref],
         )
 
     def insert_session_heartbeat(self, project: str, git_ref: str, branch: str) -> None:
-        """Insert a lightweight session heartbeat with no LLM summary."""
         self.query(
             "INSERT INTO project_log (project, entry_type, git_ref, branch) VALUES (?, 'session', ?, ?)",
             [project, git_ref, branch],
         )
 
     def _migrate_project_log_v2(self) -> None:
-        """Recreate project_log to add session entry type, nullable summary, and branch column."""
         cols = self.query("PRAGMA table_info(project_log)", [])
         col_names = {c["name"] for c in cols}
         if "branch" in col_names:
@@ -228,7 +150,6 @@ class D1Client:
                 raise
 
     def ensure_tables(self) -> None:
-        """Create tables if they don't exist. Safe to call on every run."""
         self.query(
             """CREATE TABLE IF NOT EXISTS email_triage_log (
     message_id TEXT PRIMARY KEY,

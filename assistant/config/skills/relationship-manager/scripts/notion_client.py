@@ -1,24 +1,11 @@
-import json
-import ssl
-import urllib.error
-import urllib.request
-from typing import Optional
+import sys
+from pathlib import Path
 
-_NOTION_API_BASE = "https://api.notion.com/v1"
-_NOTION_VERSION = "2022-06-28"
+for _p in (str(Path.home() / ".hermes" / "shared"), str(Path(__file__).resolve().parents[3] / "shared")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
-
-def _build_https_opener() -> urllib.request.OpenerDirector:
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = True
-    ctx.verify_mode = ssl.CERT_REQUIRED
-    opener = urllib.request.OpenerDirector()
-    opener.add_handler(urllib.request.HTTPSHandler(context=ctx))
-    opener.add_handler(urllib.request.UnknownHandler())
-    return opener
-
-
-_OPENER = _build_https_opener()
+from notion_base import _NotionBase
 
 
 def _extract_task(page: dict) -> dict:
@@ -34,35 +21,10 @@ def _extract_task(page: dict) -> dict:
     return {"id": page["id"], "title": title, "status": status, "due": due, "priority": priority}
 
 
-class NotionClient:
+class NotionClient(_NotionBase):
     def __init__(self, api_token: str, database_id: str):
-        self.api_token = api_token
-        self.database_id = database_id
-
-    def _request(self, method: str, path: str, body: Optional[dict] = None) -> dict:
-        url = f"{_NOTION_API_BASE}{path}"
-        data = json.dumps(body).encode("utf-8") if body is not None else None
-        req = urllib.request.Request(
-            url,
-            data=data,
-            method=method,
-            headers={
-                "Authorization": f"Bearer {self.api_token}",
-                "Notion-Version": _NOTION_VERSION,
-                "Content-Type": "application/json",
-            },
-        )
-        try:
-            with _OPENER.open(req) as resp:
-                status = resp.status
-                raw = resp.read()
-        except urllib.error.URLError as exc:
-            raise RuntimeError(
-                f"Notion API error (connection failed): {exc.reason}"
-            ) from exc
-        if status not in (200, 201):
-            raise RuntimeError(f"Notion API error {status}: {raw.decode('utf-8', errors='replace')}")
-        return json.loads(raw)
+        self._token = api_token
+        self._database_id = database_id
 
     def list_tasks_for_contact(self, name: str) -> list[dict]:
         results = []
@@ -79,7 +41,7 @@ class NotionClient:
             }
             if cursor:
                 body["start_cursor"] = cursor
-            data = self._request("POST", f"/databases/{self.database_id}/query", body)
+            data = self._request("POST", f"/databases/{self._database_id}/query", body)
             for page in data.get("results", []):
                 results.append(_extract_task(page))
             if not data.get("has_more") or not data.get("next_cursor"):
