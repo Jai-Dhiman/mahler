@@ -5,7 +5,7 @@ for _p in (str(Path.home() / ".hermes" / "shared"), str(Path(__file__).resolve()
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from d1_base import D1Client as _D1Base
+from d1_base import D1Client as _D1Base, _OPENER  # noqa: F401
 
 
 class D1Client(_D1Base):

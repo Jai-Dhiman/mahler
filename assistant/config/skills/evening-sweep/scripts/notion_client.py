@@ -6,7 +6,7 @@ for _p in (str(Path.home() / ".hermes" / "shared"), str(Path(__file__).resolve()
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from notion_base import _NotionBase
+from notion_base import _NotionBase, _OPENER  # noqa: F401
 
 
 def _extract_task(page: dict) -> dict:
