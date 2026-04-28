@@ -39,23 +39,39 @@ def _parse_attendees(raw: str) -> list[dict]:
         return []
 
 
-def _fetch_crm_context(attendees: list[dict], runner) -> dict[str, str]:
+def _fetch_crm_context(attendees: list[dict], meeting_title: str, runner) -> tuple[dict[str, str], list[str]]:
+    """Returns (crm_context, newly_added_names). Auto-adds unknown external attendees."""
     owner_email = os.environ.get("MAHLER_OWNER_EMAIL", "").lower()
     ctx: dict[str, str] = {}
+    newly_added: list[str] = []
+    _contacts_py = str(Path.home() / ".hermes" / "skills" / "relationship-manager" / "scripts" / "contacts.py")
     for a in attendees:
         email = (a.get("email") or "").lower()
         name = a.get("name")
         if not name or not email or email == owner_email:
             continue
         result = runner(
-            ["python3", str(Path.home() / ".hermes" / "skills" / "relationship-manager" / "scripts" / "contacts.py"), "summarize", "--name", name],
+            ["python3", _contacts_py, "summarize", "--name", name],
             capture_output=True,
             text=True,
             timeout=60,
         )
         if result.returncode == 0 and result.stdout.strip():
             ctx[email] = result.stdout.strip()
-    return ctx
+        else:
+            add_result = runner(
+                ["python3", _contacts_py, "add",
+                 "--name", name, "--email", email,
+                 "--type", "professional",
+                 "--context", f"Met in: {meeting_title}"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if add_result.returncode == 0:
+                ctx[email] = f"(new contact, added from: {meeting_title})"
+                newly_added.append(name)
+    return ctx, newly_added
 
 
 def _fetch_open_tasks(runner) -> list[str]:
@@ -129,7 +145,7 @@ def _update_crm_last_contact(crm_context: dict[str, str], attendees: list[dict],
 def process_meeting(row, *, runner, llm_caller, discord_poster, d1_client) -> str:
     title = row["title"]
     attendees = _parse_attendees(row["attendees"])
-    crm_context = _fetch_crm_context(attendees, runner)
+    crm_context, newly_added = _fetch_crm_context(attendees, title, runner)
     action_items = generate_action_items(
         summary=row["summary"],
         attendees=attendees,
@@ -148,11 +164,14 @@ def process_meeting(row, *, runner, llm_caller, discord_poster, d1_client) -> st
     else:
         action_lines = "  None"
     updated_contacts, crm_failures = _update_crm_last_contact(crm_context, attendees, runner)
-    crm_line = (
-        f"CRM updated: {', '.join(updated_contacts)}"
-        if updated_contacts
-        else "CRM updated: No CRM matches"
-    )
+    newly_added_set = set(newly_added)
+    existing_updated = [n for n in updated_contacts if n not in newly_added_set]
+    crm_parts = []
+    if existing_updated:
+        crm_parts.append(f"updated {', '.join(existing_updated)}")
+    if newly_added:
+        crm_parts.append(f"added {', '.join(newly_added)}")
+    crm_line = f"CRM: {'; '.join(crm_parts)}" if crm_parts else "CRM: no matches"
     summary_parts = [
         f"Post-meeting: {title}",
         "Action items created:",

@@ -104,13 +104,14 @@ Output: `Deleted: Alice Chen`
 ### Sync calendar (runs automatically at 08:00 UTC)
 
 ```bash
-python3 ~/.hermes/skills/relationship-manager/scripts/contacts.py sync-calendar --days 1
+python3 ~/.hermes/skills/relationship-manager/scripts/contacts.py sync-calendar --days 1 --auto-add
 ```
 
-Fetches Google Calendar events from the past N days. For each event attendee whose
-email matches a known contact, updates `last_contact` to the event date.
+Fetches Google Calendar events from the past N days. With `--auto-add`, any attendee not
+already in contacts is upserted as a professional contact (name derived from email, context
+set to "Auto-added from calendar"). Then updates `last_contact` for all matched contacts.
 
-Output: `Synced calendar: updated last_contact for 2 contacts (Alice Chen, Bob Smith)`
+Output: `Synced calendar: updated last_contact for 2 contacts (Alice Chen, Bob Smith); added 1 new (Rakhee Gupta)`
 
 ## Notion task convention
 

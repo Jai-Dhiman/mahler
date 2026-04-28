@@ -46,7 +46,7 @@ class TestTrivialMeeting(unittest.TestCase):
             "Post-meeting: Test call\n"
             "Action items created:\n"
             "  None\n"
-            "CRM updated: No CRM matches"
+            "CRM: no matches"
         )
         self.assertEqual(result, expected)
         poster.assert_called_once_with(expected)
@@ -339,7 +339,7 @@ class TestCrmTalkedToFailure(unittest.TestCase):
 
 
 class TestCrmTalkedTo(unittest.TestCase):
-    def test_talked_to_only_for_attendees_found_in_crm(self):
+    def test_existing_contact_updated_unknown_contact_auto_added(self):
         import orchestrate
         row = {
             "recording_id": 80,
@@ -368,10 +368,14 @@ class TestCrmTalkedTo(unittest.TestCase):
             discord_poster=poster,
             d1_client=MagicMock(),
         )
+        add_calls = [c for c in calls if "add" in c and "Bob" in c]
+        self.assertEqual(len(add_calls), 1)
         talked_to = [c for c in calls if "talked-to" in c]
-        self.assertEqual(len(talked_to), 1)
-        self.assertIn("Alice", talked_to[0])
-        self.assertIn("CRM updated: Alice", captured_post["c"])
+        self.assertEqual(len(talked_to), 2)
+        talked_to_names = {c[c.index("--name") + 1] for c in talked_to}
+        self.assertIn("Alice", talked_to_names)
+        self.assertIn("Bob", talked_to_names)
+        self.assertIn("CRM: updated Alice; added Bob", captured_post["c"])
 
 
 class TestMainMultipleMeetings(unittest.TestCase):

@@ -220,6 +220,84 @@ def test_sync_calendar_updates_matching_contacts():
             assert "1 contact" in result
 
 
+def test_sync_calendar_auto_add_creates_new_contacts():
+    events = [
+        {
+            "summary": "Intro call",
+            "start": "2026-04-18T15:00:00Z",
+            "end": "2026-04-18T16:00:00Z",
+            "attendees": ["alice@example.com", "newperson@startup.com"],
+        }
+    ]
+    contact_rows = [
+        {"id": 1, "name": "Alice Chen", "email": "alice@example.com",
+         "type": "professional", "last_contact": None, "context": "", "created_at": "2026-04-01"},
+    ]
+    with patch.dict(os.environ, _ENV):
+        with patch("contacts.D1Client") as MockD1, patch("contacts.gcal_client") as mock_gcal:
+            mock_d1 = MagicMock()
+            mock_d1.list_contacts.return_value = contact_rows
+            MockD1.return_value = mock_d1
+            mock_gcal.refresh_access_token.return_value = "access_tok"
+            mock_gcal.list_events.return_value = events
+            out = io.StringIO()
+            with patch("sys.stdout", out):
+                import contacts
+                contacts.main(["sync-calendar", "--days", "1", "--auto-add"])
+            mock_d1.upsert_contact.assert_called_once_with(
+                "Newperson", "newperson@startup.com", "professional", "Auto-added from calendar"
+            )
+            assert "added 1 new" in out.getvalue()
+            assert "Newperson" in out.getvalue()
+
+
+def test_sync_calendar_auto_add_skips_owner_email():
+    events = [
+        {
+            "summary": "Solo prep",
+            "start": "2026-04-18T15:00:00Z",
+            "end": "2026-04-18T16:00:00Z",
+            "attendees": ["me@owner.com", "newperson@startup.com"],
+        }
+    ]
+    with patch.dict(os.environ, {**_ENV, "MAHLER_OWNER_EMAIL": "me@owner.com"}):
+        with patch("contacts.D1Client") as MockD1, patch("contacts.gcal_client") as mock_gcal:
+            mock_d1 = MagicMock()
+            mock_d1.list_contacts.return_value = []
+            MockD1.return_value = mock_d1
+            mock_gcal.refresh_access_token.return_value = "access_tok"
+            mock_gcal.list_events.return_value = events
+            out = io.StringIO()
+            with patch("sys.stdout", out):
+                import contacts
+                contacts.main(["sync-calendar", "--days", "1", "--auto-add"])
+            upsert_calls = mock_d1.upsert_contact.call_args_list
+            upserted_emails = [c.args[1] for c in upsert_calls]
+            assert "me@owner.com" not in upserted_emails
+            assert "newperson@startup.com" in upserted_emails
+
+
+def test_sync_calendar_without_auto_add_does_not_create_contacts():
+    events = [
+        {
+            "summary": "Meeting",
+            "start": "2026-04-18T15:00:00Z",
+            "end": "2026-04-18T16:00:00Z",
+            "attendees": ["newperson@startup.com"],
+        }
+    ]
+    with patch.dict(os.environ, _ENV):
+        with patch("contacts.D1Client") as MockD1, patch("contacts.gcal_client") as mock_gcal:
+            mock_d1 = MagicMock()
+            mock_d1.list_contacts.return_value = []
+            MockD1.return_value = mock_d1
+            mock_gcal.refresh_access_token.return_value = "access_tok"
+            mock_gcal.list_events.return_value = events
+            import contacts
+            contacts.main(["sync-calendar", "--days", "1"])
+            mock_d1.upsert_contact.assert_not_called()
+
+
 def test_sync_calendar_prints_no_matches_when_none():
     events = [
         {

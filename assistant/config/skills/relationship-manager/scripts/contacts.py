@@ -1,5 +1,6 @@
 import argparse
 import os
+import re
 import sys
 from datetime import date
 
@@ -95,8 +96,14 @@ def _cmd_delete(args: argparse.Namespace) -> None:
     print(f"Deleted: {args.name}")
 
 
+def _name_from_email(email: str) -> str:
+    local = email.split("@")[0]
+    return " ".join(p.capitalize() for p in re.split(r"[._\-]", local) if p)
+
+
 def _cmd_sync_calendar(args: argparse.Namespace) -> None:
     from datetime import datetime, timezone, timedelta
+    owner_email = os.environ.get("MAHLER_OWNER_EMAIL", "").lower()
     db = _d1_client()
     access_token = gcal_client.refresh_access_token(
         client_id=os.environ["GMAIL_CLIENT_ID"],
@@ -109,6 +116,21 @@ def _cmd_sync_calendar(args: argparse.Namespace) -> None:
     events = gcal_client.list_events(access_token, time_min, time_max, max_results=250)
     all_contacts = db.list_contacts()
     email_to_contact = {c["email"].lower(): c for c in all_contacts}
+
+    newly_added: list[str] = []
+    if args.auto_add:
+        seen_new: set[str] = set()
+        for event in events:
+            for attendee_email in event.get("attendees", []):
+                email_lower = attendee_email.lower()
+                if email_lower in email_to_contact or email_lower == owner_email or email_lower in seen_new:
+                    continue
+                name = _name_from_email(attendee_email)
+                db.upsert_contact(name, attendee_email, "professional", "Auto-added from calendar")
+                email_to_contact[email_lower] = {"name": name, "email": attendee_email}
+                seen_new.add(email_lower)
+                newly_added.append(name)
+
     contact_max_date: dict[str, str] = {}
     for event in events:
         event_date = event["start"][:10]
@@ -120,13 +142,17 @@ def _cmd_sync_calendar(args: argparse.Namespace) -> None:
                     contact_max_date[name] = event_date
     for name, max_date in contact_max_date.items():
         db.touch_last_contact(name, max_date)
-    count = len(contact_max_date)
-    noun = "contact" if count == 1 else "contacts"
-    if contact_max_date:
-        names = ", ".join(contact_max_date.keys())
-        print(f"Synced calendar: updated last_contact for {count} {noun} ({names})")
+
+    updated_count = len(contact_max_date)
+    parts = []
+    if updated_count:
+        noun = "contact" if updated_count == 1 else "contacts"
+        parts.append(f"updated last_contact for {updated_count} {noun} ({', '.join(contact_max_date.keys())})")
     else:
-        print(f"Synced calendar: 0 contacts matched")
+        parts.append("0 contacts matched")
+    if newly_added:
+        parts.append(f"added {len(newly_added)} new ({', '.join(newly_added)})")
+    print(f"Synced calendar: {'; '.join(parts)}")
 
 
 def main(argv=None) -> None:
@@ -150,7 +176,9 @@ def main(argv=None) -> None:
     p_up.add_argument("--field", required=True)
     p_up.add_argument("--value", required=True)
     sub.add_parser("delete").add_argument("--name", required=True)
-    sub.add_parser("sync-calendar").add_argument("--days", type=int, default=1)
+    p_sync = sub.add_parser("sync-calendar")
+    p_sync.add_argument("--days", type=int, default=1)
+    p_sync.add_argument("--auto-add", action="store_true", default=False)
 
     args = parser.parse_args(argv)
     dispatch = {
