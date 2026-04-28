@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 _SKILLS = Path.home() / ".hermes" / "skills"
 _DEFAULT_MODEL = "openai/gpt-5-nano"
+_RESEARCH_MODEL = "perplexity/sonar"
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 _GCAL_SKIP = "orchestra,rehearsal,bohemian,jinks,encampment"
 _SOCIAL_TITLES = {"1:1", "sync", "standup", "stand-up", "catch up", "catchup", "chat"}
@@ -159,14 +160,21 @@ def _should_skip_wiki(title: str, description: str) -> bool:
 
 
 def _extract_wiki_keywords(title: str, description: str) -> list[str]:
-    stop = {"meeting", "call", "with", "intro", "catch", "up", "sync", "the",
-            "and", "for", "a", "an", "to", "of", "in", "on"}
-    words = re.findall(r"\b[A-Za-z][A-Za-z0-9]+\b", title + " " + description)
+    stop = {
+        "meeting", "call", "with", "intro", "catch", "up", "sync", "the",
+        "and", "for", "a", "an", "to", "of", "in", "on",
+        "interview", "between",
+        "location", "size", "vertical", "website", "title", "salary", "equity",
+        "people", "role", "about", "new", "york",
+    }
+    # Prefer description keywords — title often has person names rather than topics
+    source = (description + " " + title) if description else title
+    words = re.findall(r"\b[A-Za-z][A-Za-z0-9]+\b", source)
     seen: set[str] = set()
     keywords = []
     for w in words:
         lw = w.lower()
-        if lw not in stop and lw not in seen and len(lw) > 2:
+        if lw not in stop and lw not in seen and len(lw) > 3:
             seen.add(lw)
             keywords.append(w)
         if len(keywords) == 2:
@@ -242,7 +250,7 @@ def synthesize_brief(
     raw = llm_caller(prompt)
     lines = [l.strip() for l in raw.strip().splitlines() if l.strip()]
     bullets = []
-    for line in lines[:5]:
+    for line in lines[:4]:
         if not line.startswith("•"):
             line = "• " + line.lstrip("-•* ")
         bullets.append(line)
@@ -265,11 +273,11 @@ def _build_synthesis_prompt(title, start, attendees, description, emails, tasks,
         sections.append(f"Relevant wiki context:\n{wiki}")
     return (
         "You are a chief of staff preparing a pre-meeting brief for Jai Dhiman. "
-        "Based on the context below, write exactly 3-5 bullet points. "
-        "Each bullet must be ACTIONABLE and SPECIFIC — what to prepare, what to research, "
-        "what questions to have ready, what context to recall. "
-        "Do NOT just summarize or rephrase the description. "
-        "Think: what would a smart, well-prepared person want to know or do before walking into this? "
+        "Search the web to research the company, product, and people involved in this meeting. "
+        "Ground every bullet in what you actually find — do not use training data or hallucinate details. "
+        "Write exactly 3-4 bullet points covering what Jai needs to know and how to prepare. "
+        "Each bullet must be ACTIONABLE and SPECIFIC. "
+        "Do NOT rephrase the description. "
         "Start each bullet with '•'. Output only the bullets, no preamble.\n\n"
         + "\n\n".join(sections)
     )
@@ -324,11 +332,11 @@ def _build_https_opener() -> urllib.request.OpenerDirector:
 _OPENER = _build_https_opener()
 
 
-def _call_openrouter(prompt: str) -> str:
+def _call_openrouter(prompt: str, model: str | None = None) -> str:
     api_key = os.environ["OPENROUTER_API_KEY"]
-    model = os.environ.get("OPENROUTER_MODEL", _DEFAULT_MODEL)
+    resolved_model = model or os.environ.get("OPENROUTER_MODEL", _DEFAULT_MODEL)
     body = json.dumps({
-        "model": model,
+        "model": resolved_model,
         "messages": [{"role": "user", "content": prompt}],
     }).encode("utf-8")
     req = urllib.request.Request(
@@ -346,6 +354,11 @@ def _call_openrouter(prompt: str) -> str:
     except urllib.error.HTTPError as exc:
         raise RuntimeError(f"OpenRouter error: HTTP {exc.code}") from exc
     return data["choices"][0]["message"]["content"]
+
+
+def _call_openrouter_research(prompt: str) -> str:
+    model = os.environ.get("MEETING_PREP_RESEARCH_MODEL", _RESEARCH_MODEL)
+    return _call_openrouter(prompt, model=model)
 
 
 # --- Entry point ---
@@ -402,7 +415,7 @@ def cli_main() -> int:
                         help="Look 24h ahead, skip dedup — for manually triggering a test brief")
     args = parser.parse_args()
     try:
-        result = run_prep(runner=subprocess.run, llm_caller=_call_openrouter, test=args.test)
+        result = run_prep(runner=subprocess.run, llm_caller=_call_openrouter_research, test=args.test)
         print(result)
         return 0
     except Exception as exc:
