@@ -207,6 +207,55 @@ class TestGcalUpcomingCommand(unittest.TestCase):
         self.assertRegex(output, r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 
 
+class TestGcalUpcomingDescription(unittest.TestCase):
+
+    def _make_event(self, description):
+        from datetime import datetime, timezone, timedelta
+        start = datetime.now(timezone.utc) + timedelta(minutes=55)
+        return {
+            "id": "evt-desc", "summary": "Intro Call",
+            "start": start.strftime("%Y-%m-%dT%H:%M:%S+00:00"),
+            "end": start.strftime("%Y-%m-%dT%H:%M:%S+00:00"),
+            "attendees": [], "description": description,
+        }
+
+    @patch.dict(os.environ, {
+        "GMAIL_CLIENT_ID": "test_cid",
+        "GMAIL_CLIENT_SECRET": "test_csec",
+        "GMAIL_REFRESH_TOKEN": "test_rtok",
+    })
+    @patch("gcal.gcal_client.refresh_access_token", return_value="access_tok")
+    @patch("gcal.gcal_client.list_events")
+    def test_description_newlines_replaced_with_pipe(self, mock_list, mock_refresh):
+        mock_list.return_value = [self._make_event("Location: New York\nSize: 16 people\nVertical: Consumer")]
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            from gcal import main
+            main(["upcoming", "--min-minutes", "45", "--max-minutes", "75"])
+        output = captured.getvalue()
+        self.assertIn("Description:", output)
+        self.assertIn("New York", output)
+        self.assertIn("16 people", output)
+        self.assertNotIn("\n  Location", output)
+
+    @patch.dict(os.environ, {
+        "GMAIL_CLIENT_ID": "test_cid",
+        "GMAIL_CLIENT_SECRET": "test_csec",
+        "GMAIL_REFRESH_TOKEN": "test_rtok",
+    })
+    @patch("gcal.gcal_client.refresh_access_token", return_value="access_tok")
+    @patch("gcal.gcal_client.list_events")
+    def test_description_truncated_at_800_chars(self, mock_list, mock_refresh):
+        mock_list.return_value = [self._make_event("x" * 1000)]
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            from gcal import main
+            main(["upcoming", "--min-minutes", "45", "--max-minutes", "75"])
+        desc_line = [l for l in captured.getvalue().splitlines() if "Description:" in l][0]
+        desc_value = desc_line.split("Description:", 1)[1].strip()
+        self.assertLessEqual(len(desc_value), 800)
+
+
 class TestGcalUpcomingSkipKeywords(unittest.TestCase):
 
     def _make_event(self, event_id, summary, minutes_from_now, description=""):

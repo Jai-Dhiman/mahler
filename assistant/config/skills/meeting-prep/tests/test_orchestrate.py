@@ -25,7 +25,7 @@ class TestParseGcalOutput(unittest.TestCase):
         output = (
             "evt_abc123  2026-04-28T17:30:00Z  Intro Call with Curium\n"
             "  Attendees: rakhee@curium.ai, jai@example.com\n"
-            "  Discuss GEO initiative and partnership\n"
+            "  Description: Discuss GEO initiative and partnership | Location: NYC\n"
         )
         event = _parse_gcal_output(output)
         self.assertIsNotNone(event)
@@ -35,6 +35,20 @@ class TestParseGcalOutput(unittest.TestCase):
         self.assertIn("rakhee@curium.ai", event.attendees)
         self.assertIn("jai@example.com", event.attendees)
         self.assertIn("GEO", event.description)
+        self.assertIn("NYC", event.description)
+
+    def test_parses_rich_description_with_job_details(self):
+        output = (
+            "evt_xyz  2026-04-29T16:30:00Z  interview between Danial and Jai\n"
+            "  Attendees: danial@222.place\n"
+            "  Description: Location: New York | Size: 16 people | Vertical: Consumer | "
+            "Website: https://222.place | Title: Technical Support Lead | Salary: $65K - $100K\n"
+        )
+        event = _parse_gcal_output(output)
+        self.assertIsNotNone(event)
+        self.assertIn("Technical Support Lead", event.description)
+        self.assertIn("222.place", event.description)
+        self.assertIn("New York", event.description)
 
     def test_returns_none_when_no_meetings(self):
         self.assertIsNone(_parse_gcal_output("No meetings in window.\n"))

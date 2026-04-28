@@ -68,7 +68,9 @@ def _parse_gcal_output(output: str) -> GcalEvent | None:
         if stripped.startswith("Attendees:"):
             raw = stripped[len("Attendees:"):].strip()
             attendees = [e.strip() for e in raw.split(",") if e.strip()]
-        elif stripped and not description:
+        elif stripped.startswith("Description:"):
+            description = stripped[len("Description:"):].strip()
+        elif stripped and not description and not stripped.startswith("Attendees:"):
             description = stripped
     return GcalEvent(event_id, start, title, attendees, description)
 
@@ -262,10 +264,13 @@ def _build_synthesis_prompt(title, start, attendees, description, emails, tasks,
     if wiki:
         sections.append(f"Relevant wiki context:\n{wiki}")
     return (
-        "You are preparing a pre-meeting brief. Based on the context below, write exactly 3-5 "
-        "bullet points covering what I need to know before this meeting. Each bullet must be "
-        "concrete and specific — not generic placeholders. Start each bullet with '•'. "
-        "Output only the bullets, no preamble.\n\n"
+        "You are a chief of staff preparing a pre-meeting brief for Jai Dhiman. "
+        "Based on the context below, write exactly 3-5 bullet points. "
+        "Each bullet must be ACTIONABLE and SPECIFIC — what to prepare, what to research, "
+        "what questions to have ready, what context to recall. "
+        "Do NOT just summarize or rephrase the description. "
+        "Think: what would a smart, well-prepared person want to know or do before walking into this? "
+        "Start each bullet with '•'. Output only the bullets, no preamble.\n\n"
         + "\n\n".join(sections)
     )
 

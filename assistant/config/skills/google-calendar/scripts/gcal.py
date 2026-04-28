@@ -108,7 +108,8 @@ def cmd_upcoming(args: argparse.Namespace) -> None:
             if evt.get("attendees"):
                 print(f"  Attendees: {', '.join(evt['attendees'])}")
             if evt.get("description"):
-                print(f"  {evt['description'][:80]}")
+                desc_oneline = evt["description"].replace("\n", " | ").replace("\r", "")
+                print(f"  Description: {desc_oneline[:800]}")
     if not found:
         print("No meetings in window.")
 
