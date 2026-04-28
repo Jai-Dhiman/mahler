@@ -45,6 +45,17 @@ def _build_https_opener() -> urllib.request.OpenerDirector:
 _OPENER = _build_https_opener()
 
 
+def _format_start(iso_utc: str) -> str:
+    try:
+        from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+        dt = datetime.fromisoformat(iso_utc.replace("Z", "+00:00"))
+        la = dt.astimezone(ZoneInfo("America/Los_Angeles"))
+        return la.strftime("%a, %b %-d at %-I:%M %p %Z")
+    except Exception:
+        return iso_utc
+
+
 def build_payload(
     title: str,
     start: str,
@@ -55,7 +66,7 @@ def build_payload(
     wiki: str | None,
 ) -> dict:
     fields = [
-        {"name": "Meeting", "value": f"{title} — {start}", "inline": False},
+        {"name": "Meeting", "value": f"{title} — {_format_start(start)}", "inline": False},
     ]
     if attendees:
         fields.append({"name": "Attendees", "value": attendees, "inline": False})
