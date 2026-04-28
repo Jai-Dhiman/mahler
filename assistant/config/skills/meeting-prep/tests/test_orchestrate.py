@@ -9,6 +9,7 @@ from orchestrate import (
     _parse_gcal_output,
     _should_skip_wiki,
     _extract_wiki_keywords,
+    _extract_research_target,
     check_dedup,
     fetch_email_context,
     fetch_open_tasks,
@@ -92,6 +93,27 @@ class TestExtractWikiKeywords(unittest.TestCase):
         self.assertNotIn("Meeting", kws)
         self.assertNotIn("with", kws)
         self.assertNotIn("the", kws)
+
+
+class TestExtractResearchTarget(unittest.TestCase):
+
+    def test_extracts_website_domain(self):
+        desc = "Location: New York | Size: 16 people | Website: https://222.place | Title: Technical Support Lead"
+        self.assertEqual(_extract_research_target(desc), "222.place")
+
+    def test_extracts_website_without_scheme(self):
+        desc = "Website: acme.io | Role: Engineer"
+        self.assertEqual(_extract_research_target(desc), "acme.io")
+
+    def test_extracts_company_field(self):
+        desc = "Company: Curium Health | Role: PM"
+        self.assertEqual(_extract_research_target(desc), "Curium Health")
+
+    def test_returns_none_when_no_target(self):
+        self.assertIsNone(_extract_research_target("Discuss Q2 roadmap"))
+
+    def test_returns_none_for_empty_description(self):
+        self.assertIsNone(_extract_research_target(""))
 
 
 class TestCheckDedup(unittest.TestCase):

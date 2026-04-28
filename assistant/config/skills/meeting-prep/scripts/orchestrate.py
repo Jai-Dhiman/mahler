@@ -257,7 +257,20 @@ def synthesize_brief(
     return "\n".join(bullets) if bullets else "• No specific context available."
 
 
+def _extract_research_target(description: str) -> str | None:
+    """Extract an explicit research target (website domain or company name) from the description."""
+    if description:
+        m = re.search(r"Website:\s*(https?://)?([^\s|,]+)", description, re.IGNORECASE)
+        if m:
+            return m.group(2).rstrip("/")
+        m = re.search(r"Company:\s*([^\|,\n]+)", description, re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+    return None
+
+
 def _build_synthesis_prompt(title, start, attendees, description, emails, tasks, wiki, crm) -> str:
+    research_target = _extract_research_target(description)
     sections = [f"Meeting: {title}", f"Start: {start}"]
     if attendees:
         sections.append(f"Attendees: {', '.join(attendees)}")
@@ -271,10 +284,17 @@ def _build_synthesis_prompt(title, start, attendees, description, emails, tasks,
         sections.append("Open tasks:\n" + "\n".join(f"- {t}" for t in tasks[:10]))
     if wiki:
         sections.append(f"Relevant wiki context:\n{wiki}")
+    if research_target:
+        research_instruction = (
+            f"RESEARCH TARGET: {research_target} — search the web for this specific company/domain. "
+            "Do NOT research attendee names or their other affiliations. "
+        )
+    else:
+        research_instruction = "Search the web to research the company and product described above. "
     return (
         "You are a chief of staff preparing a pre-meeting brief for Jai Dhiman. "
-        "Search the web to research the company, product, and people involved in this meeting. "
-        "Ground every bullet in what you actually find — do not use training data or hallucinate details. "
+        + research_instruction
+        + "Ground every bullet in what you actually find — do not use training data or hallucinate details. "
         "Write exactly 3-4 bullet points covering what Jai needs to know and how to prepare. "
         "Each bullet must be ACTIONABLE and SPECIFIC. "
         "Do NOT rephrase the description. "
