@@ -183,39 +183,49 @@ class TestFetchOpenTasks(unittest.TestCase):
 
 class TestSynthesizeBrief(unittest.TestCase):
 
-    def test_bullets_normalized(self):
-        llm = lambda prompt: "- First point\n- Second point\n- Third point"
-        result = synthesize_brief(
-            title="Intro Call",
-            start="2026-04-28T17:30:00Z",
-            attendees=["x@x.com"],
-            description="",
-            emails=None,
-            tasks=[],
-            wiki=None,
-            crm=None,
+    def _call(self, llm, **kwargs):
+        defaults = dict(
+            title="Test", start="2026-04-28T17:00:00Z",
+            attendees=[], description="", emails=None, tasks=[],
+            wiki=None, crm=None, web_research=None, honcho=None,
             llm_caller=llm,
+        )
+        defaults.update(kwargs)
+        return synthesize_brief(**defaults)
+
+    def test_bullets_normalized(self):
+        result = self._call(
+            lambda prompt: "- First point\n- Second point\n- Third point",
+            title="Intro Call", attendees=["x@x.com"],
         )
         for line in result.splitlines():
             self.assertTrue(line.startswith("•"), f"Expected bullet, got: {line!r}")
 
     def test_already_bulleted_lines_pass_through(self):
-        llm = lambda prompt: "• First\n• Second\n• Third"
-        result = synthesize_brief(
-            title="Test", start="2026-04-28T17:00:00Z",
-            attendees=[], description="", emails=None, tasks=[], wiki=None, crm=None,
-            llm_caller=llm,
-        )
+        result = self._call(lambda prompt: "• First\n• Second\n• Third")
         self.assertIn("• First", result)
 
-    def test_max_five_bullets(self):
-        llm = lambda prompt: "\n".join(f"• Point {i}" for i in range(10))
-        result = synthesize_brief(
-            title="Test", start="2026-04-28T17:00:00Z",
-            attendees=[], description="", emails=None, tasks=[], wiki=None, crm=None,
-            llm_caller=llm,
+    def test_max_four_bullets(self):
+        result = self._call(lambda prompt: "\n".join(f"• Point {i}" for i in range(10)))
+        self.assertLessEqual(len(result.splitlines()), 4)
+
+    def test_web_research_included_in_prompt(self):
+        captured = []
+        self._call(
+            lambda p: captured.append(p) or "• bullet",
+            web_research="Acme Corp: builds widgets",
         )
-        self.assertLessEqual(len(result.splitlines()), 5)
+        self.assertIn("Web research", captured[0])
+        self.assertIn("Acme Corp", captured[0])
+
+    def test_honcho_included_in_prompt(self):
+        captured = []
+        self._call(
+            lambda p: captured.append(p) or "• bullet",
+            honcho="Met Riley at a11y conference.",
+        )
+        self.assertIn("Memory", captured[0])
+        self.assertIn("Riley", captured[0])
 
 
 class TestRunPrep(unittest.TestCase):

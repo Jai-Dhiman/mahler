@@ -11,12 +11,16 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+_SCRIPTS_DIR = Path(__file__).parent
+_SHARED_DIR = Path.home() / ".hermes" / "shared"
+for _p in [str(_SCRIPTS_DIR), str(_SHARED_DIR)]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 _SKILLS = Path.home() / ".hermes" / "skills"
 _DEFAULT_MODEL = "openai/gpt-5-nano"
-_RESEARCH_MODEL = "perplexity/sonar"
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+_TAVILY_URL = "https://api.tavily.com/search"
 _GCAL_SKIP = "orchestra,rehearsal,bohemian,jinks,encampment"
 _SOCIAL_TITLES = {"1:1", "sync", "standup", "stand-up", "catch up", "catchup", "chat"}
 
@@ -233,29 +237,40 @@ def fetch_crm_context(attendees: list[str], runner) -> str | None:
     return "\n\n".join(parts) if parts else None
 
 
-# --- Synthesis ---
+def fetch_honcho_context(attendees: list[str], research_target: str | None) -> str | None:
+    """Query Honcho semantic memory for attendees and the company/topic."""
+    try:
+        import honcho_client
+    except ImportError:
+        return None
+    owner = os.environ.get("MAHLER_OWNER_EMAIL", "").lower()
+    queries = []
+    for email in attendees:
+        if email.lower() == owner:
+            continue
+        local = email.split("@")[0]
+        name = " ".join(p.capitalize() for p in re.split(r"[._\-]", local) if p)
+        queries.append(name)
+    if research_target:
+        queries.append(research_target)
+    if not queries:
+        return None
+    parts = []
+    seen: set[str] = set()
+    for query in queries[:3]:
+        try:
+            results = honcho_client.query_conclusions(query)
+            for r in results[:2]:
+                content = getattr(r, "content", str(r)).strip()
+                if content and content not in seen:
+                    seen.add(content)
+                    parts.append(content)
+        except Exception:
+            pass
+    return "\n".join(parts) if parts else None
 
-def synthesize_brief(
-    title: str,
-    start: str,
-    attendees: list[str],
-    description: str,
-    emails: str | None,
-    tasks: list[str],
-    wiki: str | None,
-    crm: str | None,
-    llm_caller,
-) -> str:
-    prompt = _build_synthesis_prompt(title, start, attendees, description, emails, tasks, wiki, crm)
-    raw = llm_caller(prompt)
-    lines = [l.strip() for l in raw.strip().splitlines() if l.strip()]
-    bullets = []
-    for line in lines[:4]:
-        if not line.startswith("•"):
-            line = "• " + line.lstrip("-•* ")
-        bullets.append(line)
-    return "\n".join(bullets) if bullets else "• No specific context available."
 
+# --- Web research ---
 
 def _extract_research_target(description: str) -> str | None:
     """Extract an explicit research target (website domain or company name) from the description."""
@@ -269,13 +284,89 @@ def _extract_research_target(description: str) -> str | None:
     return None
 
 
-def _build_synthesis_prompt(title, start, attendees, description, emails, tasks, wiki, crm) -> str:
+def _search_tavily(query: str) -> list[dict]:
+    api_key = os.environ["TAVILY_API_KEY"]
+    body = json.dumps({
+        "api_key": api_key,
+        "query": query,
+        "max_results": 5,
+        "search_depth": "advanced",
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        _TAVILY_URL,
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with _OPENER.open(req) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"Tavily error: HTTP {exc.code}") from exc
+    return data.get("results", [])
+
+
+def fetch_web_research(title: str, description: str) -> str | None:
+    """Search Tavily for the company/topic and return formatted results."""
     research_target = _extract_research_target(description)
+    if research_target:
+        query = f"{research_target} company overview product"
+    else:
+        stop = {"meeting", "call", "with", "intro", "catch", "up", "sync", "interview", "between"}
+        words = [w for w in title.split() if w.lower() not in stop]
+        query = " ".join(words[:4]) if words else title
+    try:
+        results = _search_tavily(query)
+    except Exception:
+        return None
+    parts = []
+    for r in results[:3]:
+        snippet = r.get("content", "")[:300].strip()
+        if snippet:
+            parts.append(f"{r.get('title', '')}: {snippet}")
+    return "\n\n".join(parts) if parts else None
+
+
+# --- Synthesis ---
+
+def synthesize_brief(
+    title: str,
+    start: str,
+    attendees: list[str],
+    description: str,
+    emails: str | None,
+    tasks: list[str],
+    wiki: str | None,
+    crm: str | None,
+    web_research: str | None,
+    honcho: str | None,
+    llm_caller,
+) -> str:
+    prompt = _build_synthesis_prompt(
+        title, start, attendees, description, emails, tasks, wiki, crm, web_research, honcho
+    )
+    raw = llm_caller(prompt)
+    lines = [l.strip() for l in raw.strip().splitlines() if l.strip()]
+    bullets = []
+    for line in lines[:4]:
+        if not line.startswith("•"):
+            line = "• " + line.lstrip("-•* ")
+        bullets.append(line)
+    return "\n".join(bullets) if bullets else "• No specific context available."
+
+
+def _build_synthesis_prompt(
+    title, start, attendees, description, emails, tasks, wiki, crm, web_research, honcho
+) -> str:
     sections = [f"Meeting: {title}", f"Start: {start}"]
     if attendees:
         sections.append(f"Attendees: {', '.join(attendees)}")
     if description:
         sections.append(f"Description: {description}")
+    if web_research:
+        sections.append(f"Web research:\n{web_research}")
+    if honcho:
+        sections.append(f"Memory about these people/topics:\n{honcho}")
     if crm:
         sections.append(f"CRM context:\n{crm}")
     if emails:
@@ -284,20 +375,13 @@ def _build_synthesis_prompt(title, start, attendees, description, emails, tasks,
         sections.append("Open tasks:\n" + "\n".join(f"- {t}" for t in tasks[:10]))
     if wiki:
         sections.append(f"Relevant wiki context:\n{wiki}")
-    if research_target:
-        research_instruction = (
-            f"RESEARCH TARGET: {research_target} — search the web for this specific company/domain. "
-            "Do NOT research attendee names or their other affiliations. "
-        )
-    else:
-        research_instruction = "Search the web to research the company and product described above. "
     return (
         "You are a chief of staff preparing a pre-meeting brief for Jai Dhiman. "
-        + research_instruction
-        + "Ground every bullet in what you actually find — do not use training data or hallucinate details. "
-        "Write exactly 3-4 bullet points covering what Jai needs to know and how to prepare. "
-        "Each bullet must be ACTIONABLE and SPECIFIC. "
-        "Do NOT rephrase the description. "
+        "Using the context provided below, write exactly 3-4 bullet points covering "
+        "what Jai needs to know and how to prepare. "
+        "Each bullet must be ACTIONABLE and SPECIFIC — ground it in the provided context, "
+        "especially the description, web research, and memory. "
+        "Do NOT rephrase the description. Do NOT make up facts not in the context. "
         "Start each bullet with '•'. Output only the bullets, no preamble.\n\n"
         + "\n\n".join(sections)
     )
@@ -336,7 +420,7 @@ def post_brief_to_discord(
         raise RuntimeError(f"post_brief.py unexpected output: {result.stdout.strip()}")
 
 
-# --- OpenRouter ---
+# --- HTTP ---
 
 def _build_https_opener() -> urllib.request.OpenerDirector:
     ctx = ssl.create_default_context()
@@ -352,11 +436,11 @@ def _build_https_opener() -> urllib.request.OpenerDirector:
 _OPENER = _build_https_opener()
 
 
-def _call_openrouter(prompt: str, model: str | None = None) -> str:
+def _call_openrouter(prompt: str) -> str:
     api_key = os.environ["OPENROUTER_API_KEY"]
-    resolved_model = model or os.environ.get("OPENROUTER_MODEL", _DEFAULT_MODEL)
+    model = os.environ.get("OPENROUTER_MODEL", _DEFAULT_MODEL)
     body = json.dumps({
-        "model": resolved_model,
+        "model": model,
         "messages": [{"role": "user", "content": prompt}],
     }).encode("utf-8")
     req = urllib.request.Request(
@@ -376,11 +460,6 @@ def _call_openrouter(prompt: str, model: str | None = None) -> str:
     return data["choices"][0]["message"]["content"]
 
 
-def _call_openrouter_research(prompt: str) -> str:
-    model = os.environ.get("MEETING_PREP_RESEARCH_MODEL", _RESEARCH_MODEL)
-    return _call_openrouter(prompt, model=model)
-
-
 # --- Entry point ---
 
 def run_prep(*, runner, llm_caller, test: bool = False) -> str:
@@ -394,11 +473,14 @@ def run_prep(*, runner, llm_caller, test: bool = False) -> str:
         return "NO_WORK"
 
     due_date = event.start[:10] if event.start else datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    research_target = _extract_research_target(event.description)
 
     emails = fetch_email_context(event.attendees, runner)
     tasks = fetch_open_tasks(due_date, runner)
     wiki = fetch_wiki_context(event.title, event.description, runner)
     crm = fetch_crm_context(event.attendees, runner)
+    web_research = fetch_web_research(event.title, event.description)
+    honcho = fetch_honcho_context(event.attendees, research_target)
 
     synthesis = synthesize_brief(
         title=event.title,
@@ -409,6 +491,8 @@ def run_prep(*, runner, llm_caller, test: bool = False) -> str:
         tasks=tasks,
         wiki=wiki,
         crm=crm,
+        web_research=web_research,
+        honcho=honcho,
         llm_caller=llm_caller,
     )
 
@@ -435,7 +519,7 @@ def cli_main() -> int:
                         help="Look 24h ahead, skip dedup — for manually triggering a test brief")
     args = parser.parse_args()
     try:
-        result = run_prep(runner=subprocess.run, llm_caller=_call_openrouter_research, test=args.test)
+        result = run_prep(runner=subprocess.run, llm_caller=_call_openrouter, test=args.test)
         print(result)
         return 0
     except Exception as exc:
