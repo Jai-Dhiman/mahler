@@ -245,6 +245,28 @@ class TestGcalUpcomingDescription(unittest.TestCase):
     })
     @patch("gcal.gcal_client.refresh_access_token", return_value="access_tok")
     @patch("gcal.gcal_client.list_events")
+    def test_html_stripped_from_description(self, mock_list, mock_refresh):
+        mock_list.return_value = [self._make_event(
+            "<p>Meeting with Riley:</p><p><b>Vibecode</b>: AI-powered app builder &amp; more</p>"
+        )]
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            from gcal import main
+            main(["upcoming", "--min-minutes", "45", "--max-minutes", "75"])
+        output = captured.getvalue()
+        self.assertIn("Vibecode", output)
+        self.assertIn("AI-powered app builder & more", output)
+        self.assertNotIn("<p>", output)
+        self.assertNotIn("<b>", output)
+        self.assertNotIn("&amp;", output)
+
+    @patch.dict(os.environ, {
+        "GMAIL_CLIENT_ID": "test_cid",
+        "GMAIL_CLIENT_SECRET": "test_csec",
+        "GMAIL_REFRESH_TOKEN": "test_rtok",
+    })
+    @patch("gcal.gcal_client.refresh_access_token", return_value="access_tok")
+    @patch("gcal.gcal_client.list_events")
     def test_description_truncated_at_800_chars(self, mock_list, mock_refresh):
         mock_list.return_value = [self._make_event("x" * 1000)]
         captured = io.StringIO()
@@ -254,6 +276,41 @@ class TestGcalUpcomingDescription(unittest.TestCase):
         desc_line = [l for l in captured.getvalue().splitlines() if "Description:" in l][0]
         desc_value = desc_line.split("Description:", 1)[1].strip()
         self.assertLessEqual(len(desc_value), 800)
+
+
+class TestGcalUpcomingMultipleEvents(unittest.TestCase):
+
+    def _make_event(self, event_id, summary, minutes_from_now):
+        from datetime import datetime, timezone, timedelta
+        start = datetime.now(timezone.utc) + timedelta(minutes=minutes_from_now)
+        return {
+            "id": event_id, "summary": summary,
+            "start": start.strftime("%Y-%m-%dT%H:%M:%S+00:00"),
+            "end": start.strftime("%Y-%m-%dT%H:%M:%S+00:00"),
+            "attendees": [], "description": f"Description of {summary}",
+        }
+
+    @patch.dict(os.environ, {
+        "GMAIL_CLIENT_ID": "test_cid",
+        "GMAIL_CLIENT_SECRET": "test_csec",
+        "GMAIL_REFRESH_TOKEN": "test_rtok",
+    })
+    @patch("gcal.gcal_client.refresh_access_token", return_value="access_tok")
+    @patch("gcal.gcal_client.list_events")
+    def test_only_first_matching_event_returned(self, mock_list, mock_refresh):
+        mock_list.return_value = [
+            self._make_event("evt-first", "First Meeting", 50),
+            self._make_event("evt-second", "Second Meeting", 65),
+        ]
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            from gcal import main
+            main(["upcoming", "--min-minutes", "45", "--max-minutes", "75"])
+        output = captured.getvalue()
+        self.assertIn("evt-first", output)
+        self.assertNotIn("evt-second", output)
+        self.assertIn("Description of First Meeting", output)
+        self.assertNotIn("Description of Second Meeting", output)
 
 
 class TestGcalUpcomingSkipKeywords(unittest.TestCase):

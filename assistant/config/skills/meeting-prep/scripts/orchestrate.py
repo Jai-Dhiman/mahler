@@ -382,6 +382,8 @@ def _build_synthesis_prompt(
         "Each bullet must be ACTIONABLE and SPECIFIC — ground it in the provided context, "
         "especially the description, web research, and memory. "
         "Do NOT rephrase the description. Do NOT make up facts not in the context. "
+        "NEVER include personal background, political, immigration, biographical, or "
+        "legal information about any individual — only company/product/business context. "
         "Start each bullet with '•'. Output only the bullets, no preamble.\n\n"
         + "\n\n".join(sections)
     )

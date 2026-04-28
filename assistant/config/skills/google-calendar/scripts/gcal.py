@@ -84,8 +84,16 @@ def _is_blocked(evt: dict, skip_keywords: list[str]) -> bool:
     return any(kw in haystack for kw in skip_keywords)
 
 
+def _strip_html(text: str) -> str:
+    import html
+    import re as _re
+    text = _re.sub(r"<[^>]+>", " ", text)
+    text = html.unescape(text)
+    return " ".join(text.split())
+
+
 def cmd_upcoming(args: argparse.Namespace) -> None:
-    """Print events whose start time falls in [min_minutes, max_minutes] from now (UTC). Skips all-day events."""
+    """Print the first event whose start time falls in [min_minutes, max_minutes] from now (UTC). Skips all-day events."""
     client_id, client_secret, refresh_token = _get_credentials()
     access_token = gcal_client.refresh_access_token(client_id, client_secret, refresh_token)
     skip_keywords = [kw.strip().lower() for kw in args.skip_keywords.split(",") if kw.strip()] if args.skip_keywords else []
@@ -93,7 +101,6 @@ def cmd_upcoming(args: argparse.Namespace) -> None:
     time_min = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     time_max = (now + timedelta(minutes=args.max_minutes + 1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     events = gcal_client.list_events(access_token, time_min, time_max)
-    found = False
     for evt in events:
         start_str = evt["start"]
         if "T" not in start_str:
@@ -103,15 +110,15 @@ def cmd_upcoming(args: argparse.Namespace) -> None:
         if args.min_minutes <= minutes_away <= args.max_minutes:
             if skip_keywords and _is_blocked(evt, skip_keywords):
                 continue
-            found = True
             print(f"{evt['id']}  {start_utc.strftime('%Y-%m-%dT%H:%M:%SZ')}  {evt['summary']}")
             if evt.get("attendees"):
                 print(f"  Attendees: {', '.join(evt['attendees'])}")
             if evt.get("description"):
-                desc_oneline = evt["description"].replace("\n", " | ").replace("\r", "")
+                desc_clean = _strip_html(evt["description"])
+                desc_oneline = desc_clean.replace("\n", " | ").replace("\r", "")
                 print(f"  Description: {desc_oneline[:800]}")
-    if not found:
-        print("No meetings in window.")
+            return  # only the next meeting
+    print("No meetings in window.")
 
 
 def cmd_create(args: argparse.Namespace) -> None:
