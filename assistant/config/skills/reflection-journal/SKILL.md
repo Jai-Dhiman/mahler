@@ -14,6 +14,7 @@ metadata:
 
 - Cron-triggered at 02:00 UTC every Sunday (6pm Pacific Saturday evening)
 - When the user says "start reflection", "weekly check-in", or "reflection time"
+- When the user sends a message answering the weekly reflection questions (how the week went, what drained energy, what they are avoiding) — record it with --record
 
 ## One-time setup
 

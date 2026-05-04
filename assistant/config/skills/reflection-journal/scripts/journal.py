@@ -27,12 +27,13 @@ _REQUIRED_ENV = [
 ]
 
 _QUESTIONS = """\
-Reflection time. Reply to all three in one message:
+**Weekly reflection** — reply to all three in one message, then I'll record it:
 
 1. How did last week go overall?
 2. What drained your energy or felt hard this week?
 3. What are you avoiding or putting off?
-"""
+
+_(Just reply here with your answers and I'll capture them.)_"""
 
 _SYNTHESIS_PROMPT = """\
 You are a personal chief-of-staff assistant processing a weekly reflection.
@@ -45,6 +46,21 @@ Write each as a plain-English sentence useful as context in future conversations
 
 Return each fact on its own line, prefixed with "FACT: ". Return at most 3 facts.\
 """
+
+
+def _post_discord(msg: str) -> None:
+    webhook = os.environ.get("DISCORD_TRIAGE_WEBHOOK", "")
+    if not webhook:
+        return
+    data = json.dumps({"content": msg}).encode("utf-8")
+    req = urllib.request.Request(webhook, data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("User-Agent", "DiscordBot (mahler, 1.0)")
+    try:
+        with _OPENER.open(req):
+            pass
+    except Exception:
+        pass
 
 
 def _build_https_opener() -> urllib.request.OpenerDirector:
@@ -121,6 +137,7 @@ def _load_env() -> dict:
 
 def _prompt() -> None:
     print(_QUESTIONS)
+    _post_discord(_QUESTIONS)
 
 
 def _record(answer_text: str, env: dict) -> None:

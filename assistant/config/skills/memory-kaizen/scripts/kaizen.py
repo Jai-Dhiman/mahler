@@ -68,6 +68,21 @@ def _build_https_opener():
 _OPENER = _build_https_opener()
 
 
+def _post_discord(msg: str) -> None:
+    webhook = os.environ.get("DISCORD_TRIAGE_WEBHOOK", "")
+    if not webhook:
+        return
+    data = json.dumps({"content": msg}).encode("utf-8")
+    req = urllib.request.Request(webhook, data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("User-Agent", "DiscordBot (mahler, 1.0)")
+    try:
+        with _OPENER.open(req):
+            pass
+    except Exception:
+        pass
+
+
 def _call_llm(prompt: str, api_key: str, model: str = _DEFAULT_MODEL, max_tokens: int = 400) -> str:
     body = json.dumps({
         "model": model,
@@ -99,6 +114,7 @@ def run(env: dict) -> str:
     if len(conclusions) < _MIN_CONCLUSIONS:
         msg = f"Insufficient data for memory kaizen ({len(conclusions)} conclusions, need {_MIN_CONCLUSIONS})."
         print(msg)
+        _post_discord(msg)
         return msg
     conclusions_text = "\n".join(
         f"{i + 1}. {getattr(c, 'content', str(c))}"
@@ -113,6 +129,7 @@ def run(env: dict) -> str:
     if raw.strip() == "NO_PATTERNS":
         msg = "Memory kaizen: no multi-entry patterns found."
         print(msg)
+        _post_discord(msg)
         return msg
     patterns = [
         line[len("PATTERN: "):].strip()
@@ -123,6 +140,7 @@ def run(env: dict) -> str:
         honcho_client.conclude(pattern, session_id=_SESSION_ID)
     summary = f"Memory kaizen: {len(patterns)} patterns written to Honcho."
     print(summary)
+    _post_discord(summary)
     return summary
 
 
