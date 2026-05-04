@@ -159,7 +159,7 @@ def _record(answer_text: str, env: dict) -> None:
         if line.startswith("FACT: ")
     ]
     for fact in facts:
-        honcho_client.conclude(fact, session_id="mahler-memory")
+        honcho_client.conclude(fact)
     print("Reflection recorded.")
 
 

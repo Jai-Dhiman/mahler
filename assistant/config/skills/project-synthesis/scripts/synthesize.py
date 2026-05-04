@@ -26,7 +26,7 @@ _REQUIRED_ENV = [
     "OPENROUTER_API_KEY",
     "HONCHO_API_KEY",
 ]
-_SESSION_ID = "mahler-memory"
+_SESSION_ID = "hermes"
 
 _SYNTHESIS_PROMPT = """\
 You are Mahler, a personal chief-of-staff. Analyze this week's development activity.

@@ -49,7 +49,7 @@ def _parse_dt(value) -> datetime:
     return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
 
 
-def conclude(text: str, session_id: str = "mahler-memory") -> None:
+def conclude(text: str, session_id: str = "hermes") -> None:
     """Write one durable conclusion to Honcho. Raises RuntimeError on failure."""
     _load_hermes_env()
     cfg = _load_config()
