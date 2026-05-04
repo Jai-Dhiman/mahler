@@ -16,7 +16,7 @@ import honcho_client
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 _DEFAULT_MODEL = "openai/gpt-5-nano"
 _REQUIRED_ENV = ["OPENROUTER_API_KEY", "HONCHO_API_KEY"]
-_SESSION_ID = "memory-kaizen"
+_SESSION_ID = "mahler-memory"
 _MIN_CONCLUSIONS = 5
 
 _KAIZEN_PROMPT = """\
