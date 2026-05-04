@@ -21,6 +21,8 @@ HERMES_ENV="$HOME/.hermes/.env"
   echo "DISCORD_TRIAGE_WEBHOOK=${DISCORD_TRIAGE_WEBHOOK:-}"
   echo "OPENROUTER_MODEL=${OPENROUTER_MODEL:-x-ai/grok-4.1-fast}"
   echo "HONCHO_API_KEY=${HONCHO_API_KEY:-}"
+  echo "TAVILY_API_KEY=${TAVILY_API_KEY:-}"
+  echo "MAHLER_OWNER_EMAIL=${MAHLER_OWNER_EMAIL:-}"
 } > "$HERMES_ENV"
 
 : "${NOTION_WIKI_READ_TOKEN:=}"
@@ -48,35 +50,29 @@ jobs_file = '$JOBS_FILE'
 try:
     with open(jobs_file, 'r') as f:
         data = json.load(f)
-        # Handle both old list format and new {jobs: [...]} format
         jobs = data.get('jobs', data) if isinstance(data, dict) else data
 except (FileNotFoundError, json.JSONDecodeError):
     jobs = []
 
 def next_run_for(cron_expr, now):
-    \"\"\"Compute next run for simple cron patterns without croniter.\"\"\"
     parts = cron_expr.strip().split()
     minute_field, hour_field, dow_field = parts[0], parts[1], parts[4]
     base = now.replace(second=0, microsecond=0)
     if minute_field.startswith('*/') and hour_field == '*':
-        # e.g. */15 * * * *
         interval = int(minute_field[2:])
         delta = interval - (base.minute % interval)
         return base + timedelta(minutes=delta)
     elif minute_field == '0' and hour_field.isdigit():
-        # e.g. 0 16 * * * or 0 18 * * 0 (Sunday-only)
         h = int(hour_field)
         candidate = base.replace(hour=h, minute=0)
         if candidate <= now:
             candidate += timedelta(days=1)
         if dow_field != '*':
-            # cron dow: 0=Sun..6=Sat; Python weekday(): 0=Mon..6=Sun
             py_target = (int(dow_field) + 6) % 7
             while candidate.weekday() != py_target:
                 candidate += timedelta(days=1)
         return candidate
     else:
-        # Fallback: 1 minute from now (Hermes will correct it after first run)
         return base + timedelta(minutes=1)
 
 def make_job(skills, prompt, cron_expr):
@@ -108,104 +104,84 @@ def make_job(skills, prompt, cron_expr):
         'origin': None,
     }
 
-existing_skills = set()
+# Build index of existing jobs by primary skill name so we can update
+# prompts without resetting next_run_at or last_run_at.
+existing_by_skill = {}
 for j in jobs:
-    for s in j.get('skills', [j.get('skill', '')]):
-        existing_skills.add(s)
+    primary = j.get('skill', j.get('name', ''))
+    if primary and primary not in existing_by_skill:
+        existing_by_skill[primary] = j
 
-added = []
-if 'email-triage' not in existing_skills:
-    jobs.append(make_job(
-        ['email-triage'],
-        'Run email triage: fetch unread emails from Gmail and Outlook, classify them using the priority map, store results in D1, and send Discord alerts for any URGENT emails.',
-        '0 * * * *',
-    ))
-    added.append('email-triage (every 15 min)')
+def upsert(skills, prompt, cron_expr):
+    primary = skills[0]
+    if primary in existing_by_skill:
+        existing_by_skill[primary]['prompt'] = prompt
+        existing_by_skill[primary]['skills'] = skills
+        return 'updated'
+    jobs.append(make_job(skills, prompt, cron_expr))
+    return 'added'
 
-if 'morning-brief' not in existing_skills:
-    jobs.append(make_job(
-        ['morning-brief'],
-        'Post the morning email brief: query the last 12 hours of triage results and post a structured summary to Discord.',
-        '0 16 * * *',
-    ))
-    jobs.append(make_job(
-        ['morning-brief'],
-        'Post the evening email brief: query the last 12 hours of triage results and post a structured summary to Discord.',
-        '0 1 * * *',
-    ))
-    added.append('morning-brief (8am + 8pm PST)')
-
-if 'meeting-followthrough' not in existing_skills:
-    jobs.append(make_job(
-        ['meeting-followthrough', 'relationship-manager', 'notion-tasks'],
-        'Check the Fathom meeting queue for pending completed meetings. If there are pending meetings, process each one: gather CRM context for attendees, generate action items, create Notion tasks, update CRM last_contact, mark the meeting as done, and post a summary to Discord. If there are no pending meetings, do nothing.',
-        '*/5 * * * *',
-    ))
-    added.append('meeting-followthrough (every 5 min)')
-
-if 'meeting-prep' not in existing_skills:
-    jobs.append(make_job(
-        ['meeting-prep', 'google-calendar', 'notion-tasks', 'notion-wiki'],
-        'Check if there is a meeting starting in 45 to 75 minutes. If so, check deduplication, gather context from recent emails, open tasks, and the wiki, synthesize a prep brief, post it to Discord, and log the event.',
-        '*/15 * * * *',
-    ))
-    added.append('meeting-prep (every 15 min)')
-
-if 'kaizen-reflection' not in existing_skills:
-    jobs.append(make_job(
-        ['kaizen-reflection'],
-        'Run the weekly kaizen reflection: analyze email triage patterns from the past 7 days, generate reclassification proposals, and present each to Discord with approve/deny buttons.',
-        '0 18 * * 0',
-    ))
-    added.append('kaizen-reflection (Sundays 18:00 UTC)')
-
-if 'evening-sweep' not in existing_skills:
-    jobs.append(make_job(
-        ['evening-sweep'],
-        'Run the evening task sweep: query today\'s completed, past-due, and open tasks from Notion, pick the top 3 priorities for tomorrow, post a summary to Discord, and check in on any overdue items.',
-        '0 1 * * *',
-    ))
-    added.append('evening-sweep (01:00 UTC / 6pm Pacific)')
-
-if 'relationship-manager' not in existing_skills:
-    jobs.append(make_job(
-        ['relationship-manager'],
-        'Run the daily calendar sync for the relationship CRM: call python3 ~/.hermes/skills/relationship-manager/scripts/contacts.py sync-calendar --days 1 to fetch yesterday\'s Google Calendar events and update last_contact for any attendees that match known contacts.',
-        '0 8 * * *',
-    ))
-    added.append('relationship-manager (08:00 UTC / midnight Pacific)')
-
-if 'reflection-journal' not in existing_skills:
-    jobs.append(make_job(
-        ['reflection-journal'],
-        'Run the weekly reflection journal: post the three reflection questions to Discord and wait for the user\'s reply. Once the user replies, record the response with --record.',
-        '0 2 * * 0',
-    ))
-    added.append('reflection-journal (Sundays 02:00 UTC)')
-
-if 'project-synthesis' not in existing_skills:
-    jobs.append(make_job(
-        ['project-synthesis'],
-        'Run the weekly project synthesis: read the past 7 days of project_log wins and blockers from D1, synthesize one cross-project paragraph covering attention, trajectory, and friction, and write it to Honcho memory.',
-        '0 18 * * 0',
-    ))
-    added.append('project-synthesis (Sundays 18:00 UTC)')
-
-if 'memory-kaizen' not in existing_skills:
-    jobs.append(make_job(
-        ['memory-kaizen'],
-        'Run the weekly memory kaizen: read the last 30 days of Honcho conclusions, identify 2-4 high-signal patterns that appear across multiple entries, and write each as a new conclusion.',
-        '0 19 * * 0',
-    ))
-    added.append('memory-kaizen (Sundays 19:00 UTC)')
+results = []
+results.append(('email-triage', upsert(
+    ['email-triage'],
+    'Run email triage: fetch unread emails from Gmail and Outlook, classify them using the priority map, store results in D1, and send Discord alerts for any URGENT emails.',
+    '0 * * * *',
+)))
+results.append(('morning-brief', upsert(
+    ['morning-brief'],
+    'Post the morning email brief: query the last 12 hours of triage results and post a structured summary to Discord.',
+    '0 16 * * *',
+)))
+results.append(('meeting-followthrough', upsert(
+    ['meeting-followthrough', 'relationship-manager', 'notion-tasks'],
+    'Check the Fathom meeting queue for pending completed meetings. If there are pending meetings, process each one: gather CRM context for attendees, generate action items, create Notion tasks, update CRM last_contact, mark the meeting as done, and post a summary to Discord. If there are no pending meetings, do nothing.',
+    '*/5 * * * *',
+)))
+results.append(('meeting-prep', upsert(
+    ['meeting-prep', 'google-calendar', 'notion-tasks', 'notion-wiki'],
+    'Check if there is a meeting starting in 45 to 75 minutes. If so, check deduplication, gather context from recent emails, open tasks, and the wiki, synthesize a prep brief, post it to Discord, and log the event.',
+    '*/15 * * * *',
+)))
+results.append(('kaizen-reflection', upsert(
+    ['kaizen-reflection'],
+    'Run the weekly kaizen reflection: analyze email triage patterns from the past 7 days, generate reclassification proposals, and present each to Discord with approve/deny buttons. Post the results to Discord.',
+    '0 18 * * 0',
+)))
+results.append(('evening-sweep', upsert(
+    ['evening-sweep'],
+    \"Run the evening task sweep: query today's completed, past-due, and open tasks from Notion, pick the top 3 priorities for tomorrow, post a summary to Discord, and check in on any overdue items.\",
+    '0 1 * * *',
+)))
+results.append(('relationship-manager', upsert(
+    ['relationship-manager'],
+    \"Run the daily calendar sync for the relationship CRM: call python3 ~/.hermes/skills/relationship-manager/scripts/contacts.py sync-calendar --days 1 to fetch yesterday's Google Calendar events and update last_contact for any attendees that match known contacts.\",
+    '0 8 * * *',
+)))
+results.append(('reflection-journal', upsert(
+    ['reflection-journal'],
+    \"Run the weekly reflection journal: post the three reflection questions to Discord and wait for the user's reply. Once the user replies, record the response with --record. Always post the questions to Discord.\",
+    '0 2 * * 0',
+)))
+results.append(('project-synthesis', upsert(
+    ['project-synthesis'],
+    'Run the weekly project synthesis: run python3 ~/.hermes/skills/project-synthesis/scripts/synthesize.py --run, then post the result message to Discord verbatim.',
+    '0 18 * * 0',
+)))
+results.append(('memory-kaizen', upsert(
+    ['memory-kaizen'],
+    'Run the weekly memory kaizen: run python3 ~/.hermes/skills/memory-kaizen/scripts/kaizen.py --run, then post the result message to Discord verbatim.',
+    '0 19 * * 0',
+)))
 
 with open(jobs_file, 'w') as f:
     json.dump({'jobs': jobs, 'updated_at': datetime.now(timezone.utc).isoformat()}, f, indent=2)
 
+added = [name for name, action in results if action == 'added']
+updated = [name for name, action in results if action == 'updated']
 if added:
-    print('Registered cron jobs:', ', '.join(added))
-else:
-    print('Cron jobs already registered, skipping.')
+    print('Registered new cron jobs:', ', '.join(added))
+if updated:
+    print('Updated existing cron prompts:', ', '.join(updated))
 "
 
 exec hermes gateway

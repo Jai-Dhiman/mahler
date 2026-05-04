@@ -306,15 +306,16 @@ def _search_tavily(query: str) -> list[dict]:
     return data.get("results", [])
 
 
-def fetch_web_research(title: str, description: str) -> str | None:
-    """Search Tavily for the company/topic and return formatted results."""
+def fetch_web_research(description: str) -> str | None:
+    """Search Tavily only when description has an explicit company/website target.
+
+    Generic title-word fallback queries produce background noise that the LLM
+    converts into generic prep bullets, so we skip them entirely.
+    """
     research_target = _extract_research_target(description)
-    if research_target:
-        query = f"{research_target} company overview product"
-    else:
-        stop = {"meeting", "call", "with", "intro", "catch", "up", "sync", "interview", "between"}
-        words = [w for w in title.split() if w.lower() not in stop]
-        query = " ".join(words[:4]) if words else title
+    if not research_target:
+        return None
+    query = f"{research_target} company overview product"
     try:
         results = _search_tavily(query)
     except Exception:
@@ -384,6 +385,11 @@ def _build_synthesis_prompt(
         "Do NOT rephrase the description. Do NOT make up facts not in the context. "
         "NEVER include personal background, political, immigration, biographical, or "
         "legal information about any individual — only company/product/business context. "
+        "FORBIDDEN: do not write any bullet about logistics such as setting reminders, "
+        "testing audio/video, confirming availability, logging in early, or preparing "
+        "general notes — these apply to every meeting and add no value. "
+        "If you cannot write at least 2 bullets grounded in the provided context sections, "
+        "output exactly: '• No specific prep context available.' "
         "Start each bullet with '•'. Output only the bullets, no preamble.\n\n"
         + "\n\n".join(sections)
     )
@@ -481,8 +487,14 @@ def run_prep(*, runner, llm_caller, test: bool = False) -> str:
     tasks = fetch_open_tasks(due_date, runner)
     wiki = fetch_wiki_context(event.title, event.description, runner)
     crm = fetch_crm_context(event.attendees, runner)
-    web_research = fetch_web_research(event.title, event.description)
+    web_research = fetch_web_research(event.description)
     honcho = fetch_honcho_context(event.attendees, research_target)
+
+    # Skip entirely if there is nothing enriched to say — avoids hollow bullets
+    # for bare calendar blocks with no description, no emails, and no CRM context.
+    if not any([emails, crm, wiki, honcho, web_research, event.description]):
+        log_dedup(event.event_id, event.title, event.start, runner)
+        return "NO_WORK"
 
     synthesis = synthesize_brief(
         title=event.title,
