@@ -298,3 +298,33 @@ class TestBlockerClassifierViaClaude(unittest.TestCase):
         self.assertEqual(len(blocker_inserts), 1)
         params = blocker_inserts[0].args[1]
         self.assertIn("Postgres auth schema", " ".join(str(p) for p in params))
+
+
+class TestBlockerClassifierMissingCli(unittest.TestCase):
+    def test_returns_no_insert_when_claude_cli_missing(self):
+        transcript = {
+            "messages": [{"role": "user", "content": "I'm stuck on the auth migration"}],
+            "cwd": "/tmp/x",
+        }
+        d1 = MagicMock()
+        d1.query.return_value = []
+
+        def fake_run(cmd, **kwargs):
+            if cmd and cmd[0] == "claude":
+                raise FileNotFoundError("no such file: claude")
+            r = MagicMock(); r.returncode = 0; r.stdout = ""
+            return r
+
+        with patch("project_log._get_d1_client", return_value=d1), \
+             patch("project_log.subprocess.run", side_effect=fake_run), \
+             patch("project_log._derive_project_name", return_value="x"), \
+             patch("project_log._derive_git_ref", return_value=""):
+            import project_log
+            project_log.log_blocker_if_triggered(transcript, "/tmp/x")
+
+        blocker_inserts = [
+            c for c in d1.query.call_args_list
+            if "INSERT INTO project_log" in c.args[0]
+            and c.args[1] and "blocker" in c.args[1]
+        ]
+        self.assertEqual(len(blocker_inserts), 0)
