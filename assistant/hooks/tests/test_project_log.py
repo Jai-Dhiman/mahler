@@ -195,4 +195,6 @@ class TestSyncLocalToD1Memory(unittest.TestCase):
             for call in memory_inserts:
                 params = call.args[1]
                 self.assertEqual(params[0], "memory")  # source
+                self.assertIn(params[1], {"MEMORY.md", "user_role.md"})  # project = filename
+                self.assertTrue(params[2].startswith("#"))  # content starts with "# <filename>\n..."
                 self.assertTrue(len(params[3]) == 64)  # sha256 hex
