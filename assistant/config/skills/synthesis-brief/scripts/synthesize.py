@@ -96,7 +96,7 @@ def _build_https_opener() -> urllib.request.OpenerDirector:
 _OPENER = _build_https_opener()
 
 
-def _call_llm(prompt: str, api_key: str, model: str = _DEFAULT_MODEL, max_tokens: int = 4000) -> str:
+def _call_llm(prompt: str, api_key: str, model: str = _DEFAULT_MODEL, max_tokens: int = 8000) -> str:
     body = json.dumps({
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
