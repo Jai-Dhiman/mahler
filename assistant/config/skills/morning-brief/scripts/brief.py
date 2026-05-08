@@ -251,17 +251,41 @@ def post_brief(webhook_url: str, payload: dict) -> None:
         raise RuntimeError(f"Discord webhook failed: {status}")
 
 
-def main() -> None:
+def _read_fresh_synthesis(d1) -> dict | None:
+    rows = d1.query(
+        "SELECT value FROM mahler_kv WHERE key = ? LIMIT 1",
+        ["synthesis_brief:latest"],
+    )
+    if not rows:
+        return None
+    try:
+        data = json.loads(rows[0]["value"])
+    except (KeyError, ValueError):
+        return None
+    posted = data.get("posted_at")
+    if not posted:
+        return None
+    try:
+        posted_dt = datetime.strptime(posted, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    if datetime.now(timezone.utc) - posted_dt > timedelta(hours=24):
+        return None
+    return data
+
+
+def main_with_args(argv: list | None) -> None:
     parser = argparse.ArgumentParser(description="Post a morning or evening email brief to Discord.")
     parser.add_argument("--period", required=True, choices=["morning", "evening"])
     parser.add_argument("--since-hours", type=int, default=12)
     parser.add_argument("--dry-run", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     env = load_env(dry_run=args.dry_run)
     d1 = D1Client(env["CF_ACCOUNT_ID"], env["CF_D1_DATABASE_ID"], env["CF_API_TOKEN"])
     cutoff = compute_cutoff(args.since_hours)
     rows = query_rows(d1, cutoff)
+    synthesis_section = _read_fresh_synthesis(d1)
 
     news_items: list[dict] = []
     news_error: str | None = None
@@ -273,7 +297,7 @@ def main() -> None:
             news_error = str(exc)
             print(f"brief: news fetch failed: {exc}", file=sys.stderr)
 
-    payload = build_embed(rows, args.period, args.since_hours, news_items=news_items, news_error=news_error)
+    payload = build_embed(rows, args.period, args.since_hours, news_items=news_items, news_error=news_error, synthesis_section=synthesis_section)
 
     if args.dry_run:
         print(json.dumps(payload, indent=2))
@@ -281,6 +305,10 @@ def main() -> None:
 
     post_brief(env["DISCORD_TRIAGE_WEBHOOK"], payload)
     print("Brief posted.")
+
+
+def main() -> None:
+    main_with_args(None)
 
 
 if __name__ == "__main__":
