@@ -97,5 +97,32 @@ class TestSynthesizeThinContext(unittest.TestCase):
         llm_mock.assert_not_called()
 
 
+class TestSynthesizePersistence(unittest.TestCase):
+    def test_writes_synthesis_brief_row_and_mahler_kv_on_success(self):
+        d1 = MagicMock()
+        d1.query.return_value = []
+        env = {
+            "CF_ACCOUNT_ID": "a"*32, "CF_D1_DATABASE_ID": "b"*32,
+            "CF_API_TOKEN": "t", "OPENROUTER_API_KEY": "k", "HONCHO_API_KEY": "h",
+        }
+        with patch.dict("os.environ", env, clear=True), \
+             patch("synthesize._build_d1", return_value=d1), \
+             patch("synthesize._build_honcho", return_value=MagicMock()), \
+             patch("synthesize.inputs.load_all", return_value=_full_bundle()), \
+             patch("synthesize._call_llm", return_value=json.dumps(_GOOD_BRIEF)):
+            synthesize.main_with_args(["--run"])
+
+        sb_inserts = [c for c in d1.query.call_args_list if "INSERT INTO synthesis_brief" in c.args[0]]
+        kv_writes = [c for c in d1.query.call_args_list if "mahler_kv" in c.args[0] and "INSERT" in c.args[0]]
+        self.assertEqual(len(sb_inserts), 1)
+        self.assertEqual(len(kv_writes), 1)
+
+        kv_params = kv_writes[0].args[1]
+        self.assertEqual(kv_params[0], "synthesis_brief:latest")
+        payload = json.loads(kv_params[1])
+        self.assertEqual(payload["pattern"], "Pattern X")
+        self.assertIn("posted_at", payload)
+
+
 if __name__ == "__main__":
     unittest.main()

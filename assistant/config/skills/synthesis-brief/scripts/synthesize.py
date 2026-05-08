@@ -169,7 +169,25 @@ def main_with_args(argv: list | None) -> None:
         print(json.dumps(brief, indent=2))
         return
 
-    # Persistence is added in Task 22.
+    from datetime import datetime, timezone
+    posted_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    connections_json = json.dumps(brief["connections"])
+    d1.query(
+        "INSERT INTO synthesis_brief (posted_at, connections_json, pattern, question) "
+        "VALUES (?, ?, ?, ?)",
+        [posted_at, connections_json, brief["pattern"], brief["question"]],
+    )
+    kv_payload = json.dumps({
+        "posted_at": posted_at,
+        "connections": brief["connections"],
+        "pattern": brief["pattern"],
+        "question": brief["question"],
+    })
+    d1.query(
+        "INSERT INTO mahler_kv (key, value, updated_at) VALUES (?, ?, datetime('now')) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        ["synthesis_brief:latest", kv_payload],
+    )
     print("Synthesis brief written.")
 
 
