@@ -48,6 +48,26 @@ def _ensure_tables(d1) -> None:
     )
 
 
+def _load_project_wins(d1, context_days: int) -> list:
+    rows = d1.query(
+        "SELECT id, project, summary, created_at FROM project_log "
+        "WHERE entry_type = 'win' AND created_at >= datetime('now', ? || ' days') "
+        "ORDER BY created_at DESC",
+        [f"-{context_days}"],
+    )
+    items = []
+    for r in rows:
+        items.append(Item(
+            source="project_log",
+            id=f"project_log:{r['id']}",
+            content=f"[{r['project']}] {r['summary']}",
+            captured_at=r["created_at"],
+        ))
+    return items
+
+
 def load_all(d1, honcho, recent_days: int = 1, context_days: int = 14) -> InputBundle:
     _ensure_tables(d1)
-    return InputBundle()
+    bundle = InputBundle()
+    bundle.context_items.extend(_load_project_wins(d1, context_days))
+    return bundle
