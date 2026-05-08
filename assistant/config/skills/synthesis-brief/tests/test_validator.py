@@ -21,5 +21,33 @@ class TestThinContext(unittest.TestCase):
         self.assertEqual(reason, "thin_context")
 
 
+class TestCitations(unittest.TestCase):
+    def _bundle(self):
+        return InputBundle(
+            recent_items=[Item("memory", f"memory:{i}", "x", "2026-05-07") for i in range(4)],
+            context_items=[Item("project_log", f"project_log:{i}", "y", "2026-05-04") for i in range(6)],
+            past_briefs=[],
+            identifiers={f"memory:{i}" for i in range(4)} | {f"project_log:{i}" for i in range(6)},
+        )
+
+    def test_returns_false_insufficient_citations_when_under_2_of_3_qualify(self):
+        bundle = self._bundle()
+        brief = {
+            "connections": [
+                {"summary": "A", "citations": [{"source": "memory", "id": "memory:1"}]},  # only 1
+                {"summary": "B", "citations": []},                                          # 0
+                {"summary": "C", "citations": [
+                    {"source": "memory", "id": "memory:2"},
+                    {"source": "project_log", "id": "project_log:0"},
+                ]},                                                                         # 2 ok
+            ],
+            "pattern": "p",
+            "question": "q",
+        }
+        ok, reason = validator.validate(brief, bundle)
+        self.assertFalse(ok)
+        self.assertEqual(reason, "insufficient_citations")
+
+
 if __name__ == "__main__":
     unittest.main()
