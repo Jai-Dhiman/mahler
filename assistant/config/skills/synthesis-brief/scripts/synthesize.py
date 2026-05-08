@@ -112,7 +112,10 @@ def _call_llm(prompt: str, api_key: str, model: str = _DEFAULT_MODEL, max_tokens
             data = json.loads(resp.read())
     except urllib.error.HTTPError as exc:
         raise RuntimeError(f"OpenRouter error: HTTP {exc.code}") from exc
-    return data["choices"][0]["message"]["content"]
+    content = data["choices"][0]["message"]["content"]
+    if content is None:
+        raise RuntimeError("OpenRouter returned null content")
+    return content
 
 
 def _format_items(items: list) -> str:
@@ -161,7 +164,7 @@ def main_with_args(argv: list | None) -> None:
         return
     try:
         brief = json.loads(raw)
-    except ValueError:
+    except (ValueError, TypeError):
         print("Synthesis brief skipped: malformed")
         return
 
