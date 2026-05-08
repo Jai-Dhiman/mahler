@@ -497,5 +497,41 @@ class TestMainReadsSynthesisFromKV(unittest.TestCase):
         self.assertEqual(captured["synthesis_section"]["pattern"], "P")
 
 
+class TestMainOmitsStaleSynthesis(unittest.TestCase):
+    def test_passes_none_when_posted_at_older_than_24h(self):
+        stale_posted = (datetime.now(timezone.utc) - timedelta(hours=25)).strftime("%Y-%m-%d %H:%M:%S")
+        kv_value = _json_mod.dumps({
+            "posted_at": stale_posted,
+            "connections": [], "pattern": "P", "question": "Q",
+        })
+
+        captured = {}
+
+        def fake_query(sql, params=None):
+            if "mahler_kv" in sql and "WHERE key" in sql:
+                return [{"value": kv_value}]
+            if "FROM email_triage_log" in sql:
+                return []
+            return []
+
+        def fake_build_embed(*args, **kwargs):
+            captured["synthesis_section"] = kwargs.get("synthesis_section")
+            return {"embeds": [{"title": "x", "fields": []}]}
+
+        env = {
+            "CF_ACCOUNT_ID": "a"*32, "CF_D1_DATABASE_ID": "b"*32,
+            "CF_API_TOKEN": "tok",
+        }
+        with unittest.mock.patch.dict("os.environ", env, clear=True), \
+             unittest.mock.patch("brief.D1Client") as mock_d1cls, \
+             unittest.mock.patch("brief.build_embed", side_effect=fake_build_embed), \
+             unittest.mock.patch("brief.fetch_top_news", return_value=[]):
+            mock_d1cls.return_value.query.side_effect = fake_query
+            import brief as _brief_mod
+            _brief_mod.main_with_args(["--period", "morning", "--dry-run"])
+
+        self.assertIsNone(captured["synthesis_section"])
+
+
 if __name__ == "__main__":
     unittest.main()
