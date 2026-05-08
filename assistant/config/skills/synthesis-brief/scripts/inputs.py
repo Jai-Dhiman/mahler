@@ -66,8 +66,22 @@ def _load_project_wins(d1, context_days: int) -> list:
     return items
 
 
+def _load_honcho(honcho, context_days: int) -> list:
+    conclusions = honcho.list_conclusions(since_days=context_days)
+    items = []
+    for i, c in enumerate(conclusions):
+        items.append(Item(
+            source="honcho",
+            id=f"honcho:{i}",
+            content=getattr(c, "content", str(c)),
+            captured_at=str(getattr(c, "created_at", "")),
+        ))
+    return items
+
+
 def load_all(d1, honcho, recent_days: int = 1, context_days: int = 14) -> InputBundle:
     _ensure_tables(d1)
     bundle = InputBundle()
     bundle.context_items.extend(_load_project_wins(d1, context_days))
+    bundle.context_items.extend(_load_honcho(honcho, context_days))
     return bundle

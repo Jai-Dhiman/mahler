@@ -56,5 +56,24 @@ class TestLoadAllProjectWins(unittest.TestCase):
         self.assertIn("Shipped V6 atoms", wins[0].content)
 
 
+class TestLoadAllHoncho(unittest.TestCase):
+    def test_includes_honcho_conclusions_in_context_items(self):
+        d1 = MagicMock()
+        d1.query.return_value = []
+
+        c1 = MagicMock(); c1.content = "Jai is focused on traderjoe"; c1.created_at = "2026-05-01T00:00:00Z"
+        c2 = MagicMock(); c2.content = "Jai ships on Sundays"; c2.created_at = "2026-05-03T00:00:00Z"
+
+        honcho = MagicMock()
+        honcho.list_conclusions.return_value = [c1, c2]
+
+        bundle = inputs.load_all(d1, honcho, recent_days=1, context_days=14)
+
+        honcho_items = [it for it in bundle.context_items if it.source == "honcho"]
+        self.assertEqual(len(honcho_items), 2)
+        self.assertEqual(honcho_items[0].content, "Jai is focused on traderjoe")
+        honcho.list_conclusions.assert_called_once_with(since_days=14)
+
+
 if __name__ == "__main__":
     unittest.main()
