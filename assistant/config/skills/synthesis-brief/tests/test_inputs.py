@@ -75,5 +75,40 @@ class TestLoadAllHoncho(unittest.TestCase):
         honcho.list_conclusions.assert_called_once_with(since_days=14)
 
 
+class TestLoadAllLocalCapturePartition(unittest.TestCase):
+    def test_recent_rows_go_to_recent_older_to_context(self):
+        recent_rows = [
+            {"id": 1, "source": "memory", "project": "MEMORY.md",
+             "content": "Recent memory", "captured_at": "2026-05-07 04:00:00"},
+        ]
+        context_rows = [
+            {"id": 2, "source": "git", "project": "crescendAI",
+             "content": "[crescendAI] abc1 Old commit", "captured_at": "2026-05-02 10:00:00"},
+        ]
+
+        def query_side_effect(sql, params=None):
+            if "FROM local_capture" in sql and "captured_at >= datetime" in sql:
+                if params and params[0] == "-1" and "captured_at < datetime" not in sql:
+                    return recent_rows
+                if params and params[0] == "-14" and "captured_at < datetime" in sql:
+                    return context_rows
+            return []
+
+        d1 = MagicMock()
+        d1.query.side_effect = query_side_effect
+        honcho = MagicMock(); honcho.list_conclusions.return_value = []
+
+        bundle = inputs.load_all(d1, honcho, recent_days=1, context_days=14)
+
+        recent_local = [it for it in bundle.recent_items if it.source in ("memory", "git")]
+        context_local = [it for it in bundle.context_items if it.source in ("memory", "git")]
+        self.assertEqual(len(recent_local), 1)
+        self.assertEqual(recent_local[0].source, "memory")
+        self.assertEqual(recent_local[0].id, "memory:1")
+        self.assertEqual(len(context_local), 1)
+        self.assertEqual(context_local[0].source, "git")
+        self.assertEqual(context_local[0].id, "git:2")
+
+
 if __name__ == "__main__":
     unittest.main()

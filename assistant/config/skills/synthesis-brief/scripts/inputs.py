@@ -79,9 +79,41 @@ def _load_honcho(honcho, context_days: int) -> list:
     return items
 
 
+def _row_to_item(r: dict) -> Item:
+    return Item(
+        source=r["source"],
+        id=f"{r['source']}:{r['id']}",
+        content=r["content"],
+        captured_at=r["captured_at"],
+    )
+
+
+def _load_local_recent(d1, recent_days: int) -> list:
+    rows = d1.query(
+        "SELECT id, source, project, content, captured_at FROM local_capture "
+        "WHERE captured_at >= datetime('now', ? || ' days') "
+        "ORDER BY captured_at DESC",
+        [f"-{recent_days}"],
+    )
+    return [_row_to_item(r) for r in rows]
+
+
+def _load_local_context(d1, recent_days: int, context_days: int) -> list:
+    rows = d1.query(
+        "SELECT id, source, project, content, captured_at FROM local_capture "
+        "WHERE captured_at >= datetime('now', ? || ' days') "
+        "AND captured_at < datetime('now', ? || ' days') "
+        "ORDER BY captured_at DESC",
+        [f"-{context_days}", f"-{recent_days}"],
+    )
+    return [_row_to_item(r) for r in rows]
+
+
 def load_all(d1, honcho, recent_days: int = 1, context_days: int = 14) -> InputBundle:
     _ensure_tables(d1)
     bundle = InputBundle()
+    bundle.recent_items.extend(_load_local_recent(d1, recent_days))
+    bundle.context_items.extend(_load_local_context(d1, recent_days, context_days))
     bundle.context_items.extend(_load_project_wins(d1, context_days))
     bundle.context_items.extend(_load_honcho(honcho, context_days))
     return bundle
