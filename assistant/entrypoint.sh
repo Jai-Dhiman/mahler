@@ -172,6 +172,11 @@ results.append(('memory-kaizen', upsert(
     'Run the weekly memory kaizen: run python3 ~/.hermes/skills/memory-kaizen/scripts/kaizen.py --run, then post the result message to Discord verbatim.',
     '0 19 * * 0',
 )))
+results.append(('synthesis-brief', upsert(
+    ['synthesis-brief'],
+    'Run the daily synthesis brief: run python3 ~/.hermes/skills/synthesis-brief/scripts/synthesize.py --run, then print the result line to stdout. Do not post to Discord; the 8am morning-brief picks up the result from mahler_kv.',
+    '0 13 * * 1-5',
+)))
 
 with open(jobs_file, 'w') as f:
     json.dump({'jobs': jobs, 'updated_at': datetime.now(timezone.utc).isoformat()}, f, indent=2)
