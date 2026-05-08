@@ -38,13 +38,13 @@ def _qualifying_connections(brief: dict, identifiers: set) -> int:
 def _check_length(brief: dict) -> bool:
     pattern = brief.get("pattern") or ""
     question = brief.get("question") or ""
-    connections_text = "\n".join(c.get("summary", "") for c in brief.get("connections", []))
-    sections = [pattern, question, connections_text]
-    if any(len(s) > _SECTION_MAX for s in sections):
+    summaries = [c.get("summary", "") for c in brief.get("connections", [])]
+    if len(pattern) > _SECTION_MAX or len(question) > _SECTION_MAX:
         return False
-    if sum(len(s) for s in sections) > _TOTAL_MAX:
+    if any(len(s) > _SECTION_MAX for s in summaries):
         return False
-    return True
+    total = len(pattern) + len(question) + sum(len(s) for s in summaries)
+    return total <= _TOTAL_MAX
 
 
 def validate(brief: dict, bundle) -> tuple[bool, str]:
