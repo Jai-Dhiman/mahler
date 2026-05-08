@@ -84,5 +84,36 @@ class TestLength(unittest.TestCase):
         self.assertEqual(reason, "length_exceeded")
 
 
+class TestValidPasses(unittest.TestCase):
+    def test_returns_true_for_fully_valid_brief(self):
+        bundle = InputBundle(
+            recent_items=[Item("memory", f"memory:{i}", "x", "2026-05-07") for i in range(4)],
+            context_items=[Item("project_log", f"project_log:{i}", "y", "2026-05-04") for i in range(6)],
+            past_briefs=[],
+            identifiers={f"memory:{i}" for i in range(4)} | {f"project_log:{i}" for i in range(6)},
+        )
+        brief = {
+            "connections": [
+                {"summary": "A", "citations": [
+                    {"source": "memory", "id": "memory:0"},
+                    {"source": "memory", "id": "memory:1"},
+                ]},
+                {"summary": "B", "citations": [
+                    {"source": "memory", "id": "memory:2"},
+                    {"source": "project_log", "id": "project_log:0"},
+                ]},
+                {"summary": "C", "citations": [
+                    {"source": "memory", "id": "memory:3"},
+                    {"source": "project_log", "id": "project_log:1"},
+                ]},
+            ],
+            "pattern": "Some pattern",
+            "question": "Some question",
+        }
+        ok, reason = validator.validate(brief, bundle)
+        self.assertTrue(ok)
+        self.assertEqual(reason, "")
+
+
 if __name__ == "__main__":
     unittest.main()

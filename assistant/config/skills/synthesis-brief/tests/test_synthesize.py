@@ -124,5 +124,75 @@ class TestSynthesizePersistence(unittest.TestCase):
         self.assertIn("posted_at", payload)
 
 
+_ENV = {
+    "CF_ACCOUNT_ID": "a"*32, "CF_D1_DATABASE_ID": "b"*32,
+    "CF_API_TOKEN": "t", "OPENROUTER_API_KEY": "k", "HONCHO_API_KEY": "h",
+}
+
+
+class TestSynthesizeLLMError(unittest.TestCase):
+    def test_skips_gracefully_when_llm_raises(self):
+        d1 = MagicMock()
+        d1.query.return_value = []
+        captured = io.StringIO()
+        with patch.dict("os.environ", _ENV, clear=True), \
+             patch("synthesize._build_d1", return_value=d1), \
+             patch("synthesize._build_honcho", return_value=MagicMock()), \
+             patch("synthesize.inputs.load_all", return_value=_full_bundle()), \
+             patch("synthesize._call_llm", side_effect=RuntimeError("HTTP 500")), \
+             patch("sys.stdout", captured):
+            synthesize.main_with_args(["--run"])
+
+        self.assertIn("skipped", captured.getvalue())
+        self.assertIn("llm_error", captured.getvalue())
+        inserts = [c for c in d1.query.call_args_list if "INSERT INTO synthesis_brief" in c.args[0]]
+        self.assertEqual(inserts, [])
+
+
+class TestSynthesizeMalformedJSON(unittest.TestCase):
+    def test_skips_when_llm_returns_invalid_json(self):
+        d1 = MagicMock()
+        d1.query.return_value = []
+        captured = io.StringIO()
+        with patch.dict("os.environ", _ENV, clear=True), \
+             patch("synthesize._build_d1", return_value=d1), \
+             patch("synthesize._build_honcho", return_value=MagicMock()), \
+             patch("synthesize.inputs.load_all", return_value=_full_bundle()), \
+             patch("synthesize._call_llm", return_value="not valid json"), \
+             patch("sys.stdout", captured):
+            synthesize.main_with_args(["--run"])
+
+        self.assertIn("skipped: malformed", captured.getvalue())
+        inserts = [c for c in d1.query.call_args_list if "INSERT INTO synthesis_brief" in c.args[0]]
+        self.assertEqual(inserts, [])
+
+
+class TestSynthesizeValidatorRejects(unittest.TestCase):
+    def test_skips_when_validator_rejects_insufficient_citations(self):
+        bad_brief = {
+            "connections": [
+                {"summary": "A", "citations": [{"source": "memory", "id": "memory:0"}]},
+                {"summary": "B", "citations": []},
+                {"summary": "C", "citations": []},
+            ],
+            "pattern": "P",
+            "question": "Q",
+        }
+        d1 = MagicMock()
+        d1.query.return_value = []
+        captured = io.StringIO()
+        with patch.dict("os.environ", _ENV, clear=True), \
+             patch("synthesize._build_d1", return_value=d1), \
+             patch("synthesize._build_honcho", return_value=MagicMock()), \
+             patch("synthesize.inputs.load_all", return_value=_full_bundle()), \
+             patch("synthesize._call_llm", return_value=json.dumps(bad_brief)), \
+             patch("sys.stdout", captured):
+            synthesize.main_with_args(["--run"])
+
+        self.assertIn("skipped: insufficient_citations", captured.getvalue())
+        inserts = [c for c in d1.query.call_args_list if "INSERT INTO synthesis_brief" in c.args[0]]
+        self.assertEqual(inserts, [])
+
+
 if __name__ == "__main__":
     unittest.main()
