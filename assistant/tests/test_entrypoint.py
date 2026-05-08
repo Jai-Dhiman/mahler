@@ -24,10 +24,16 @@ def next_run_for(cron_expr, now):
         if candidate <= now:
             candidate += timedelta(days=1)
         if dow_field != '*':
-            first_day = int(dow_field.split('-')[0])
-            py_target = (first_day + 6) % 7
-            while candidate.weekday() != py_target:
-                candidate += timedelta(days=1)
+            if '-' in dow_field:
+                start_day, end_day = [int(x) for x in dow_field.split('-')]
+                py_start = (start_day + 6) % 7
+                py_end = (end_day + 6) % 7
+                while not (py_start <= candidate.weekday() <= py_end):
+                    candidate += timedelta(days=1)
+            else:
+                py_target = (int(dow_field) + 6) % 7
+                while candidate.weekday() != py_target:
+                    candidate += timedelta(days=1)
         return candidate
     else:
         return base + timedelta(minutes=1)
@@ -62,15 +68,33 @@ class TestEntrypointSynthesisBriefCron(unittest.TestCase):
                       "next_run_for must handle range dow fields like '1-5' via split")
 
     def test_next_run_for_weekday_range_does_not_crash(self):
-        # Friday 10:00 UTC — next Monday at 13:00
+        # Friday 10:00 UTC — same Friday at 13:00 (still in range, still future)
         result = _next_run("0 13 * * 1-5", "2026-05-08T10:00:00+00:00")
         self.assertEqual(result["hour"], 13)
         self.assertEqual(result["minute"], 0)
-        self.assertEqual(result["weekday"], 0)  # Monday
+        self.assertEqual(result["weekday"], 4)  # Friday
 
     def test_next_run_for_same_day_before_run_time(self):
         # Monday 08:00 UTC — same day at 13:00
         result = _next_run("0 13 * * 1-5", "2026-05-11T08:00:00+00:00")
+        self.assertEqual(result["weekday"], 0)  # Monday
+        self.assertEqual(result["hour"], 13)
+
+    def test_next_run_for_mid_week_stays_same_day(self):
+        # Wednesday 08:00 UTC — same day at 13:00, not rolled to Monday
+        result = _next_run("0 13 * * 1-5", "2026-05-13T08:00:00+00:00")
+        self.assertEqual(result["weekday"], 2)  # Wednesday
+        self.assertEqual(result["hour"], 13)
+
+    def test_next_run_for_after_run_time_on_friday_rolls_to_monday(self):
+        # Friday 14:00 UTC (after 13:00 run) — next Monday at 13:00
+        result = _next_run("0 13 * * 1-5", "2026-05-08T14:00:00+00:00")
+        self.assertEqual(result["weekday"], 0)  # Monday
+        self.assertEqual(result["hour"], 13)
+
+    def test_next_run_for_saturday_rolls_to_monday(self):
+        # Saturday 10:00 UTC — next Monday at 13:00 (skips Sunday)
+        result = _next_run("0 13 * * 1-5", "2026-05-09T10:00:00+00:00")
         self.assertEqual(result["weekday"], 0)  # Monday
         self.assertEqual(result["hour"], 13)
 

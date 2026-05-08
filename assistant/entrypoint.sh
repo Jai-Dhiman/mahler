@@ -68,10 +68,16 @@ def next_run_for(cron_expr, now):
         if candidate <= now:
             candidate += timedelta(days=1)
         if dow_field != '*':
-            first_day = int(dow_field.split('-')[0])
-            py_target = (first_day + 6) % 7
-            while candidate.weekday() != py_target:
-                candidate += timedelta(days=1)
+            if '-' in dow_field:
+                start_day, end_day = [int(x) for x in dow_field.split('-')]
+                py_start = (start_day + 6) % 7
+                py_end = (end_day + 6) % 7
+                while not (py_start <= candidate.weekday() <= py_end):
+                    candidate += timedelta(days=1)
+            else:
+                py_target = (int(dow_field) + 6) % 7
+                while candidate.weekday() != py_target:
+                    candidate += timedelta(days=1)
         return candidate
     else:
         return base + timedelta(minutes=1)
