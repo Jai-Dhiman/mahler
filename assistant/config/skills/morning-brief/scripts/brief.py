@@ -210,15 +210,16 @@ def build_embed(rows: list[dict], period: str, since_hours: int, news_items: lis
         connections = synthesis_section.get("connections") or []
         pattern = synthesis_section.get("pattern") or ""
         question = synthesis_section.get("question") or ""
-        conn_lines = "\n".join(f"• {c.get('summary','')}" for c in connections)
-        synth_value = (
-            f"**CONNECTIONS**\n{conn_lines}\n\n"
-            f"**PATTERN**\n{pattern}\n\n"
-            f"**QUESTION**\n{question}"
-        )
+        conn_lines = [f"• {c.get('summary', '')}" for c in connections]
         fields.append({
-            "name": "Synthesis",
-            "value": _truncate_field(synth_value.split("\n"), max_chars=1024),
+            "name": "Connections",
+            "value": _truncate_field(conn_lines, max_chars=1024),
+            "inline": False,
+        })
+        pq_value = f"**Pattern:** {pattern}\n\n**Question:** {question}"
+        fields.append({
+            "name": "Pattern & Question",
+            "value": pq_value[:1024],
             "inline": False,
         })
 
