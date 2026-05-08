@@ -48,6 +48,7 @@ COPY --chown=hermes:hermes config/skills/meeting-followthrough /home/hermes/.her
 COPY --chown=hermes:hermes config/shared /home/hermes/.hermes/shared
 COPY --chown=hermes:hermes config/skills/project-synthesis /home/hermes/.hermes/skills/project-synthesis
 COPY --chown=hermes:hermes config/skills/memory-kaizen /home/hermes/.hermes/skills/memory-kaizen
+COPY --chown=hermes:hermes config/skills/synthesis-brief /home/hermes/.hermes/skills/synthesis-brief
 COPY --chown=hermes:hermes config/skills/finance-read /home/hermes/.hermes/skills/finance-read
 COPY --chown=hermes:hermes config/plugins /home/hermes/.hermes/plugins
 
