@@ -156,9 +156,9 @@ def build_embed(rows: list[dict], period: str, since_hours: int, news_items: lis
     fields = []
 
     if synthesis_section:
-        connections = synthesis_section.get("connections", [])
-        pattern = synthesis_section.get("pattern", "")
-        question = synthesis_section.get("question", "")
+        connections = synthesis_section.get("connections") or []
+        pattern = synthesis_section.get("pattern") or ""
+        question = synthesis_section.get("question") or ""
         conn_lines = "\n".join(
             f"• {c.get('summary','')}" for c in connections
         )

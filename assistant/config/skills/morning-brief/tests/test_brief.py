@@ -425,6 +425,35 @@ class TestBuildEmbedSynthesisPrepend(unittest.TestCase):
         self.assertIn("Theme of the week", fields[0]["value"])
         self.assertIn("What is the cost of certainty?", fields[0]["value"])
 
+    def test_synthesis_field_is_first_when_rows_present(self):
+        from datetime import datetime, timezone
+        synthesis = {
+            "connections": [
+                {"summary": "Link A", "citations": []},
+            ],
+            "pattern": "Some pattern",
+            "question": "A question",
+        }
+        rows = [
+            {
+                "from_addr": "a@b.com",
+                "subject": "Action needed",
+                "summary": "Do something",
+                "classification": "NEEDS_ACTION",
+                "received_at": "2026-05-07T07:00:00Z",
+                "processed_at": "2026-05-07T07:00:00Z",
+            }
+        ]
+        payload = build_embed(
+            rows=rows,
+            period="morning",
+            since_hours=12,
+            synthesis_section=synthesis,
+        )
+        fields = payload["embeds"][0]["fields"]
+        self.assertEqual(fields[0]["name"], "Synthesis")
+        self.assertTrue(fields[1]["name"].startswith("Needs Action"))
+
 
 if __name__ == "__main__":
     unittest.main()
