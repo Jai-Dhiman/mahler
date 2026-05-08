@@ -101,7 +101,6 @@ def _call_llm(prompt: str, api_key: str, model: str = _DEFAULT_MODEL, max_tokens
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
-        "response_format": {"type": "json_object"},
     }).encode("utf-8")
     req = urllib.request.Request(
         _OPENROUTER_URL, data=body, method="POST",
