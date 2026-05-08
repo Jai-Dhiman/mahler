@@ -62,7 +62,7 @@ import outlook_client
 import honcho_client
 
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-_DEFAULT_MODEL = "x-ai/grok-4.1-fast"
+_DEFAULT_MODEL = "openai/gpt-5-nano"
 
 # Cloudflare KV namespace provisioned for Mahler (stores rotating Outlook token)
 _CF_KV_NAMESPACE_ID = "4e63db1305a1424ead3565522a47b5f4"  # MAHLER_KV

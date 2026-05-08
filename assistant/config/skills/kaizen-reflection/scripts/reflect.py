@@ -13,7 +13,7 @@ sys.path.insert(0, str(_SCRIPTS_DIR))
 from d1_client import D1Client
 
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-_DEFAULT_MODEL = "x-ai/grok-4.1-fast"
+_DEFAULT_MODEL = "openai/gpt-5-nano"
 _REQUIRED_ENV = ["CF_ACCOUNT_ID", "CF_D1_DATABASE_ID", "CF_API_TOKEN", "OPENROUTER_API_KEY"]
 
 

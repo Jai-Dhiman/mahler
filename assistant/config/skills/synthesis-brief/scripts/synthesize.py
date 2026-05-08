@@ -156,9 +156,8 @@ def main_with_args(argv: list | None) -> None:
         context=_format_items(bundle.context_items),
         past=_format_past(bundle.past_briefs),
     )
-    model = os.environ.get("OPENROUTER_MODEL", _DEFAULT_MODEL)
     try:
-        raw = _call_llm(prompt, env["OPENROUTER_API_KEY"], model=model)
+        raw = _call_llm(prompt, env["OPENROUTER_API_KEY"])
     except Exception as exc:
         print(f"Synthesis brief skipped: llm_error — {exc}")
         return
