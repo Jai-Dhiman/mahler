@@ -43,10 +43,10 @@ class TestKaizenRun(unittest.TestCase):
 
         self.assertEqual(mock_honcho.conclude.call_count, 2)
         mock_honcho.conclude.assert_any_call(
-            "Jai consistently ships on Sundays.", session_id="memory-kaizen"
+            "Jai consistently ships on Sundays.", session_id="hermes"
         )
         mock_honcho.conclude.assert_any_call(
-            "Jai finds auth-related issues recurring across projects.", session_id="memory-kaizen"
+            "Jai finds auth-related issues recurring across projects.", session_id="hermes"
         )
         self.assertIn("2 patterns", captured.getvalue())
 
