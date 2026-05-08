@@ -400,17 +400,15 @@ def main(argv: list[str] | None = None) -> None:
     )
     d1.ensure_tables()
 
-    # 4. Refresh Gmail access token
-    gmail_token = gmail_client.refresh_access_token(
-        client_id=env["GMAIL_CLIENT_ID"],
-        client_secret=env["GMAIL_CLIENT_SECRET"],
-        refresh_token=env["GMAIL_REFRESH_TOKEN"],
-    )
-
-    # 5. Fetch emails
+    # 4. Refresh Gmail access token and fetch emails
     gmail_emails: list[EmailMessage] = []
     gmail_error: Exception | None = None
     try:
+        gmail_token = gmail_client.refresh_access_token(
+            client_id=env["GMAIL_CLIENT_ID"],
+            client_secret=env["GMAIL_CLIENT_SECRET"],
+            refresh_token=env["GMAIL_REFRESH_TOKEN"],
+        )
         gmail_emails = gmail_client.fetch_unread_emails(gmail_token)
     except Exception as exc:
         gmail_error = exc
