@@ -59,8 +59,8 @@ def _post_discord(msg: str) -> None:
     try:
         with _OPENER.open(req):
             pass
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"discord post failed: {exc}", file=sys.stderr)
 
 
 def _build_https_opener() -> urllib.request.OpenerDirector:

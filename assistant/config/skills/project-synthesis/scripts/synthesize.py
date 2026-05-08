@@ -90,8 +90,8 @@ def _post_discord(msg: str) -> None:
     try:
         with _OPENER.open(req):
             pass
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"discord post failed: {exc}", file=sys.stderr)
 
 
 def _call_llm(prompt: str, api_key: str, model: str = _DEFAULT_MODEL, max_tokens: int = 200) -> str:
