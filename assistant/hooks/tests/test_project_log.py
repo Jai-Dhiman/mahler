@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 from pathlib import Path
@@ -169,3 +170,29 @@ class TestLogSessionHeartbeat(unittest.TestCase):
             from project_log import log_session_heartbeat
             with self.assertRaises(RuntimeError):
                 log_session_heartbeat("/Users/jdhiman/Documents/mahler")
+
+
+class TestSyncLocalToD1Memory(unittest.TestCase):
+    def test_inserts_memory_files_as_local_capture_rows(self):
+        with tempfile.TemporaryDirectory() as memdir, tempfile.TemporaryDirectory() as repos:
+            memdir_path = Path(memdir)
+            (memdir_path / "MEMORY.md").write_text("index file")
+            (memdir_path / "user_role.md").write_text("solo dev")
+
+            d1 = MagicMock()
+            d1.query.return_value = []
+
+            with patch("project_log._get_d1_client", return_value=d1):
+                import project_log
+                project_log.sync_local_to_d1(memdir_path, Path(repos))
+
+            memory_inserts = [
+                c for c in d1.query.call_args_list
+                if "INSERT OR IGNORE INTO local_capture" in c.args[0]
+                and c.args[1] and c.args[1][0] == "memory"
+            ]
+            self.assertEqual(len(memory_inserts), 2)
+            for call in memory_inserts:
+                params = call.args[1]
+                self.assertEqual(params[0], "memory")  # source
+                self.assertTrue(len(params[3]) == 64)  # sha256 hex

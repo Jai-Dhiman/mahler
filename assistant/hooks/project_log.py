@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -201,6 +202,52 @@ def log_blocker_if_triggered(transcript: dict, cwd: str) -> None:
     git_ref = _derive_git_ref(cwd)
     client = _get_d1_client()
     client.insert_project_log(project, "blocker", summary, git_ref)
+
+
+_INSERT_LOCAL_CAPTURE = (
+    "INSERT OR IGNORE INTO local_capture "
+    "(source, project, content, content_hash) VALUES (?, ?, ?, ?)"
+)
+
+_CREATE_LOCAL_CAPTURE_DDL = """
+CREATE TABLE IF NOT EXISTS local_capture (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source TEXT NOT NULL CHECK(source IN ('memory','git')),
+  project TEXT,
+  content TEXT NOT NULL,
+  content_hash TEXT NOT NULL UNIQUE,
+  captured_at TEXT NOT NULL DEFAULT (datetime('now'))
+)
+"""
+
+
+def _ensure_local_capture(d1) -> None:
+    d1.query(_CREATE_LOCAL_CAPTURE_DDL, [])
+    d1.query(
+        "CREATE INDEX IF NOT EXISTS idx_local_capture_recent ON local_capture(captured_at)",
+        [],
+    )
+
+
+def _sync_memory_dir(d1, memory_dir: Path) -> None:
+    if not memory_dir.is_dir():
+        return
+    for md_file in sorted(memory_dir.glob("*.md")):
+        try:
+            content = md_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        content_hash = hashlib.sha256(
+            f"memory:{md_file.name}:{content}".encode("utf-8")
+        ).hexdigest()
+        body = f"# {md_file.name}\n{content}"
+        d1.query(_INSERT_LOCAL_CAPTURE, ["memory", md_file.name, body, content_hash])
+
+
+def sync_local_to_d1(memory_dir: Path, repos_root: Path) -> None:
+    d1 = _get_d1_client()
+    _ensure_local_capture(d1)
+    _sync_memory_dir(d1, memory_dir)
 
 
 def main() -> None:
