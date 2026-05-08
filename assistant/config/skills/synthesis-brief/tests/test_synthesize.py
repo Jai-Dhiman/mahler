@@ -71,5 +71,31 @@ class TestSynthesizeDryRun(unittest.TestCase):
         self.assertEqual(write_calls, [])
 
 
+class TestSynthesizeThinContext(unittest.TestCase):
+    def test_skips_llm_when_bundle_thin(self):
+        thin_bundle = InputBundle(
+            recent_items=[Item("memory", "memory:0", "x", "2026-05-07")],
+            context_items=[],
+            past_briefs=[],
+            identifiers={"memory:0"},
+        )
+        env = {
+            "CF_ACCOUNT_ID": "a"*32, "CF_D1_DATABASE_ID": "b"*32,
+            "CF_API_TOKEN": "t", "OPENROUTER_API_KEY": "k", "HONCHO_API_KEY": "h",
+        }
+        captured = io.StringIO()
+        llm_mock = MagicMock()
+        with patch.dict("os.environ", env, clear=True), \
+             patch("synthesize._build_d1", return_value=MagicMock()), \
+             patch("synthesize._build_honcho", return_value=MagicMock()), \
+             patch("synthesize.inputs.load_all", return_value=thin_bundle), \
+             patch("synthesize._call_llm", llm_mock), \
+             patch("sys.stdout", captured):
+            synthesize.main_with_args(["--run"])
+
+        self.assertIn("thin_context", captured.getvalue())
+        llm_mock.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

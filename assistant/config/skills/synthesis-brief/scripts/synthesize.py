@@ -143,6 +143,11 @@ def main_with_args(argv: list | None) -> None:
 
     bundle = inputs.load_all(d1, honcho, recent_days=1, context_days=14)
 
+    pre_ok, pre_reason = validator.validate({"connections": [], "pattern": "", "question": ""}, bundle)
+    if not pre_ok and pre_reason == "thin_context":
+        print(f"Synthesis brief skipped: {pre_reason}")
+        return
+
     prompt = _PROMPT_TEMPLATE.format(
         recent=_format_items(bundle.recent_items),
         context=_format_items(bundle.context_items),
