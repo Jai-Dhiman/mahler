@@ -79,60 +79,84 @@ class TestLogBlockerKeywordMatch(unittest.TestCase):
                 {"role": "assistant", "content": "Let me look into that."},
             ],
         }
-        mock_client = MagicMock()
+        d1 = MagicMock()
+        d1.query.return_value = []
 
-        with patch("project_log._get_d1_client", return_value=mock_client), \
-             patch("project_log._call_openrouter",
-                   return_value="The scoring model produces inaccurate outputs, blocking feature completion."), \
+        def fake_run(cmd, **kwargs):
+            r = MagicMock(); r.returncode = 0
+            r.stdout = "The scoring model produces inaccurate outputs, blocking feature completion."
+            return r
+
+        with patch("project_log._get_d1_client", return_value=d1), \
+             patch("project_log.subprocess.run", side_effect=fake_run), \
              patch("project_log._derive_project_name", return_value="mahler"), \
              patch("project_log._derive_git_ref", return_value="abc1234"):
-            from project_log import log_blocker_if_triggered
-            log_blocker_if_triggered(transcript, "/Users/jdhiman/Documents/mahler")
+            import project_log
+            project_log.log_blocker_if_triggered(transcript, "/Users/jdhiman/Documents/mahler")
 
-        mock_client.insert_project_log.assert_called_once_with(
-            "mahler",
-            "blocker",
-            "The scoring model produces inaccurate outputs, blocking feature completion.",
-            "abc1234",
-        )
+        blocker_inserts = [
+            c for c in d1.query.call_args_list
+            if "INSERT INTO project_log" in c.args[0] and c.args[1] and "blocker" in c.args[1]
+        ]
+        self.assertEqual(len(blocker_inserts), 1)
+        params = blocker_inserts[0].args[1]
+        self.assertEqual(params[0], "mahler")
+        self.assertEqual(params[1], "blocker")
+        self.assertIn("inaccurate outputs", params[2])
+        self.assertEqual(params[3], "abc1234")
 
-    def test_does_not_write_when_openrouter_returns_empty_string(self):
+    def test_does_not_write_when_claude_returns_empty_string(self):
         transcript = {
             "cwd": "/tmp/project",
-            "messages": [
-                {"role": "user", "content": "i am stuck on this issue"},
-            ],
+            "messages": [{"role": "user", "content": "i am stuck on this issue"}],
         }
-        mock_client = MagicMock()
+        d1 = MagicMock()
+        d1.query.return_value = []
 
-        with patch("project_log._get_d1_client", return_value=mock_client), \
-             patch("project_log._call_openrouter", return_value=""), \
+        def fake_run(cmd, **kwargs):
+            r = MagicMock(); r.returncode = 0; r.stdout = ""
+            return r
+
+        with patch("project_log._get_d1_client", return_value=d1), \
+             patch("project_log.subprocess.run", side_effect=fake_run), \
              patch("project_log._derive_project_name", return_value="project"), \
              patch("project_log._derive_git_ref", return_value=""):
-            from project_log import log_blocker_if_triggered
-            log_blocker_if_triggered(transcript, "/tmp/project")
+            import project_log
+            project_log.log_blocker_if_triggered(transcript, "/tmp/project")
 
-        mock_client.insert_project_log.assert_not_called()
+        blocker_inserts = [
+            c for c in d1.query.call_args_list
+            if "INSERT INTO project_log" in c.args[0] and c.args[1] and "blocker" in c.args[1]
+        ]
+        self.assertEqual(len(blocker_inserts), 0)
 
     def test_uses_transcript_key_as_fallback_for_messages(self):
         transcript = {
             "cwd": "/tmp/project",
-            "transcript": [
-                {"role": "user", "content": "blocked on the D1 migration"},
-            ],
+            "transcript": [{"role": "user", "content": "blocked on the D1 migration"}],
         }
-        mock_client = MagicMock()
+        d1 = MagicMock()
+        d1.query.return_value = []
 
-        with patch("project_log._get_d1_client", return_value=mock_client), \
-             patch("project_log._call_openrouter", return_value="D1 migration is blocking progress."), \
+        def fake_run(cmd, **kwargs):
+            r = MagicMock(); r.returncode = 0
+            r.stdout = "D1 migration is blocking progress."
+            return r
+
+        with patch("project_log._get_d1_client", return_value=d1), \
+             patch("project_log.subprocess.run", side_effect=fake_run), \
              patch("project_log._derive_project_name", return_value="project"), \
              patch("project_log._derive_git_ref", return_value=""):
-            from project_log import log_blocker_if_triggered
-            log_blocker_if_triggered(transcript, "/tmp/project")
+            import project_log
+            project_log.log_blocker_if_triggered(transcript, "/tmp/project")
 
-        mock_client.insert_project_log.assert_called_once()
-        args = mock_client.insert_project_log.call_args[0]
-        self.assertEqual(args[1], "blocker")
+        blocker_inserts = [
+            c for c in d1.query.call_args_list
+            if "INSERT INTO project_log" in c.args[0] and c.args[1] and "blocker" in c.args[1]
+        ]
+        self.assertEqual(len(blocker_inserts), 1)
+        params = blocker_inserts[0].args[1]
+        self.assertEqual(params[1], "blocker")
 
 
 class TestLogSessionHeartbeat(unittest.TestCase):
@@ -237,3 +261,40 @@ class TestSyncLocalToD1Git(unittest.TestCase):
                 params = call.args[1]
                 self.assertEqual(params[1], "myproject")
                 self.assertIn("commit subject", params[2])
+
+
+class TestBlockerClassifierViaClaude(unittest.TestCase):
+    def test_uses_claude_subprocess_and_inserts_blocker_row(self):
+        transcript = {
+            "messages": [
+                {"role": "user", "content": "I'm stuck on the auth migration"},
+            ],
+            "cwd": "/tmp/fakeproj",
+        }
+        d1 = MagicMock()
+        d1.query.return_value = []
+
+        def fake_run(cmd, **kwargs):
+            result = MagicMock()
+            result.returncode = 0
+            if cmd and cmd[0] == "claude":
+                result.stdout = "Stuck migrating Postgres auth schema due to FK ordering."
+            else:
+                result.stdout = ""
+            return result
+
+        with patch("project_log._get_d1_client", return_value=d1), \
+             patch("project_log.subprocess.run", side_effect=fake_run), \
+             patch("project_log._derive_project_name", return_value="fakeproj"), \
+             patch("project_log._derive_git_ref", return_value="abc1234"):
+            import project_log
+            project_log.log_blocker_if_triggered(transcript, "/tmp/fakeproj")
+
+        blocker_inserts = [
+            c for c in d1.query.call_args_list
+            if "INSERT INTO project_log" in c.args[0]
+            and c.args[1] and "blocker" in c.args[1]
+        ]
+        self.assertEqual(len(blocker_inserts), 1)
+        params = blocker_inserts[0].args[1]
+        self.assertIn("Postgres auth schema", " ".join(str(p) for p in params))

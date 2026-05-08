@@ -175,6 +175,42 @@ def _call_openrouter(transcript: dict, api_key: str, model: str) -> str:
     return choices[0].get("message", {}).get("content", "").strip()
 
 
+_CLAUDE_BLOCKER_PROMPT = (
+    "You are extracting a concise blocker summary from a development session. "
+    "Return exactly 1-2 sentences describing the main technical blocker the developer "
+    "is stuck on. Be specific. If no clear blocker exists, return an empty string. "
+    "Last 10 user messages:\n\n"
+)
+
+
+def _classify_blocker_via_claude(transcript: dict) -> str:
+    messages = transcript.get("messages", transcript.get("transcript", []))
+    user_texts = []
+    for msg in messages:
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            content = " ".join(
+                block.get("text", "")
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "text"
+            )
+        user_texts.append(content)
+    excerpt = "\n".join(f"User: {t}" for t in user_texts[-10:])
+    prompt = _CLAUDE_BLOCKER_PROMPT + excerpt
+    try:
+        result = subprocess.run(
+            ["claude", "-p", prompt],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return ""
+    if result.returncode != 0:
+        return ""
+    return (result.stdout or "").strip()
+
+
 def log_session_heartbeat(cwd: str) -> None:
     project = _derive_project_name(cwd)
     git_ref = _derive_git_ref(cwd)
@@ -192,16 +228,16 @@ def log_win(project: str, summary: str, git_ref: str) -> None:
 def log_blocker_if_triggered(transcript: dict, cwd: str) -> None:
     if not _scan_for_keywords(transcript):
         return
-    _load_mahler_env()
-    api_key = os.environ.get("OPENROUTER_API_KEY", "")
-    model = "x-ai/grok-4.1-fast"
-    summary = _call_openrouter(transcript, api_key, model)
+    summary = _classify_blocker_via_claude(transcript)
     if not summary:
         return
     project = _derive_project_name(cwd)
     git_ref = _derive_git_ref(cwd)
     client = _get_d1_client()
-    client.insert_project_log(project, "blocker", summary, git_ref)
+    client.query(
+        "INSERT INTO project_log (project, entry_type, summary, git_ref) VALUES (?, ?, ?, ?)",
+        [project, "blocker", summary, git_ref],
+    )
 
 
 _INSERT_LOCAL_CAPTURE = (
