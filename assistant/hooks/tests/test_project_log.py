@@ -198,3 +198,42 @@ class TestSyncLocalToD1Memory(unittest.TestCase):
                 self.assertIn(params[1], {"MEMORY.md", "user_role.md"})  # project = filename
                 self.assertTrue(params[2].startswith("#"))  # content starts with "# <filename>\n..."
                 self.assertTrue(len(params[3]) == 64)  # sha256 hex
+
+
+class TestSyncLocalToD1Git(unittest.TestCase):
+    def test_inserts_recent_git_commits_per_repo(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as memdir, tempfile.TemporaryDirectory() as repos:
+            d1 = MagicMock()
+            d1.query.return_value = []
+
+            git_log_output = "abc1234 First commit subject\ndef5678 Second commit subject\n"
+
+            def fake_run(cmd, **kwargs):
+                result = MagicMock()
+                result.returncode = 0
+                if cmd[0] == "git" and "log" in cmd:
+                    result.stdout = git_log_output
+                else:
+                    result.stdout = ""
+                return result
+
+            repo_dir = Path(repos) / "myproject"
+            (repo_dir / ".git").mkdir(parents=True)
+
+            with patch("project_log._get_d1_client", return_value=d1), \
+                 patch("project_log.subprocess.run", side_effect=fake_run):
+                import project_log
+                project_log.sync_local_to_d1(Path(memdir), Path(repos))
+
+            git_inserts = [
+                c for c in d1.query.call_args_list
+                if "INSERT OR IGNORE INTO local_capture" in c.args[0]
+                and c.args[1] and c.args[1][0] == "git"
+            ]
+            self.assertEqual(len(git_inserts), 2)
+            for call in git_inserts:
+                params = call.args[1]
+                self.assertEqual(params[1], "myproject")
+                self.assertIn("commit subject", params[2])

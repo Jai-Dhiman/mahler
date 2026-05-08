@@ -244,10 +244,44 @@ def _sync_memory_dir(d1, memory_dir: Path) -> None:
         d1.query(_INSERT_LOCAL_CAPTURE, ["memory", md_file.name, body, content_hash])
 
 
+def _sync_git_recent(d1, repos_root: Path) -> None:
+    if not repos_root.is_dir():
+        return
+    for repo_dir in sorted(repos_root.iterdir()):
+        if not (repo_dir / ".git").exists():
+            continue
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(repo_dir), "log", "--since=24.hours.ago",
+                 "--pretty=format:%h %s"],
+                capture_output=True, text=True, timeout=10,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            continue
+        if result.returncode != 0:
+            continue
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            content = f"[{repo_dir.name}] {line}"
+            content_hash = hashlib.sha256(
+                f"git:{repo_dir.name}:{line}".encode("utf-8")
+            ).hexdigest()
+            d1.query(_INSERT_LOCAL_CAPTURE, ["git", repo_dir.name, content, content_hash])
+
+
 def sync_local_to_d1(memory_dir: Path, repos_root: Path) -> None:
     d1 = _get_d1_client()
     _ensure_local_capture(d1)
-    _sync_memory_dir(d1, memory_dir)
+    try:
+        _sync_memory_dir(d1, memory_dir)
+    except Exception as exc:
+        print(f"sync_local_to_d1 memory error: {exc}", file=sys.stderr)
+    try:
+        _sync_git_recent(d1, repos_root)
+    except Exception as exc:
+        print(f"sync_local_to_d1 git error: {exc}", file=sys.stderr)
 
 
 def main() -> None:
