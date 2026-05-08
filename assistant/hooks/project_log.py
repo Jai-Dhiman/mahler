@@ -340,6 +340,10 @@ def main() -> None:
             cwd = data.get("cwd", os.getcwd())
             log_blocker_if_triggered(data, cwd)
             log_session_heartbeat(cwd)
+            project_slug = cwd.replace("/", "-").lstrip("-")
+            memory_dir = Path.home() / ".claude" / "projects" / project_slug / "memory"
+            repos_root = Path(cwd).parent
+            sync_local_to_d1(memory_dir, repos_root)
         except Exception as exc:
             print(f"project_log stop error: {exc}", file=sys.stderr)
         sys.exit(0)

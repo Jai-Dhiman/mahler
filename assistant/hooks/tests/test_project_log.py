@@ -328,3 +328,31 @@ class TestBlockerClassifierMissingCli(unittest.TestCase):
             and c.args[1] and "blocker" in c.args[1]
         ]
         self.assertEqual(len(blocker_inserts), 0)
+
+
+class TestStopModeCallsSyncLocalToD1(unittest.TestCase):
+    def test_sync_local_to_d1_called_on_stop_mode(self):
+        import json as _json
+        import io
+        import project_log
+        transcript = _json.dumps({
+            "messages": [{"role": "user", "content": "just checking in"}],
+            "cwd": "/tmp/fakeproj",
+        })
+        with patch("project_log._get_d1_client", return_value=MagicMock()), \
+             patch("project_log.subprocess.run", return_value=MagicMock(returncode=0, stdout="")), \
+             patch("project_log._derive_project_name", return_value="fakeproj"), \
+             patch("project_log._derive_git_ref", return_value=""), \
+             patch("project_log.sync_local_to_d1") as mock_sync, \
+             patch("sys.stdin", io.StringIO(transcript)), \
+             patch("sys.argv", ["project_log.py", "stop"]):
+            try:
+                project_log.main()
+            except SystemExit:
+                pass
+        mock_sync.assert_called_once()
+        call_args = mock_sync.call_args[0]
+        # memory_dir should end with /memory
+        self.assertTrue(str(call_args[0]).endswith("memory"))
+        # repos_root should be parent of /tmp/fakeproj → /tmp
+        self.assertEqual(str(call_args[1]), "/tmp")
