@@ -155,24 +155,6 @@ def build_embed(rows: list[dict], period: str, since_hours: int, news_items: lis
 
     fields = []
 
-    if synthesis_section:
-        connections = synthesis_section.get("connections") or []
-        pattern = synthesis_section.get("pattern") or ""
-        question = synthesis_section.get("question") or ""
-        conn_lines = "\n".join(
-            f"• {c.get('summary','')}" for c in connections
-        )
-        synth_value = (
-            f"**CONNECTIONS**\n{conn_lines}\n\n"
-            f"**PATTERN**\n{pattern}\n\n"
-            f"**QUESTION**\n{question}"
-        )
-        fields.append({
-            "name": "Synthesis",
-            "value": _truncate_field(synth_value.split("\n"), max_chars=1024),
-            "inline": False,
-        })
-
     if needs_action or fyi:
         if needs_action:
             na_lines = []
@@ -221,6 +203,22 @@ def build_embed(rows: list[dict], period: str, since_hours: int, news_items: lis
         fields.append({
             "name": "What's Worth Reading",
             "value": f"Fetch failed: {news_error[:200]}",
+            "inline": False,
+        })
+
+    if synthesis_section:
+        connections = synthesis_section.get("connections") or []
+        pattern = synthesis_section.get("pattern") or ""
+        question = synthesis_section.get("question") or ""
+        conn_lines = "\n".join(f"• {c.get('summary','')}" for c in connections)
+        synth_value = (
+            f"**CONNECTIONS**\n{conn_lines}\n\n"
+            f"**PATTERN**\n{pattern}\n\n"
+            f"**QUESTION**\n{question}"
+        )
+        fields.append({
+            "name": "Synthesis",
+            "value": _truncate_field(synth_value.split("\n"), max_chars=1024),
             "inline": False,
         })
 
