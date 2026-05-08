@@ -139,4 +139,5 @@ def load_all(d1, honcho, recent_days: int = 1, context_days: int = 14) -> InputB
     bundle.context_items.extend(_load_project_wins(d1, context_days))
     bundle.context_items.extend(_load_honcho(honcho, context_days))
     bundle.past_briefs = _load_past_briefs(d1, context_days)
+    bundle.identifiers = {it.id for it in bundle.recent_items} | {it.id for it in bundle.context_items}
     return bundle

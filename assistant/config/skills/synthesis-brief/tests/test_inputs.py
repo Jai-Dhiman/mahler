@@ -139,5 +139,25 @@ class TestLoadAllPastBriefs(unittest.TestCase):
         self.assertEqual(bundle.past_briefs[0]["connections"][0]["summary"], "A")
 
 
+class TestLoadAllIdentifiers(unittest.TestCase):
+    def test_identifiers_set_contains_all_item_ids(self):
+        win_rows = [{"id": 7, "project": "p", "summary": "s", "created_at": "2026-05-04"}]
+
+        def query_side_effect(sql, params=None):
+            if "FROM project_log" in sql:
+                return win_rows
+            return []
+
+        d1 = MagicMock(); d1.query.side_effect = query_side_effect
+
+        c1 = MagicMock(); c1.content = "x"; c1.created_at = "2026-05-04T00:00:00Z"
+        honcho = MagicMock(); honcho.list_conclusions.return_value = [c1]
+
+        bundle = inputs.load_all(d1, honcho, recent_days=1, context_days=14)
+
+        self.assertIn("project_log:7", bundle.identifiers)
+        self.assertIn("honcho:0", bundle.identifiers)
+
+
 if __name__ == "__main__":
     unittest.main()
