@@ -49,5 +49,40 @@ class TestCitations(unittest.TestCase):
         self.assertEqual(reason, "insufficient_citations")
 
 
+class TestLength(unittest.TestCase):
+    def _bundle(self):
+        return InputBundle(
+            recent_items=[Item("memory", f"memory:{i}", "x", "2026-05-07") for i in range(4)],
+            context_items=[Item("project_log", f"project_log:{i}", "y", "2026-05-04") for i in range(6)],
+            past_briefs=[],
+            identifiers={f"memory:{i}" for i in range(4)} | {f"project_log:{i}" for i in range(6)},
+        )
+
+    def test_returns_false_length_exceeded_when_section_over_600(self):
+        bundle = self._bundle()
+        long_pattern = "x" * 601
+        brief = {
+            "connections": [
+                {"summary": "A", "citations": [
+                    {"source": "memory", "id": "memory:0"},
+                    {"source": "memory", "id": "memory:1"},
+                ]},
+                {"summary": "B", "citations": [
+                    {"source": "memory", "id": "memory:2"},
+                    {"source": "project_log", "id": "project_log:0"},
+                ]},
+                {"summary": "C", "citations": [
+                    {"source": "memory", "id": "memory:3"},
+                    {"source": "project_log", "id": "project_log:1"},
+                ]},
+            ],
+            "pattern": long_pattern,
+            "question": "q",
+        }
+        ok, reason = validator.validate(brief, bundle)
+        self.assertFalse(ok)
+        self.assertEqual(reason, "length_exceeded")
+
+
 if __name__ == "__main__":
     unittest.main()
