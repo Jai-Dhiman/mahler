@@ -404,5 +404,27 @@ class TestMainNewsWiring(unittest.TestCase):
         self.assertIn("Fetch failed", news_fields[0]["value"])
 
 
+class TestBuildEmbedSynthesisPrepend(unittest.TestCase):
+    def test_first_field_is_synthesis_when_section_provided(self):
+        synthesis = {
+            "connections": [
+                {"summary": "Connection A", "citations": [{"source": "memory", "id": "memory:1"}]},
+            ],
+            "pattern": "Theme of the week",
+            "question": "What is the cost of certainty?",
+        }
+        payload = build_embed(
+            rows=[],
+            period="morning",
+            since_hours=12,
+            synthesis_section=synthesis,
+        )
+        fields = payload["embeds"][0]["fields"]
+        self.assertEqual(fields[0]["name"], "Synthesis")
+        self.assertIn("Connection A", fields[0]["value"])
+        self.assertIn("Theme of the week", fields[0]["value"])
+        self.assertIn("What is the cost of certainty?", fields[0]["value"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -132,7 +132,7 @@ def _truncate_field(lines: list[str], max_chars: int = 1024) -> str:
     return "".join(result).rstrip("\n")
 
 
-def build_embed(rows: list[dict], period: str, since_hours: int, news_items: list[dict] | None = None, news_error: str | None = None) -> dict:
+def build_embed(rows: list[dict], period: str, since_hours: int, news_items: list[dict] | None = None, news_error: str | None = None, synthesis_section: dict | None = None) -> dict:
     if period == "morning":
         color = 3447003
         title_prefix = "Morning Brief"
@@ -154,6 +154,24 @@ def build_embed(rows: list[dict], period: str, since_hours: int, news_items: lis
     }
 
     fields = []
+
+    if synthesis_section:
+        connections = synthesis_section.get("connections", [])
+        pattern = synthesis_section.get("pattern", "")
+        question = synthesis_section.get("question", "")
+        conn_lines = "\n".join(
+            f"• {c.get('summary','')}" for c in connections
+        )
+        synth_value = (
+            f"**CONNECTIONS**\n{conn_lines}\n\n"
+            f"**PATTERN**\n{pattern}\n\n"
+            f"**QUESTION**\n{question}"
+        )
+        fields.append({
+            "name": "Synthesis",
+            "value": _truncate_field(synth_value.split("\n"), max_chars=1024),
+            "inline": False,
+        })
 
     if needs_action or fyi:
         if needs_action:
