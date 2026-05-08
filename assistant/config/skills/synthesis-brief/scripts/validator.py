@@ -10,11 +10,26 @@ def _is_thin(bundle) -> bool:
     return recent_n < _THIN_RECENT_MIN and total_n < _THIN_CONTEXT_MIN
 
 
+def _resolve_id(cit: dict, identifiers: set) -> str:
+    """Return the matching identifier string, or '' if none matches.
+
+    Accepts both the full 'source:id' form (e.g. 'git:422') and the split
+    form the LLM sometimes produces ('source': 'git', 'id': '422').
+    """
+    cit_id = cit.get("id", "")
+    if cit_id in identifiers:
+        return cit_id
+    composed = f"{cit.get('source', '')}:{cit_id}"
+    if composed in identifiers:
+        return composed
+    return ""
+
+
 def _qualifying_connections(brief: dict, identifiers: set) -> int:
     n = 0
     for c in brief.get("connections", []):
         cites = c.get("citations", []) or []
-        valid = {cit.get("id", "") for cit in cites if cit.get("id") in identifiers}
+        valid = {r for cit in cites if (r := _resolve_id(cit, identifiers))}
         if len(valid) >= 2:
             n += 1
     return n

@@ -40,7 +40,7 @@ Output STRICT JSON only, no prose:
 {{
   "connections": [
     {{"summary": "<one non-obvious link, 1-2 sentences>",
-      "citations": [{{"source": "<src>", "id": "<id from RECENT or CONTEXT>"}}, ...]}},
+      "citations": [{{"source": "<src>", "id": "<full bracketed id, e.g. git:422>"}}, ...]}},
     ... exactly 3 ...
   ],
   "pattern": "<one weekly theme, 1-2 sentences>",
