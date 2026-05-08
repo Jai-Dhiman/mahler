@@ -1,3 +1,4 @@
+import json as _json
 from dataclasses import dataclass, field
 
 
@@ -109,6 +110,27 @@ def _load_local_context(d1, recent_days: int, context_days: int) -> list:
     return [_row_to_item(r) for r in rows]
 
 
+def _load_past_briefs(d1, context_days: int) -> list:
+    rows = d1.query(
+        "SELECT posted_at, connections_json, pattern, question FROM synthesis_brief "
+        "WHERE posted_at >= datetime('now', ? || ' days') ORDER BY posted_at DESC",
+        [f"-{context_days}"],
+    )
+    out = []
+    for r in rows:
+        try:
+            connections = _json.loads(r.get("connections_json") or "[]")
+        except ValueError:
+            connections = []
+        out.append({
+            "posted_at": r.get("posted_at"),
+            "connections": connections,
+            "pattern": r.get("pattern", ""),
+            "question": r.get("question", ""),
+        })
+    return out
+
+
 def load_all(d1, honcho, recent_days: int = 1, context_days: int = 14) -> InputBundle:
     _ensure_tables(d1)
     bundle = InputBundle()
@@ -116,4 +138,5 @@ def load_all(d1, honcho, recent_days: int = 1, context_days: int = 14) -> InputB
     bundle.context_items.extend(_load_local_context(d1, recent_days, context_days))
     bundle.context_items.extend(_load_project_wins(d1, context_days))
     bundle.context_items.extend(_load_honcho(honcho, context_days))
+    bundle.past_briefs = _load_past_briefs(d1, context_days)
     return bundle

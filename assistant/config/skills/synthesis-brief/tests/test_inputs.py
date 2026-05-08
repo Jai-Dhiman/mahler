@@ -110,5 +110,34 @@ class TestLoadAllLocalCapturePartition(unittest.TestCase):
         self.assertEqual(context_local[0].id, "git:2")
 
 
+import json as _json
+
+
+class TestLoadAllPastBriefs(unittest.TestCase):
+    def test_returns_past_briefs_with_parsed_connections(self):
+        past_rows = [
+            {"posted_at": "2026-05-06 13:00:00",
+             "connections_json": _json.dumps([{"summary": "A", "citations": []}]),
+             "pattern": "P1", "question": "Q1"},
+            {"posted_at": "2026-05-05 13:00:00",
+             "connections_json": _json.dumps([{"summary": "B", "citations": []}]),
+             "pattern": "P2", "question": "Q2"},
+        ]
+
+        def query_side_effect(sql, params=None):
+            if "FROM synthesis_brief" in sql:
+                return past_rows
+            return []
+
+        d1 = MagicMock(); d1.query.side_effect = query_side_effect
+        honcho = MagicMock(); honcho.list_conclusions.return_value = []
+
+        bundle = inputs.load_all(d1, honcho, recent_days=1, context_days=14)
+
+        self.assertEqual(len(bundle.past_briefs), 2)
+        self.assertEqual(bundle.past_briefs[0]["pattern"], "P1")
+        self.assertEqual(bundle.past_briefs[0]["connections"][0]["summary"], "A")
+
+
 if __name__ == "__main__":
     unittest.main()
