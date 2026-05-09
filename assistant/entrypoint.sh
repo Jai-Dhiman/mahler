@@ -132,7 +132,7 @@ results = []
 results.append(('email-triage', upsert(
     ['email-triage'],
     'Run email triage: fetch unread emails from Gmail and Outlook, classify them using the priority map, store results in D1, and send Discord alerts for any URGENT emails.',
-    '0 * * * *',
+    '0 6-22 * * *',
 )))
 results.append(('morning-brief', upsert(
     ['morning-brief'],
@@ -147,7 +147,7 @@ results.append(('meeting-followthrough', upsert(
 results.append(('meeting-prep', upsert(
     ['meeting-prep', 'google-calendar', 'notion-tasks', 'notion-wiki'],
     'Check if there is a meeting starting in 45 to 75 minutes. If so, check deduplication, gather context from recent emails, open tasks, and the wiki, synthesize a prep brief, post it to Discord, and log the event.',
-    '*/15 * * * *',
+    '*/15 13-23 * * 1-5',
 )))
 results.append(('kaizen-reflection', upsert(
     ['kaizen-reflection'],
